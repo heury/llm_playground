@@ -69,6 +69,7 @@ def train_epoch(epoch, loader, iters, lora_params, start_step=0, wandb=None):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="MiniMind LoRA Fine-tuning")
     parser.add_argument("--save_dir", type=str, default="../out", help="모델 저장 디렉토리")
+    parser.add_argument("--lora_rank", default=16, type=int, help="LoRA rank")
     parser.add_argument("--lora_name", type=str, default="lora_medical", help="LoRA 가중치 이름(예: lora_identity/lora_medical)")
     parser.add_argument("--epochs", type=int, default=10, help="학습 에포크 수")
     parser.add_argument("--batch_size", type=int, default=32, help="batch size")
@@ -118,7 +119,7 @@ if __name__ == "__main__":
     
     # ========== 5. 모델 정의, LoRA 적용 및 LoRA 이외 매개변수 고정 ==========
     model, tokenizer = init_model(lm_config, args.from_weight, device=args.device)
-    apply_lora(model)
+    apply_lora(model, rank=args.lora_rank)
     
     # 매개변수 집계
     total_params = sum(p.numel() for p in model.parameters())

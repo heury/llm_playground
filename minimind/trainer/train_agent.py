@@ -314,6 +314,7 @@ def calculate_rewards(prompts, completions, gt_batch, tools_batch, num_gen, rewa
                 if isinstance(raw, str):
                     try: raw = json.loads(raw)
                     except: raw = {}
+                if not isinstance(raw, dict): raw = {}
                 check = CHECK_ARGS.get(name)
                 valid_call_count += int(bool(isinstance(raw, dict) and name in valid_names and check and check(raw)))
             tool_gap = abs(valid_call_count - len(gt)) + max(0, len(tool_calls) - valid_call_count)  # 도구 호출 수 차이
