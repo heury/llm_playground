@@ -116,10 +116,9 @@ def omni_checkpoint(omni_config, weight='pretrain_omni', model=None, optimizer=N
         raw_model = model.module if isinstance(model, DistributedDataParallel) else model
         raw_model = getattr(raw_model, '_orig_mod', raw_model)
         # 고정된 audio_encoder / vision_encoder 매개변수 제거(저장하지 않고 사전 학습 경로에서 다시 불러옴)
-        clean_state_dict = {k: v for k, v in raw_model.state_dict().items() if not k.startswith('audio_encoder.') and not k.startswith('vision_encoder.')}
-        state_dict = {k: v.half().cpu() for k, v in clean_state_dict.items()}
+        state_dict = {k: v.cpu() for k, v in raw_model.state_dict().items() if not k.startswith('audio_encoder.') and not k.startswith('vision_encoder.')}
         ckp_tmp = ckp_path + '.tmp'
-        torch.save(state_dict, ckp_tmp)
+        torch.save({k: v.half() for k, v in state_dict.items()}, ckp_tmp)
         os.replace(ckp_tmp, ckp_path)
         
         wandb_id = None
