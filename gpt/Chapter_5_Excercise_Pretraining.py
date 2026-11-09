@@ -61,7 +61,17 @@ def _():
 
 
 @app.cell
-def _(torch):
+def _(
+    GPTModel,
+    create_dataloader_v1,
+    generate_text_simple,
+    os,
+    output_dir,
+    plt,
+    requests,
+    tiktoken,
+    torch,
+):
     ### 중요: lOSS를 계산합니다.
     def calc_loss_batch(input_batch, target_batch, model, device):
         """
@@ -90,11 +100,7 @@ def _(torch):
         # endregion
         return loss
 
-    return (calc_loss_batch,)
 
-
-@app.cell
-def _(calc_loss_batch, evaluate_model, generate_and_print_sample):
     ### 중요: 모델을 학습합니다.
     def train_model_simple(model, train_loader, val_loader, optimizer, device, num_epochs,
                            eval_freq, eval_iter, start_context, tokenizer):
@@ -153,11 +159,6 @@ def _(calc_loss_batch, evaluate_model, generate_and_print_sample):
 
         return train_losses, val_losses, track_tokens_seen
 
-    return (train_model_simple,)
-
-
-@app.cell
-def _(torch):
     ### 중요: 결과를 생성합니다.
     def generate(model, idx, max_new_tokens, context_size, eos_id=None):
         """
@@ -205,23 +206,7 @@ def _(torch):
         
         return idx
 
-    return (generate,)
 
-
-@app.cell
-def _(
-    GPTModel,
-    calc_loss_batch,
-    create_dataloader_v1,
-    generate_text_simple,
-    os,
-    output_dir,
-    plt,
-    requests,
-    tiktoken,
-    torch,
-    train_model_simple,
-):
     def text_to_token_ids(text, tokenizer):
         """
         사람이 읽는 텍스트 문자열을 모델이 이해하는 토큰 ID 텐서로 변환합니다.
@@ -403,14 +388,7 @@ def _(
 
         return train_losses, val_losses, tokens_seen, model
 
-    return (
-        evaluate_model,
-        generate_and_print_sample,
-        main,
-        plot_losses,
-        text_to_token_ids,
-        token_ids_to_text,
-    )
+    return generate, main, plot_losses, text_to_token_ids, token_ids_to_text
 
 
 @app.cell
