@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Unsloth notebook experiments for reasoning, vision, and model adaptation"
 requires-python = ">=3.12,<3.13"
 dependencies = [
-    "ipykernel", "ipywidgets", "jupyterlab", "nbformat", "pip", "uv",
+    "ipykernel", "ipywidgets", "jupyterlab", "nbformat", "marimo>=0.25.2,<1", "pip", "uv",
     "unsloth>=2026.10.9", "unsloth-zoo>=2026.10.9", "torch", "torchvision", "torchaudio",
     "transformers", "trl", "peft", "accelerate", "bitsandbytes", "xformers",
     "datasets", "huggingface-hub", "tokenizers", "sentencepiece",

@@ -649,7 +649,7 @@ def train_classifier_simple(model, train_loader, val_loader, optimizer, device, 
     return train_losses, val_losses, train_accs, val_accs, examples_seen
 
 
-def plot_values(epochs_seen, examples_seen, train_values, val_values, label="loss"):
+def plot_values(epochs_seen, examples_seen, train_values, val_values, label="loss", output_dir="outputs"):
     fig, ax1 = plt.subplots(figsize=(5, 3))
 
     # Plot training and validation loss against epochs
@@ -665,10 +665,11 @@ def plot_values(epochs_seen, examples_seen, train_values, val_values, label="los
     ax2.set_xlabel("Examples seen")
 
     fig.tight_layout()  # Adjust layout to make room
-    plt.savefig(f"outputs/{label}-plot.pdf")
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    plt.savefig(Path(output_dir) / f"{label}-plot.pdf")
     plt.show()
 
-def plot_losses(epochs_seen, tokens_seen, train_losses, val_losses, label="loss"):
+def plot_losses(epochs_seen, tokens_seen, train_losses, val_losses, label="loss", output_dir="outputs"):
     fig, ax1 = plt.subplots(figsize=(5, 3))
 
     # Plot training and validation loss against epochs
@@ -685,5 +686,6 @@ def plot_losses(epochs_seen, tokens_seen, train_losses, val_losses, label="loss"
     ax2.set_xlabel("Tokens seen")
 
     fig.tight_layout()  # Adjust layout to make room
-    plt.savefig(f"outputs/{label}-plot.pdf")
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    plt.savefig(Path(output_dir) / f"{label}-plot.pdf")
     plt.show()

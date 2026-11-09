@@ -1,0 +1,3 @@
+[runtime]
+auto_instantiate = false
+on_cell_change = "lazy"

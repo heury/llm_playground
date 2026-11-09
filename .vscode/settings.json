@@ -1,0 +1,6 @@
+{
+  "workbench.editorAssociations": {
+    "*_mo.py": "marimo-notebook",
+    "**/notebooks/**/*.py": "marimo-notebook"
+  }
+}

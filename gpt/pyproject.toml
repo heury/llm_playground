@@ -3,6 +3,8 @@ name = "gpt"
 version = "0.1.0"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "marimo>=0.25.2,<0.26",
+    "gensim>=4.4,<5",
     "torch>=2.8,<2.9",
     "tiktoken",
     "numpy",
