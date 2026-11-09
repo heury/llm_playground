@@ -6,7 +6,7 @@
 
 노트북 **10개 / 코드 셀 68개**가 새 Jupyter 커널에서 전부 통과했다. 총 실행 시간은 55.89초다. 별도 GQA 과제 검사는 유효 설정 5개와 잘못된 설정 3개 모두 기대대로 통과했다. 이는 코드와 설명용 수치·불변성의 확인이며 실제 수강생의 이해도를 측정한 결과는 아니다.
 
-배포 원본에는 출력과 실행 번호를 남기지 않았다. 실행 사본·로그·지표·JSONL·그림·가중치는 [outputs 실행 폴더](../../outputs/minimind/20261109-180606-student-revision/)에 보관한다.
+배포 원본에는 출력과 실행 번호를 남기지 않았다. 실행 사본·로그·지표·JSONL·그림·가중치는 [outputs 실행 폴더](../../outputs/minimind/20261109-180606-student-revision)에 보관한다.
 
 ## 검토 항목별 반영
 
@@ -67,7 +67,7 @@ notebooks/.venv/bin/python notebooks/scripts/check_attention_exercises.py --outp
 
 ## 환경·리비전
 
-Python: `3.12.15 (main, Oct 21 2026, 17:47:06) [Clang 23.1.3 ]`. 실행 경로: `/home/mind4u/dev/llm_playground/notebooks/.venv/bin/python`. 기본 CPU float32, hidden_size=64, layers=2, Q/KV heads=4/2, vocab=6400. 외부 가중치 없이 무작위 초기화와 고정 예제 JSONL로 학습했다.
+Python: `3.12.15 (main, Oct 21 2026, 17:47:06) [Clang 23.1.3 ]`. 실행 경로: `/home/mind4u/dev/llm_playground/notebooks/minimind/.venv/bin/python`. 기본 CPU float32, hidden_size=64, layers=2, Q/KV heads=4/2, vocab=6400. 외부 가중치 없이 무작위 초기화와 고정 예제 JSONL로 학습했다.
 
 - torch: 2.14.1
 - transformers: 4.57.6

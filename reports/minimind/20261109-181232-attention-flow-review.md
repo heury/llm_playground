@@ -10,7 +10,7 @@
 
 ## 계산 순서의 정확성
 
-셀 8→10은 다음 MiniMind 연산 순서를 따른다. [원본 Attention.forward](../../minimind/model/model_minimind.py)의 기본 cache 없는 float32·flash_attn=False·eval 경로와 대응한다.
+셀 8→10은 다음 MiniMind 연산 순서를 따른다. [원본 Attention.forward](../../projects/minimind/model/model_minimind.py)의 기본 cache 없는 float32·flash_attn=False·eval 경로와 대응한다.
 
 ```text
 입력 h

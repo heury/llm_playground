@@ -14,9 +14,9 @@
 
 **원본 근거**
 
-- [원본 SFT](../../gpt/Chapter_7_Exercise_Follow_Instructions.ipynb) 셀 0의 `main`: train/test/valid를 분리하고, 학습 후 모든 test entry에 `model_response`를 생성하여 JSON으로 저장한다.
-- [원본 DPO](../../gpt/Chapter_7_Exercise_Follow_Instructions_dpo.ipynb) 셀 0의 `evaluate_dpo_loss_loader`: 별도 validation의 loss와 chosen/rejected reward를 계산한다. 셀 4는 test 질문에 대한 reference와 policy의 생성 결과를 나란히 비교한다.
-- [원본 LoRA 분류](../../gpt/Chapter_6_Excercise_Finetuning_Classification_LoRA.ipynb) 셀 3은 train/valid/test accuracy를 모두 계산한다. 일반 분류 원본은 test loader를 준비하지만 기본 실행 끝에서는 test accuracy를 별도로 출력하지 않으므로 두 원본의 범위를 혼동하면 안 된다.
+- [원본 SFT](../../notebooks/gpt/Chapter_7_Exercise_Follow_Instructions.ipynb) 셀 0의 `main`: train/test/valid를 분리하고, 학습 후 모든 test entry에 `model_response`를 생성하여 JSON으로 저장한다.
+- [원본 DPO](../../notebooks/gpt/Chapter_7_Exercise_Follow_Instructions_dpo.ipynb) 셀 0의 `evaluate_dpo_loss_loader`: 별도 validation의 loss와 chosen/rejected reward를 계산한다. 셀 4는 test 질문에 대한 reference와 policy의 생성 결과를 나란히 비교한다.
+- [원본 LoRA 분류](../../notebooks/gpt/Chapter_6_Excercise_Finetuning_Classification_LoRA.ipynb) 셀 3은 train/valid/test accuracy를 모두 계산한다. 일반 분류 원본은 test loader를 준비하지만 기본 실행 끝에서는 test accuracy를 별도로 출력하지 않으므로 두 원본의 범위를 혼동하면 안 된다.
 
 **생성본 상태**
 
@@ -30,7 +30,7 @@
 
 ### 2. 분류에서 백본 일부를 실제로 미세 조정하는 과정이 과제로 축소됐다 — 우선순위 높음
 
-**원본 근거**: [일반 분류 원본](../../gpt/Chapter_6_Excercise_Finetuning_Classification.ipynb) 셀 1은 분류 head뿐 아니라 `trf_blocks[-1]`과 `final_norm`을 unfreeze하여 업데이트한다.
+**원본 근거**: [일반 분류 원본](../../notebooks/gpt/Chapter_6_Excercise_Finetuning_Classification.ipynb) 셀 1은 분류 head뿐 아니라 `trf_blocks[-1]`과 `final_norm`을 unfreeze하여 업데이트한다.
 
 **생성본 상태**: [생성 분류](../../notebooks/Chapter_6_Exercise_MiniMind_Classification.ipynb) 셀 4에서 백본 전체를 고정하고, `features()`의 `torch.no_grad()` 안에서 hidden state를 미리 계산한다. 셀 6은 head만 학습한다. 마지막 블록 학습은 셀 7의 선택 과제다.
 
@@ -38,7 +38,7 @@
 
 ### 3. 자기회귀 생성 루프를 직접 작성하는 셀이 빠졌다 — 우선순위 높음
 
-**원본 근거**: [원본 모델 조립](../../gpt/Chapter_4_Excercise_GPT.ipynb) 셀 4의 `generate_text_simple`, [원본 사전 학습](../../gpt/Chapter_5_Excercise_Pretraining.ipynb) 셀 3의 `generate`는 마지막 위치 logits 선택 → argmax → ID 이어 붙이기를 직접 구현한다. 원본 5장에는 context cropping과 EOS 검사도 있다.
+**원본 근거**: [원본 모델 조립](../../notebooks/gpt/Chapter_4_Excercise_GPT.ipynb) 셀 4의 `generate_text_simple`, [원본 사전 학습](../../notebooks/gpt/Chapter_5_Excercise_Pretraining.ipynb) 셀 3의 `generate`는 마지막 위치 logits 선택 → argmax → ID 이어 붙이기를 직접 구현한다. 원본 5장에는 context cropping과 EOS 검사도 있다.
 
 **생성본 상태**: [생성 모델](../../notebooks/Chapter_4_Exercise_MiniMind_Architecture.ipynb) 셀 8은 `model.generate(...)`를 호출한다. cache와 full forward의 일치 검사는 있지만 생성 루프 자체는 원본 모델 API 안에 있다. [helper](../../notebooks/minimind_lab.py)의 `respond()`도 동일하다.
 
@@ -46,7 +46,7 @@
 
 ### 4. 슬라이딩 윈도·stride와 DataLoader 구성 실습이 빠졌다 — 우선순위 높음
 
-**원본 근거**: [원본 데이터](../../gpt/Chapter_2_Exercise_Dataset.ipynb) 셀 2~4는 `GPTDatasetV1`에서 긴 텍스트를 `max_length`, `stride`로 자르고, `__len__`, `__getitem__`, DataLoader 설정과 첫 두 배치를 직접 확인한다.
+**원본 근거**: [원본 데이터](../../notebooks/gpt/Chapter_2_Exercise_Dataset.ipynb) 셀 2~4는 `GPTDatasetV1`에서 긴 텍스트를 `max_length`, `stride`로 자르고, `__len__`, `__getitem__`, DataLoader 설정과 첫 두 배치를 직접 확인한다.
 
 **생성본 상태**: [생성 데이터](../../notebooks/Chapter_2_Exercise_MiniMind_Dataset.ipynb) 셀 4는 helper의 `pretrain_data()`·`loader()`를 호출한다. 실제 `PretrainDataset`을 사용하는 장점은 있으나, 긴 원문이 여러 학습 샘플로 바뀌는 과정을 만들지는 않는다. helper의 loader는 batch_size=4, num_workers=0을 고정하며 나머지 기본값 설명도 제한적이다.
 
@@ -54,7 +54,7 @@
 
 ### 5. 같은 문제에서 분류 미세 조정과 LoRA를 비교하는 연결이 사라졌다 — 우선순위 중간
 
-**원본 근거**: [일반 분류 원본](../../gpt/Chapter_6_Excercise_Finetuning_Classification.ipynb)과 [LoRA 분류 원본](../../gpt/Chapter_6_Excercise_Finetuning_Classification_LoRA.ipynb)은 같은 SMS spam 과제와 데이터 전처리를 사용한다. LoRA 원본은 어댑터 클래스를 직접 정의한다.
+**원본 근거**: [일반 분류 원본](../../notebooks/gpt/Chapter_6_Excercise_Finetuning_Classification.ipynb)과 [LoRA 분류 원본](../../notebooks/gpt/Chapter_6_Excercise_Finetuning_Classification_LoRA.ipynb)은 같은 SMS spam 과제와 데이터 전처리를 사용한다. LoRA 원본은 어댑터 클래스를 직접 정의한다.
 
 **생성본 상태**: 6장은 감정 단어 분류, [8장](../../notebooks/Chapter_8_Exercise_MiniMind_LoRA.ipynb)은 SFT 기반 브랜딩 응답 생성이다. 어댑터 구현도 직접 작성하는 대신 실제 `model_lora.py`를 가져온다. 따라서 파라미터 수는 관찰할 수 있지만 같은 문제의 일반 미세 조정과 LoRA 결과를 직접 비교하지 못한다.
 
@@ -87,13 +87,13 @@ GPT의 원래 구성 요소를 그대로 복원할 필요는 없다. 구조 비�
 
 ### SFT의 학습 대상이 원본과 다름
 
-[원본 SFT](../../gpt/Chapter_7_Exercise_Follow_Instructions.ipynb)의 `custom_collate_fn`은 padding을 제외하지만 기본 경로에서 prompt 전체를 응답처럼 별도로 -100 처리하지 않는다. 따라서 프롬프트를 포함한 sequence의 다음 토큰 loss를 계산한다. 생성본은 MiniMind `SFTDataset`을 사용해 **assistant 응답과 종료 구분자**만 감독한다.
+[원본 SFT](../../notebooks/gpt/Chapter_7_Exercise_Follow_Instructions.ipynb)의 `custom_collate_fn`은 padding을 제외하지만 기본 경로에서 prompt 전체를 응답처럼 별도로 -100 처리하지 않는다. 따라서 프롬프트를 포함한 sequence의 다음 토큰 loss를 계산한다. 생성본은 MiniMind `SFTDataset`을 사용해 **assistant 응답과 종료 구분자**만 감독한다.
 
 생성본의 assistant-only mask는 누락이 아니라 MiniMind 방식으로의 변경이다. 다만 두 방식의 loss 값은 같은 대상으로 계산한 값이 아니므로 직접 비교할 수 없음을 예제에 명시하는 것이 좋다.
 
 ### DPO의 로그 확률 집계가 원본과 다름
 
-[원본 DPO](../../gpt/Chapter_7_Exercise_Follow_Instructions_dpo.ipynb) 셀 0의 `compute_logprobs`는 선택된 응답 토큰 log probability를 **평균**한다. MiniMind `trainer/train_dpo.py::dpo_loss`와 생성 9장은 마스크된 토큰 log probability를 **합산**한다.
+[원본 DPO](../../notebooks/gpt/Chapter_7_Exercise_Follow_Instructions_dpo.ipynb) 셀 0의 `compute_logprobs`는 선택된 응답 토큰 log probability를 **평균**한다. MiniMind `trainer/train_dpo.py::dpo_loss`와 생성 9장은 마스크된 토큰 log probability를 **합산**한다.
 
 생성본은 MiniMind 구현에 맞다. 다만 길이가 다른 chosen/rejected에서 평균과 합산은 달라지고 margin 및 beta의 수치적 척도도 달라진다. 예를 들어 token log probability가 모두 -1이면 길이 2/4의 합은 -2/-4지만 평균은 둘 다 -1이다. 원본과 같은 결과라고 설명해서는 안 된다. 길이가 다른 작은 응답으로 두 집계를 비교하는 설명 셀이 유용하다.
 

@@ -3,7 +3,7 @@
 - 실행일: 2026-11-09 (Asia/Seoul)
 - 대상: `notebooks/minimind_structure.py`, `notebooks/minimind_lora.py`, `notebooks/README.md`
 - 기준: [수강생 관점 검토](20261109-191249-student-review.md)의 9개 개선점.
-- 산출물: [`outputs/notebooks/20261109-191704-student-revision/`](../../outputs/notebooks/20261109-191704-student-revision/)
+- 산출물: [`outputs/notebooks/20261109-191704-student-revision/`](../../outputs/notebooks/20261109-191704-student-revision)
 - 환경: Linux x86_64, Python 3.12.15, torch 2.15.0+cpu, transformers 4.57.6, marimo 0.25.2, matplotlib 3.11.2. 기존 `notebooks/uv.lock`과 환경을 사용했다.
 
 ## 반영 내용

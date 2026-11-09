@@ -8,19 +8,25 @@
 
 ```text
 ./
-├── AGENTS.md                 # 전체 프로젝트 구조와 주요 파일 안내
-├── outputs/                   # 테스트 결과, 실행 로그와 생성 산출물
-├── reports/                   # 테스트·검증·분석 보고서
-├── test_scenarios/            # 모델별 테스트 입력·절차·판정 기준 (필요 시 생성)
-├── gpt/                      # GPT 단계별 노트북 실습과 모델 구조 개선 실험
-├── unsloth/                  # Unsloth 기반 Qwen 학습·추론·배포 노트북 실습
-├── minimind/                 # 기본 자기회귀 언어 모델: Dense/MoE, SFT와 RL
-├── minimind-v/               # 이미지 이해를 추가한 시각·언어 모델(VLM)
-├── minimind-o/               # 텍스트·이미지·음성을 처리하는 Omni 모델
-├── minimind-a/               # 이미지·지시문·상태에서 행동 청크를 생성하는 VLA
-├── minimind-j/               # 한 입력에 대한 여러 타입별 질문을 병렬 처리하는 판단 모델
-├── minimind-d/               # 마스킹과 반복 복원 기반 확산 언어 모델
-└── minimind-la/              # 선형 어텐션과 전체 어텐션을 결합하는 모델 실험
+├── AGENTS.md
+├── README.md
+├── notebooks/                # 설명과 실행 중심의 실습 (각각 독립 uv 환경)
+│   ├── gpt/                  # GPT 챕터별 실습과 구조 실험
+│   ├── minimind/             # MiniMind marimo 실습 (이전 notebooks/)
+│   └── unsloth/              # Qwen 미세 조정·배포 실습
+├── projects/                 # 독립 모델 구현·학습·추론
+│   ├── minimind/
+│   ├── minimind-v/
+│   ├── minimind-o/
+│   ├── minimind-a/
+│   ├── minimind-j/
+│   ├── minimind-j2/
+│   ├── minimind-d/
+│   └── minimind-la/
+├── references/slides/        # 교재 PDF
+├── outputs/                  # 실행 산출물 (Git 제외)
+├── reports/                  # 검증·분석 보고서
+└── test_scenarios/           # 재사용할 테스트 입력·절차·판정 기준
 ```
 
 - 각 프로젝트는 별도의 실행 디렉토리입니다. `model`, `dataset`, `trainer` 같은 이름이
@@ -36,45 +42,45 @@
 ## gpt — GPT 실습과 모델 구조 실험
 
 ```text
-gpt/
+notebooks/gpt/
 ├── README.md                 # uv 환경 설치와 노트북 실행 안내
 ├── pyproject.toml / uv.lock  # Python 3.12 프로젝트 의존성과 잠금 파일
-├── Chapter_*.ipynb           # 벡터·데이터·Attention·GPT·사전 학습·SFT·LoRA·DPO 실습
+├── Chapter_*.py           # 벡터·데이터·Attention·GPT·사전 학습·SFT·LoRA·DPO 실습
 ├── previous_chapters.py      # 노트북에서 재사용하는 GPT 모델·학습·생성·다운로드 함수
-├── model_improvements/       # KV cache, GQA, MLA, MoE, DeltaNet 등 구조 실험
+├── gpt_with_*.py             # KV cache, GQA, MLA, MoE, DeltaNet 등 marimo 구조 실험
 └── .tours/                   # 모델 개선 코드 탐색용 CodeTour
 ```
 
-`gpt/README.md`와 대상 노트북, 가져오는 `previous_chapters.py` 또는
-`model_improvements/` 모듈을 함께 확인하세요. `previous_chapters.py`를 수정하면
+`notebooks/gpt/README.md`와 대상 노트북, 가져오는 `previous_chapters.py` 또는
+`gpt_with_*.py` marimo 앱을 함께 확인하세요. `previous_chapters.py`를 수정하면
 이를 공유하는 여러 노트북에 영향을 줄 수 있습니다. 원본의 저작권·라이선스 안내를 유지합니다.
-설치는 `gpt/`에서 `uv sync --locked`, 실행은 `uv run jupyter lab`을 사용하고
-노트북 커널은 `gpt/.venv/bin/python`을 선택합니다. 데이터·모델 가중치의 존재와
+설치는 `notebooks/gpt/`에서 `uv sync --locked`, 실행은 `uv run marimo edit .`을 사용하고
+marimo의 Python 환경은 `notebooks/gpt/.venv/bin/python`을 사용합니다. 데이터·모델 가중치의 존재와
 다운로드 경로를 확인하고, 학습 셀의 실제 실행과 구문 검사만 수행한 경우를 구분하세요.
 새 실행 산출물은 `outputs/gpt/<실행 ID>/`, 보고서는 `reports/gpt/<실행 ID>.md`에 저장합니다.
 
 ## unsloth — Unsloth 노트북 실습
 
 ```text
-unsloth/
+notebooks/unsloth/
 ├── README.md                 # 환경별 설치·실행과 검증 범위 안내
 ├── pyproject.toml / uv.lock  # 기본 의존성과 grpo·qat·phone·tools 추가 옵션
 ├── .python-version          # Python 버전 지정
-├── Qwen*.ipynb               # Decision, Vision, GRPO, 증류, 도구 호출, QAT, Phone 실습
+├── Qwen*.py               # Decision, Vision, GRPO, 증류, 도구 호출, QAT, Phone 실습
 └── scripts/
-    ├── execute_notebook.py   # 셀별 실행 기록, executed.ipynb와 status.json 저장
-    └── run_notebook_on_pod.sh # 기존 Pod 내부에서 uv 환경 준비와 노트북 실행
+    ├── execute_notebook.py   # 외부 Jupyter 입력용 실행 기록 유틸리티
+    └── run_notebook_on_pod.sh # 외부 Jupyter 소스를 기존 Pod에서 실행
 ```
 
-`unsloth/README.md` → `pyproject.toml` → 대상 노트북 순서로 확인하세요.
+`notebooks/unsloth/README.md` → `pyproject.toml` → 대상 노트북 순서로 확인하세요.
 Python 3.12 / Linux x86_64 환경을 사용하며, 학습에는 호환되는 NVIDIA GPU와
-CUDA 드라이버가 필요합니다. `unsloth/`에서 `uv sync --locked`로 설치하고
+CUDA 드라이버가 필요합니다. `notebooks/unsloth/`에서 `uv sync --locked`로 설치하고
 실습에 따라 `--extra grpo`, `--extra qat`, `--extra phone`, `--extra tools`를 선택합니다.
 `grpo`, `qat`, `phone`은 하나씩 선택하고 `--all-extras`는 사용하지 않습니다.
 환경 변경 전 커널을 종료하고 설치 후 다시 시작하세요.
 
 패키지 설치는 uv로 관리하고, 노트북에 설치 셀을 추가하거나 `--no-deps`로
-의존성을 우회하지 마세요. 배포용 원본 노트북에는 실행 출력과 실행 번호를 남기지 않고,
+의존성을 우회하지 마세요. 실습 소스는 marimo `.py`로 유지하며 `.ipynb` 원본은 제거했습니다.
 실행 사본·로그·지표는 `outputs/unsloth/<실행 ID>/`, 보고서는
 `reports/unsloth/<실행 ID>.md`에 저장합니다. `execute_notebook.py`의
 `--output-dir`도 이 규칙에 맞춥니다. Pod 실행 스크립트는 원격 작업 경로를 사용하므로
@@ -83,7 +89,7 @@ CUDA 드라이버가 필요합니다. `unsloth/`에서 `uv sync --locked`로 설
 ## minimind — 기본 언어 모델
 
 ```text
-minimind/
+projects/minimind/
 ├── README.md / README_en.md / README_ko.md
 ├── requirements.txt             # 프로젝트 의존성
 ├── eval_llm.py                  # CLI 추론: native PyTorch 및 Transformers 모델
@@ -123,7 +129,7 @@ RL rollout 변경은 `trainer/rollout_engine.py`와 사용하는 학습 스크�
 ## minimind-v — 시각·언어 모델
 
 ```text
-minimind-v/
+projects/minimind-v/
 ├── README.md / README_en.md / README_ko.md
 ├── requirements.txt
 ├── eval_vlm.py                  # 이미지 질의·응답 추론
@@ -151,7 +157,7 @@ minimind-v/
 ## minimind-o — 음성·시각·언어 통합 모델
 
 ```text
-minimind-o/
+projects/minimind-o/
 ├── README.md / README_en.md / README_ko.md
 ├── requirements.txt
 ├── eval_omni.py                 # Omni 명령행 추론
@@ -185,7 +191,7 @@ Gradio 데모와 실시간 `webui/` 경로를 구분하세요.
 ## minimind-a — 행동 생성 모델
 
 ```text
-minimind-a/
+projects/minimind-a/
 ├── README.md                   # VLA 설명, 입력·출력 의미와 실행 방법
 ├── requirements.txt / requirements-dev.txt
 ├── pytest.ini                  # 프로젝트 기준 테스트 경로
@@ -213,7 +219,7 @@ minimind-a/
 ## minimind-j — 병렬 타입별 판단 모델
 
 ```text
-minimind-j/
+projects/minimind-j/
 ├── README.md                   # 타입별 판단 형식과 병렬 처리 원리
 ├── requirements.txt / pytest.ini
 ├── dataset.py                 # 데이터 검증, 토크나이저, 질문 packing과 배치 처리
@@ -240,7 +246,7 @@ JSON null과 다릅니다. 별도 decision MLP 대신 기존 LM head를 사용�
 ## minimind-d / minimind-la — 모델 구조 실험
 
 ```text
-minimind-d/
+projects/minimind-d/
 ├── model/model_minimind_dllm.py # 비인과 Attention, 마스킹 학습, 반복 복원 생성
 ├── trainer/train_dllm.py       # 확산 언어 모델 학습
 ├── eval_dllm.py                # 확산 모델 평가·대화
@@ -248,14 +254,14 @@ minimind-d/
     ├── chat_dllm.py            # 대화 스크립트
     └── web_dllm.py             # 웹 데모
 
-minimind-la/
+projects/minimind-la/
 ├── model/model_minimind_linear.py # GatedDeltaNet 기반 선형/전체 Attention 혼합
 └── run_linear.py                  # 기본 모델 모듈을 교체해 대상 스크립트를 실행
 ```
 
 DLLM은 `model.model_minimind`의 기본 구현을 가져오지만 해당 디렉토리에는 기본
 모델 파일이 없습니다. 실행 전 import 경로와 기본 모델 의존성을 확인하세요. 두 실험
-디렉토리에는 현재 별도 README가 없습니다. 선형 어텐션의 실행기는 `sys.modules`를
+디렉토리의 README에서 환경과 실행 제약을 확인하세요. 선형 어텐션의 실행기는 `sys.modules`를
 교체하고 대상 스크립트 디렉토리로 이동하므로 일반 학습 진입점과 실행 방식이 다릅니다.
 선형 모델은 선택적 `causal_conv1d`, `flash-linear-attention` 가속이 없으면 PyTorch
 경로로 폴백합니다.
@@ -264,8 +270,8 @@ DLLM은 `model.model_minimind`의 기본 구현을 가져오지만 해당 디렉
 
 - 테스트는 프로젝트 디렉토리에서 실행합니다. 전체 저장소 테스트를 한 번에 모으면
   동명 모듈 때문에 import 충돌이 발생할 수 있습니다.
-- `minimind-a/`, `minimind-j/`: 각 디렉토리에서 `python -m pytest -q`.
-- `minimind/`: 프로젝트 디렉토리에서
+- `projects/minimind-a/`, `projects/minimind-j/`: 각 디렉토리에서 `python -m pytest -q`.
+- `projects/minimind/`: 프로젝트 디렉토리에서
   `python -m unittest discover -s trainer -p 'test_train_tokenizer.py'`.
 - 클라우드 확장은 `scripts/runpod_*/README.md`와 해당 테스트 안내를 먼저 확인합니다.
   경로 탐색이나 문서 확인만으로 학습·리소스 생성 스크립트를 실행하지 마세요.
@@ -302,3 +308,11 @@ DLLM은 `model.model_minimind`의 기본 구현을 가져오지만 해당 디렉
 가중치·입력·생성 설정을 명시하고, 실행 결과와 판정 근거는 위 저장 규칙에 따라
 `outputs/`와 `reports/`에 기록합니다. 미실행 시나리오를 통과 결과로 보고하지 마세요.
 자동화된 단위 테스트는 각 프로젝트의 기존 테스트 위치에 유지합니다.
+
+## 디렉토리 이동 시 주의
+
+노트북은 `notebooks/<실습>/`, 모델 구현은 `projects/<프로젝트>/`에 있습니다.
+노트북에서 저장소 루트는 `Path(__file__).resolve().parents[2]`이며,
+원본 모델은 루트의 `projects/` 아래에서 가져옵니다. 산출물·보고서 경로는
+루트 `outputs/`, `reports/`를 계속 사용합니다. 기존 `outputs/notebooks/`와
+`reports/notebooks/`는 MiniMind 실습의 기록 경로로 유지합니다.

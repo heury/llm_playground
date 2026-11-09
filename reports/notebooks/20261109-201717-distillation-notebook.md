@@ -3,7 +3,7 @@
 - 실행일: 2026-11-09, Asia/Seoul.
 - 대상: `notebooks/minimind_distillation.py`, 실행 안내: `notebooks/README.md`.
 - 기준 커밋: `e2c613e1b240114cae92215d1f6d680e9a6f5159`. 원본 모델·trainer·dataset은 수정하지 않았다.
-- 산출물: [outputs/notebooks/20261109-201717-distillation-notebook/](../../outputs/notebooks/20261109-201717-distillation-notebook/).
+- 산출물: [outputs/notebooks/20261109-201717-distillation-notebook/](../../outputs/notebooks/20261109-201717-distillation-notebook).
 - 환경: Linux CPU, Python 3.12.15, PyTorch 2.15.0+cpu, transformers 4.57.6, datasets 5.0.1, marimo 0.25.2, matplotlib 3.11.2. 기존 `notebooks/.venv`·`uv.lock`을 사용했다. 의존성 변경 없음.
 
 ## 수업 구성과 원본 대응

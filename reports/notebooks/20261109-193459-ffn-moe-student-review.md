@@ -3,7 +3,7 @@
 - 검토일: 2026-11-09 (Asia/Seoul)
 - 대상: `notebooks/minimind_feedforward.py`, `notebooks/minimind_moe.py`
 - 방법: 수강생 관점으로 설명을 읽고 전체 셀 실행·UI 정의 변경·과제 입력 변경을 수행했다. 실제 수강생을 모집한 사용성 시험이나 브라우저 편집기 조작은 아니다.
-- 산출물: [`outputs/notebooks/20261109-193459-ffn-moe-student-review/`](../../outputs/notebooks/20261109-193459-ffn-moe-student-review/)
+- 산출물: [`outputs/notebooks/20261109-193459-ffn-moe-student-review/`](../../outputs/notebooks/20261109-193459-ffn-moe-student-review)
 - 환경: Linux CPU, Python 3.12.15, torch 2.15.0+cpu, transformers 4.57.6, marimo 0.25.2. 기존 notebooks 환경을 사용했다. 외부 모델·데이터는 없고 원본 파일 해시는 `practice.json`에 기록했다.
 
 ## 실행한 실습

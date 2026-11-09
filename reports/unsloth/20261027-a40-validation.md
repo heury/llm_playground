@@ -60,7 +60,7 @@
 
 ## 증거와 재현
 
-- 실행 증거 폴더: [outputs/unsloth/20261027-a40-validation](../../outputs/unsloth/20261027-a40-validation/). `outputs/`는 Git 추적에서 제외되므로 이 보고서와 별도로 보관해야 한다.
+- 실행 증거 폴더: [outputs/unsloth/20261027-a40-validation](../../outputs/unsloth/20261027-a40-validation). `outputs/`는 Git 추적에서 제외되므로 이 보고서와 별도로 보관해야 한다.
 - 노트북별 `<작업명>/evidence/`에 실행 사본(`executed.ipynb`), 셀별 상태·패키지 버전(`status.json`), 단계별 시간(`timing.json`), 로그와 생성 파일 목록(`artifact-manifest.json`)을 보관한다. 대용량 모델 가중치와 내보낸 `.pte` 바이너리는 회수 대상에서 제외하고 크기와 SHA256을 목록에 기록했다.
 - `<작업명>/deleted.json`은 제거 후 Pod 목록에서 ID가 사라진 것을 확인한 기록이다. 기존 사용자 Pod는 변경하지 않는다.
 - 테스트 절차: 동일 이미지와 GPU에서 소스 노트북·pyproject.toml·uv.lock을 복사하고 해당 extra로 uv 환경을 설치한다. `uv run --no-sync python scripts/execute_notebook.py <노트북> --output-dir <결과 경로>`를 실행한다.

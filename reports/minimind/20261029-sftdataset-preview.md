@@ -13,7 +13,7 @@
 실행 명령:
 
 ```bash
-cd minimind
+cd projects/minimind
 HF_DATASETS_CACHE=../outputs/minimind/20261029-sftdataset-preview/cache \
   /tmp/minimind-v-exercise-venv/bin/python \
   ../outputs/minimind/20261029-sftdataset-preview/preview.py \
