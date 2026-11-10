@@ -1,0 +1,6 @@
+flowchart TD
+    IMG["이미지"] --> P["processor"] --> SIG["SigLIP<br/>동결"] --> PROJ["Projector"]
+    Q["질문"] --> TOK["tokenizer"] --> ID["토큰 ID<br/>image_pad 자리 포함"] --> EMB["텍스트 Embedding"]
+    PROJ --> REP["이미지 자리 교체<br/>길이 T 유지"]
+    EMB --> REP
+    REP --> DEC["Decoder<br/>causal self-attention"] --> LM["LM head"] --> NXT["다음 토큰"]

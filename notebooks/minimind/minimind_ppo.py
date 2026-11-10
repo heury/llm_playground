@@ -55,9 +55,8 @@ def _(mo):
     원본 RLAIFDataset과 MiniMind 모델을 직접 사용합니다. PPO 학습 루프는
     전역 변수·GPU·외부 보상 모델 의존성을 없애고 셀에서 읽을 수 있게 축소했습니다.
 
-    모델 구조 → SFT → 이 실습 순서를 권장합니다. Python, 텐서 shape, 역전파,
-    다음 토큰 확률을 알고 시작하세요. 각 절의 **예측 → 실행 → 관찰 → 해설**을 따릅니다.
-    `@app.cell`의 인자·return은 marimo 셀 간 데이터 전달입니다.
+    SFT → DPO → **PPO** → GRPO 순서를 권장합니다. DPO의 "고정 reference 대비 변화"가
+    여기서는 KL 페널티로 다시 등장하고, 보상은 **생성한 응답**에 대해 계산합니다.
     모델·데이터 다운로드 없이 CPU에서 실행하며 산출물은 `outputs/notebooks/<실행 ID>/`에 저장합니다.
     """)
     return
@@ -88,9 +87,27 @@ def _(mo):
     return
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md("""
+    ## 2. 원본 RLAIFDataset은 무엇을 반환할까?
+
+    **예측:** JSONL의 마지막 assistant 답변이 PPO의 정답 label로 반환될까요?
+    마지막 응답에 추적 문자열 `정답누출확인`을 넣어 확인합니다.
+    원본 `create_chat_prompt`는 `conversations[:-1]`만 템플릿에 넣고,
+    `__getitem__`은 `prompt`와 빈 `answer`를 반환합니다. 따라서 마지막 원소가
+    assistant인 데이터를 준비해야 합니다. 이전 턴 assistant는 문맥으로 남습니다.
+
+    system을 명시하여 무작위 system 추가를 피했습니다. `thinking_ratio=0`이며
+    이 작은 템플릿은 사고 모드를 구현하지 않습니다. 원본 Dataset의 `max_length`는
+    저장만 하고 절단에 쓰지 않습니다. 실제 절단·왼쪽 패딩은 trainer의 tokenizer가 수행합니다.
+    여기서도 Dataset에 3을 주고 실제 토큰화에는 32를 주어 이를 확인합니다.
+    """)
+    return
+
+
 @app.cell
-def _(PreTrainedTokenizerFast, RLAIFDataset, Tokenizer, json, mo, models,
-      output_dir, pre_tokenizers, random):
+def _(PreTrainedTokenizerFast, RLAIFDataset, Tokenizer, json, models, output_dir, pre_tokenizers, random):
     questions = ["인사", "인사 부탁", "인사 부탁 해", "인사 해"]
     records = [{"conversations": [
         {"role": "system", "content": "인사 도우미"},
@@ -117,30 +134,30 @@ def _(PreTrainedTokenizerFast, RLAIFDataset, Tokenizer, json, mo, models,
     prompt_batch = tokenizer(prompts, padding=True, truncation=True, max_length=32, return_tensors="pt")
     assert prompt_batch.input_ids.shape[1] > rl_dataset.max_length
     tokenizer.save_pretrained(output_dir / "tokenizer")
+    return (prompt_batch, prompts, questions, rl_dataset, tokenizer, vocab,)
+
+
+@app.cell(hide_code=True)
+def _(mo, prompt_batch, prompts, questions, rl_dataset):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([
-        mo.md("""
-        ## 2. 원본 RLAIFDataset은 무엇을 반환할까?
-
-        **예측:** JSONL의 마지막 assistant 답변이 PPO의 정답 label로 반환될까요?
-        마지막 응답에 추적 문자열 `정답누출확인`을 넣어 확인합니다.
-        원본 `create_chat_prompt`는 `conversations[:-1]`만 템플릿에 넣고,
-        `__getitem__`은 `prompt`와 빈 `answer`를 반환합니다. 따라서 마지막 원소가
-        assistant인 데이터를 준비해야 합니다. 이전 턴 assistant는 문맥으로 남습니다.
-
-        system을 명시하여 무작위 system 추가를 피했습니다. `thinking_ratio=0`이며
-        이 작은 템플릿은 사고 모드를 구현하지 않습니다. 원본 Dataset의 `max_length`는
-        저장만 하고 절단에 쓰지 않습니다. 실제 절단·왼쪽 패딩은 trainer의 tokenizer가 수행합니다.
-        여기서도 Dataset에 3을 주고 실제 토큰화에는 32를 주어 이를 확인합니다.
-        """),
         mo.ui.table([{"질문": q, "실제 prompt": p, "answer": rl_dataset[i]["answer"],
                       "왼쪽 패딩 포함 ID": str(prompt_batch.input_ids[i].tolist())}
                      for i, (q, p) in enumerate(zip(questions, prompts))], selection=None),
     ])
-    return prompt_batch, prompts, rl_dataset, tokenizer, vocab
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md("""
+    ## 3. PPO 출발점: 작은 SFT 모델 준비
+    """)
+    return
 
 
 @app.cell
-def _(F, MiniMindConfig, MiniMindForCausalLM, copy, mo, prompt_batch, tokenizer, torch):
+def _(MiniMindConfig, MiniMindForCausalLM, copy, prompt_batch, tokenizer, torch):
     torch.manual_seed(42)
     config = MiniMindConfig(hidden_size=32, num_hidden_layers=1, num_attention_heads=4,
         num_key_value_heads=2, intermediate_size=64, max_position_embeddings=64,
@@ -177,10 +194,13 @@ def _(F, MiniMindConfig, MiniMindForCausalLM, copy, mo, prompt_batch, tokenizer,
         def forward(self, input_ids, attention_mask=None):
             hidden = self.model(input_ids=input_ids, attention_mask=attention_mask)[0]
             return self.value_head(self.model.norm(hidden)).squeeze(-1)
+    return (TeachingCritic, base_actor, config, reference, warmup_losses,)
 
+
+@app.cell(hide_code=True)
+def _(mo, warmup_losses):
+    # ▸ 결과 설명 — 실행하면 계산 값이 들어간 설명이 나타납니다 (marimo 표시 코드)
     mo.md(f"""
-    ## 3. PPO 출발점: 작은 SFT 모델 준비
-
     무작위 모델에 바로 PPO를 적용하면 쓸 만한 응답을 샘플링하기 어렵습니다.
     여기서는 같은 질문에 `안녕 [EOS]`, `안녕하세요 [EOS]`를 동일 횟수 제공하여
     **SFT 100 step**으로 시작 모델을 준비합니다. 이 단계만 모범 응답 label을 사용합니다.
@@ -192,7 +212,7 @@ def _(F, MiniMindConfig, MiniMindForCausalLM, copy, mo, prompt_batch, tokenizer,
     이 실습도 대응을 위해 그 동작을 유지합니다. 별도의 Critic을 SFT 가중치에서
     초기화하고 value head만 새로 만듭니다. reference는 SFT 모델의 동결 사본입니다.
     """)
-    return TeachingCritic, base_actor, config, reference, warmup_losses
+    return
 
 
 @app.cell
@@ -259,33 +279,44 @@ def _(F, torch):
     return collect_rollout, gae, masked_mean, response_logps
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ## 4. rollout과 한 칸 이동: 어떤 위치가 행동의 확률일까?
+
+    프롬프트 패딩 폭을 P, 생성 폭을 R이라고 하면 입력은 `[B,P+R]`,
+    응답 log probability·value·mask는 `[B,R]`입니다. **P는 왼쪽 패딩을 포함한 폭**입니다.
+    첫 행동 `ids[:,P]`의 log probability는 `logits[:,P-1]`에서 가져옵니다.
+    Critic도 행동 전 상태인 위치 P-1을 읽습니다. 원본의
+    `logp_pos = prompt_lens - 1 + resp_idx`와 같습니다.
+
+    **예측:** `[안녕하세요, EOS, PAD]` 중 몇 위치가 loss에 들어갈까요?
+    정답은 2개입니다. EOS도 선택한 행동입니다. 프롬프트와 EOS 이후 위치는 제외합니다.
+    원본은 rollout의 completion mask와 첫 EOS 위치를 결합합니다.
+    이 실습은 생성 중 alive mask를 기록합니다. EOS 전에 PAD가 샘플링되면 그것도
+    실제 행동으로 취급하며 토큰 ID만 보고 지우지 않습니다.
+
+    원본 호출은 temperature=0.8입니다. 여기서는 샘플링 분포와 ratio에 쓰는 분포를
+    명확히 맞추기 위해 **temperature=1, top-k/top-p 없이 전체 어휘에서 샘플링**합니다.
+    아래 오차는 생성 시 저장한 old logp와 전체 시퀀스 재계산 결과를 비교한 값입니다.
+    """)
+    return
+
+
 @app.cell
-def _(base_actor, collect_rollout, mo, prompt_batch, response_logps, tokenizer, torch):
+def _(base_actor, collect_rollout, prompt_batch, response_logps, tokenizer, torch):
     torch.manual_seed(123)
     example = collect_rollout(base_actor, prompt_batch, tokenizer)
     _check = response_logps(base_actor, example["ids"], example["full_mask"], example["positions"])
     rollout_logp_error = float(((_check.detach() - example["old_logp"]) * example["mask"]).abs().max())
     assert rollout_logp_error < 1e-5
+    return (example, rollout_logp_error,)
+
+
+@app.cell(hide_code=True)
+def _(example, mo, rollout_logp_error, tokenizer):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([
-        mo.md(r"""
-        ## 4. rollout과 한 칸 이동: 어떤 위치가 행동의 확률일까?
-
-        프롬프트 패딩 폭을 P, 생성 폭을 R이라고 하면 입력은 `[B,P+R]`,
-        응답 log probability·value·mask는 `[B,R]`입니다. **P는 왼쪽 패딩을 포함한 폭**입니다.
-        첫 행동 `ids[:,P]`의 log probability는 `logits[:,P-1]`에서 가져옵니다.
-        Critic도 행동 전 상태인 위치 P-1을 읽습니다. 원본의
-        `logp_pos = prompt_lens - 1 + resp_idx`와 같습니다.
-
-        **예측:** `[안녕하세요, EOS, PAD]` 중 몇 위치가 loss에 들어갈까요?
-        정답은 2개입니다. EOS도 선택한 행동입니다. 프롬프트와 EOS 이후 위치는 제외합니다.
-        원본은 rollout의 completion mask와 첫 EOS 위치를 결합합니다.
-        이 실습은 생성 중 alive mask를 기록합니다. EOS 전에 PAD가 샘플링되면 그것도
-        실제 행동으로 취급하며 토큰 ID만 보고 지우지 않습니다.
-
-        원본 호출은 temperature=0.8입니다. 여기서는 샘플링 분포와 ratio에 쓰는 분포를
-        명확히 맞추기 위해 **temperature=1, top-k/top-p 없이 전체 어휘에서 샘플링**합니다.
-        아래 오차는 생성 시 저장한 old logp와 전체 시퀀스 재계산 결과를 비교한 값입니다.
-        """),
         mo.ui.table([{"샘플": i, "응답 토큰": str(tokenizer.convert_ids_to_tokens(row.tolist())),
                       "mask": str(example["mask"][i].tolist()),
                       "logits/value 위치": str(example["positions"][i].tolist()),
@@ -293,50 +324,87 @@ def _(base_actor, collect_rollout, mo, prompt_batch, response_logps, tokenizer, 
                      for i, row in enumerate(example["completion"])], selection=None),
         mo.md(f"유효 토큰 old logp 최대 오차: `{rollout_logp_error:.2e}`"),
     ])
-    return example, rollout_logp_error
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ## 5. 마지막에 받은 보상을 앞 행동까지 전달하기: GAE
+
+    $\delta_t=r_t+\gamma V(s_{t+1})-V(s_t)$
+
+    $A_t=\delta_t+\gamma\lambda A_{t+1}$, 뒤에서 앞으로 계산합니다.
+    이 예제는 $\gamma=1$, $\lambda=0.95$, 끝의 다음 value=0입니다.
+    첫 행에서 마지막 $\delta=1-0.4=0.6$,
+    가운데 $A=(0.4-0.3)+0.95\times0.6=0.67$입니다.
+    **예측:** 마지막에만 보상을 넣어도 첫 토큰의 advantage가 0일까요?
+
+    Critic의 학습 목표는 **return = 정규화 전 advantage + old value**입니다.
+    Actor용 advantage는 유효 토큰 전체의 평균·분산으로 정규화합니다.
+    정규화하면 부호가 달라질 수 있으므로 표의 원본값과 따로 읽으세요.
+    두 번째 응답의 패딩 value=999는 0으로 마스킹하여 GAE에 들어오지 않습니다.
+    원본도 old value를 마스킹하고 뒤에서 누적합니다. 이 구현은 매 단계 mask를 명시합니다.
+
+    길이 제한으로 EOS 없이 끝나도 원본처럼 마지막 value의 bootstrap을 0으로 둡니다.
+    이는 종료로 취급하는 선택입니다. 계속되는 환경에서 시간 제한만 걸린 경우에는
+    다음 상태 value로 bootstrap하는 설계가 필요합니다.
+    """)
+    return
 
 
 @app.cell
-def _(gae, mo, torch):
-    _mask = torch.tensor([[1., 1., 1.], [1., 1., 0.]])
-    _values = torch.tensor([[0.2, 0.3, 0.4], [0.1, 0.2, 999.]])
-    _norm, _returns, _raw, _rewards = gae(torch.tensor([1., -1.]), _values, _mask)
-    assert torch.allclose(_raw[0], torch.tensor([0.7365, 0.67, 0.6]), atol=1e-6)
-    assert _raw[1, 2] == 0 and _returns[1, 2] == 0
+def _(gae, torch):
+    gae_demo_mask = torch.tensor([[1., 1., 1.], [1., 1., 0.]])
+    gae_demo_values = torch.tensor([[0.2, 0.3, 0.4], [0.1, 0.2, 999.]])
+    gae_demo_normalized, gae_demo_returns, gae_demo_raw, gae_demo_rewards = gae(torch.tensor([1., -1.]), gae_demo_values, gae_demo_mask)
+    assert torch.allclose(gae_demo_raw[0], torch.tensor([0.7365, 0.67, 0.6]), atol=1e-6)
+    assert gae_demo_raw[1, 2] == 0 and gae_demo_returns[1, 2] == 0
+    return (
+        gae_demo_mask,
+        gae_demo_normalized,
+        gae_demo_raw,
+        gae_demo_returns,
+        gae_demo_rewards,
+        gae_demo_values,
+    )
+
+
+@app.cell(hide_code=True)
+def _(gae_demo_mask, gae_demo_normalized, gae_demo_raw, gae_demo_returns, gae_demo_rewards, gae_demo_values, mo):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([
-        mo.md(r"""
-        ## 5. 마지막에 받은 보상을 앞 행동까지 전달하기: GAE
-
-        $\delta_t=r_t+\gamma V(s_{t+1})-V(s_t)$
-
-        $A_t=\delta_t+\gamma\lambda A_{t+1}$, 뒤에서 앞으로 계산합니다.
-        이 예제는 $\gamma=1$, $\lambda=0.95$, 끝의 다음 value=0입니다.
-        첫 행에서 마지막 $\delta=1-0.4=0.6$,
-        가운데 $A=(0.4-0.3)+0.95\times0.6=0.67$입니다.
-        **예측:** 마지막에만 보상을 넣어도 첫 토큰의 advantage가 0일까요?
-
-        Critic의 학습 목표는 **return = 정규화 전 advantage + old value**입니다.
-        Actor용 advantage는 유효 토큰 전체의 평균·분산으로 정규화합니다.
-        정규화하면 부호가 달라질 수 있으므로 표의 원본값과 따로 읽으세요.
-        두 번째 응답의 패딩 value=999는 0으로 마스킹하여 GAE에 들어오지 않습니다.
-        원본도 old value를 마스킹하고 뒤에서 누적합니다. 이 구현은 매 단계 mask를 명시합니다.
-
-        길이 제한으로 EOS 없이 끝나도 원본처럼 마지막 value의 bootstrap을 0으로 둡니다.
-        이는 종료로 취급하는 선택입니다. 계속되는 환경에서 시간 제한만 걸린 경우에는
-        다음 상태 value로 bootstrap하는 설계가 필요합니다.
-        """),
-        mo.ui.table([{"샘플": b, "t": t, "유효": bool(_mask[b,t]),
-                      "원래 V": float(_values[b,t]), "토큰 보상": float(_rewards[b,t]),
-                      "raw A": round(float(_raw[b,t]), 4), "return": round(float(_returns[b,t]), 4),
-                      "정규화 A": round(float(_norm[b,t]), 4)}
+        mo.ui.table([{"샘플": b, "t": t, "유효": bool(gae_demo_mask[b,t]),
+                      "원래 V": float(gae_demo_values[b,t]), "토큰 보상": float(gae_demo_rewards[b,t]),
+                      "raw A": round(float(gae_demo_raw[b,t]), 4), "return": round(float(gae_demo_returns[b,t]), 4),
+                      "정규화 A": round(float(gae_demo_normalized[b,t]), 4)}
                      for b in range(2) for t in range(3)], selection=None),
     ])
     return
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ## 6. PPO clip은 모든 변화를 막는가?
+
+    $\rho_t=\exp(\log\pi_\theta(a_t|s_t)-\log\pi_{old}(a_t|s_t))$
+
+    $L_{clip}=\mathrm{mean}_{valid}\left[\max(-A_t\rho_t,
+    -A_t\mathrm{clip}(\rho_t,1-\epsilon,1+\epsilon))\right]$
+
+    최대화할 목적에 마이너스를 붙여 **최소화할 loss**로 썼으므로 `max`입니다.
+    A>0이면 확률을 높이고 A<0이면 낮추되, 유리한 방향의 과도한 이동에서 이득을 제한합니다.
+    **예측:** A<0, ratio=1.4이면 gradient가 0일까요? 표에서 확인하세요.
+    이 경우 나쁜 행동을 더 많이 선택했으므로 되돌리는 gradient가 남습니다.
+    clip은 확률이나 매개변수의 변화에 대한 강제 상한이 아닙니다.
+    """)
+    return
+
+
 @app.cell
-def _(mo, torch):
-    _rows = []
+def _(torch):
+    clip_rows = []
     for _a in [1., -1.]:
         for _r in [0.6, 1., 1.4]:
             _ratio = torch.tensor(_r, requires_grad=True)
@@ -344,25 +412,18 @@ def _(mo, torch):
             _clipped = -_a * _ratio.clamp(0.8, 1.2)
             _loss = torch.maximum(_unclipped, _clipped)
             _loss.backward()
-            _rows.append({"A": _a, "ratio": _r, "일반 loss": float(_unclipped.detach()),
+            clip_rows.append({"A": _a, "ratio": _r, "일반 loss": float(_unclipped.detach()),
                           "clip loss": round(float(_clipped.detach()), 3),
                           "선택 loss": round(float(_loss.detach()), 3),
                           "d loss / d ratio": float(_ratio.grad)})
+    return (clip_rows,)
+
+
+@app.cell(hide_code=True)
+def _(clip_rows, mo):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([
-        mo.md(r"""
-        ## 6. PPO clip은 모든 변화를 막는가?
-
-        $\rho_t=\exp(\log\pi_\theta(a_t|s_t)-\log\pi_{old}(a_t|s_t))$
-
-        $L_{clip}=\mathrm{mean}_{valid}\left[\max(-A_t\rho_t,
-        -A_t\mathrm{clip}(\rho_t,1-\epsilon,1+\epsilon))\right]$
-
-        최대화할 목적에 마이너스를 붙여 **최소화할 loss**로 썼으므로 `max`입니다.
-        A>0이면 확률을 높이고 A<0이면 낮추되, 유리한 방향의 과도한 이동에서 이득을 제한합니다.
-        **예측:** A<0, ratio=1.4이면 gradient가 0일까요? 표에서 확인하세요.
-        이 경우 나쁜 행동을 더 많이 선택했으므로 되돌리는 gradient가 남습니다.
-        clip은 확률이나 매개변수의 변화에 대한 강제 상한이 아닙니다.
-        """), mo.ui.table(_rows, selection=None),
+        mo.ui.table(clip_rows, selection=None),
     ])
     return
 
@@ -396,19 +457,27 @@ def _(mo):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(mo):
+    mo.md(r"""
+    ## 8. 실제 MiniMind PPO 업데이트
+    설정 변경 시 같은 SFT 모델에서 다시 시작합니다. 한 rollout=32응답, mini-batch=16, 최대 3회 재사용입니다.
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    # ▸ 실습 설정 위젯 — 실행하면 슬라이더·선택 상자가 나타납니다 (marimo 표시 코드)
     rounds_ui = mo.ui.slider(4, 32, step=4, value=20, label="새 rollout 수")
     beta_ui = mo.ui.slider(0.0, 0.5, step=0.02, value=0.02, label="reference KL 계수 β")
-    mo.vstack([mo.md("## 8. 실제 MiniMind PPO 업데이트\n설정 변경 시 같은 SFT 모델에서 다시 시작합니다. 한 rollout=32응답, mini-batch=16, 최대 3회 재사용입니다."),
+    mo.vstack([
                rounds_ui, beta_ui])
     return beta_ui, rounds_ui
 
 
 @app.cell
-def _(TeachingCritic, base_actor, beta_ui, collect_rollout, config, copy, gae,
-      json, masked_mean, mo, output_dir, prompt_batch, reference,
-      response_logps, rounds_ui, tokenizer, torch, uuid4):
+def _(TeachingCritic, base_actor, beta_ui, collect_rollout, config, copy, gae, json, masked_mean, output_dir, prompt_batch, reference, response_logps, rounds_ui, tokenizer, torch, uuid4):
     torch.manual_seed(2026)
     actor = copy.deepcopy(base_actor).train()
     critic = TeachingCritic(config)
@@ -515,6 +584,12 @@ def _(TeachingCritic, base_actor, beta_ui, collect_rollout, config, copy, gae,
     assert abs(evaluate_policy(_restored) - after_probability) < 1e-7
     results["checks"]["actor_save_restore"] = True
     (training_dir / "metrics.json").write_text(json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8")
+    return (after_probability, before_probability, history, results, traces, training_dir,)
+
+
+@app.cell(hide_code=True)
+def _(after_probability, before_probability, history, mo, training_dir):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([
         mo.md(f"""공손한 2토큰 응답의 **정확한 경로 확률 평균**: {before_probability:.1%} → {after_probability:.1%}.
         같은 4개 프롬프트에서 측정했습니다. 학습 문제에 대한 점검이며 별도 일반화 평가는 아닙니다.
@@ -524,11 +599,21 @@ def _(TeachingCritic, base_actor, beta_ui, collect_rollout, config, copy, gae,
         저장 경로: `{training_dir}`"""),
         mo.ui.table(history, selection=None),
     ])
-    return after_probability, before_probability, history, results, traces, training_dir
+    return
 
 
-@app.cell
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### 첫 rollout과 마지막 rollout의 실제 응답
+    응답 길이·보상과 old value, raw/정규화 advantage, return을 연결해 읽으세요.
+    """)
+    return
+
+
+@app.cell(hide_code=True)
 def _(history, mo, plt, traces, training_dir):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     _fig, _axes = plt.subplots(1, 3, figsize=(12, 3))
     _x = [r["round"] for r in history]
     for _ax, _keys, _title in zip(_axes,
@@ -540,7 +625,7 @@ def _(history, mo, plt, traces, training_dir):
         _ax.legend(fontsize=8)
     _fig.tight_layout()
     _fig.savefig(training_dir / "learning_curves.png", dpi=140)
-    mo.vstack([_fig, mo.md("### 첫 rollout과 마지막 rollout의 실제 응답\n응답 길이·보상과 old value, raw/정규화 advantage, return을 연결해 읽으세요."),
+    mo.vstack([_fig, 
                mo.ui.table(traces, selection=None)])
     return
 
@@ -591,6 +676,10 @@ def _(mo):
     참고한 저장소 코드: `minimind/trainer/train_ppo.py`,
     `minimind/dataset/lm_dataset.py`, `minimind/trainer/rollout_engine.py`,
     `minimind/model/model_minimind.py`. 원본 라이선스는 `minimind/LICENSE`를 확인하세요.
+
+    **다음 실습:** `minimind_grpo.py`. Critic 없이 **같은 질문의 여러 응답 평균**을 기준선으로 쓰고,
+    추론(think) 형식과 정답 보상으로 reasoning 모델을 학습하는 방법을 다룹니다.
+    6절의 clip 표는 GRPO에서도 같은 의미이므로 그 노트북에서는 반복하지 않습니다.
     """)
     return
 

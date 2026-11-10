@@ -30,8 +30,6 @@ def _(mo):
     SwiGLU를 읽으면 좋습니다. 이 노트북도 CPU에서 단독 실행하며 다운로드는 없습니다.
 
     `B`는 배치, `T`는 토큰 수, `D`는 은닉 차원, `E`는 전문가 수, `k`는 토큰당 선택 수입니다.
-    Python 함수·shape·행렬 곱을 알고 시작하세요. **예측 → 실행 → 관찰 → 설명** 순서로 진행합니다.
-    `@app.cell`과 인자·return은 셀 간 데이터 전달이고, `_` 변수는 셀 내부 계산입니다.
     설정을 바꾸면 새 모델에서 다시 실행합니다.
 
     MoE는 여기서 **블록의 FeedForward 부분**을 바꿉니다. Attention이 전문가로 바뀌는 것은 아닙니다.
@@ -56,8 +54,9 @@ def _(mo):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(mo):
+    # ▸ 실습 설정 위젯 — 실행하면 슬라이더·선택 상자가 나타납니다 (marimo 표시 코드)
     experts_per_token = mo.ui.dropdown([1, 2], value=2, label="고정 router 관찰: k")
     normalize_routes = mo.ui.checkbox(value=True, label="고정 router 관찰: 가중치 정규화")
     mo.hstack([experts_per_token, normalize_routes])
@@ -65,7 +64,7 @@ def _(mo):
 
 
 @app.cell
-def _(MOEFeedForward, MiniMindConfig, experts_per_token, mo, normalize_routes, torch):
+def _(MOEFeedForward, MiniMindConfig, experts_per_token, normalize_routes, torch):
     moe_config = MiniMindConfig(
         hidden_size=4, intermediate_size=8, moe_intermediate_size=8,
         num_attention_heads=2, num_key_value_heads=1,
@@ -83,12 +82,18 @@ def _(MOEFeedForward, MiniMindConfig, experts_per_token, mo, normalize_routes, t
         [[2., .1, 0., 1.], [-2., .2, 1., 0.], [.1, 2., 0., -1.]],
         [[1., .3, 1., 0.], [-1., .4, 0., 1.], [.2, 1.4, -1., 0.]],
     ])
+    return (moe_config, route_inputs, routed_moe,)
+
+
+@app.cell(hide_code=True)
+def _(experts_per_token, mo, route_inputs):
+    # ▸ 결과 설명 — 실행하면 계산 값이 들어간 설명이 나타납니다 (marimo 표시 코드)
     mo.md(f"입력 `{tuple(route_inputs.shape)}` → 토큰별 펼치기 `[6,4]` → router 점수 `[6,3]`. k={experts_per_token.value}, 전문가 수 E=3입니다.")
-    return moe_config, route_inputs, routed_moe
+    return
 
 
 @app.cell
-def _(F, mo, moe_config, route_inputs, routed_moe, torch):
+def _(F, moe_config, route_inputs, routed_moe, torch):
     with torch.no_grad():
         flat_tokens = route_inputs.reshape(-1, 4)
         router_logits = routed_moe.gate(flat_tokens)
@@ -102,6 +107,19 @@ def _(F, mo, moe_config, route_inputs, routed_moe, torch):
             combine_weights = selected_probabilities
         # top-1 정규화에서는 순전파 값은 1입니다. gradient 차이는 4절에서 별도로 봅니다.
         torch.testing.assert_close(router_probabilities.sum(-1), torch.ones(6))
+    return (
+        combine_weights,
+        flat_tokens,
+        router_logits,
+        router_probabilities,
+        selected_experts,
+        selected_probabilities,
+    )
+
+
+@app.cell(hide_code=True)
+def _(combine_weights, mo, moe_config, router_logits, router_probabilities, selected_experts, selected_probabilities):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([
         mo.ui.table([
             {"토큰 위치": i, "전문가": e, "router 점수": float(router_logits[i, e]),
@@ -115,7 +133,7 @@ def _(F, mo, moe_config, route_inputs, routed_moe, torch):
         ], selection=None),
         mo.md("**관찰·해설:** 정규화하면 선택된 k개 안에서 가중치 합이 1입니다. 끄면 선택 확률을 그대로 쓰므로 합이 1보다 작을 수 있습니다. `sorted=False`이므로 선택 슬롯 순서가 확률 순위를 보장하지 않습니다."),
     ])
-    return combine_weights, flat_tokens, router_probabilities, selected_experts
+    return
 
 
 @app.cell
@@ -131,31 +149,47 @@ def _(mo):
 
 
 @app.cell
-def _(combine_weights, flat_tokens, mo, route_inputs, routed_moe, selected_experts, torch):
+def _(combine_weights, flat_tokens, route_inputs, routed_moe, selected_experts, torch):
     with torch.no_grad():
-        _manual = torch.zeros_like(flat_tokens)
-        _rows = []
+        manual_moe_output = torch.zeros_like(flat_tokens)
+        first_token_rows = []
         for _token in range(flat_tokens.shape[0]):
             for _slot in range(selected_experts.shape[1]):
                 _expert = int(selected_experts[_token, _slot])
                 _output = routed_moe.experts[_expert](flat_tokens[_token:_token+1])[0]
                 _contribution = combine_weights[_token, _slot] * _output
-                _manual[_token] += _contribution
+                manual_moe_output[_token] += _contribution
                 if _token == 0:
-                    _rows.append({"첫 토큰의 전문가": _expert, "가중치": float(combine_weights[_token, _slot]),
+                    first_token_rows.append({"첫 토큰의 전문가": _expert, "가중치": float(combine_weights[_token, _slot]),
                                   "전문가 출력": str(_output.tolist()), "가중치 × 출력": str(_contribution.tolist())})
         _actual = routed_moe(route_inputs)
-        routing_max_error = float((_manual.reshape_as(_actual) - _actual).abs().max())
-        torch.testing.assert_close(_manual.reshape_as(_actual), _actual)
+        routing_max_error = float((manual_moe_output.reshape_as(_actual) - _actual).abs().max())
+        torch.testing.assert_close(manual_moe_output.reshape_as(_actual), _actual)
+    return (first_token_rows, manual_moe_output, routing_max_error,)
+
+
+@app.cell(hide_code=True)
+def _(first_token_rows, manual_moe_output, mo, routing_max_error):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([
-        mo.ui.table(_rows, selection=None),
-        mo.md(f"직접 가중합한 첫 토큰: `{_manual[0].tolist()}`. 원본과의 최대 오차 `{routing_max_error:.2e}`. 입력과 출력 shape는 같습니다."),
+        mo.ui.table(first_token_rows, selection=None),
+        mo.md(f"직접 가중합한 첫 토큰: `{manual_moe_output[0].tolist()}`. 원본과의 최대 오차 `{routing_max_error:.2e}`. 입력과 출력 shape는 같습니다."),
     ])
-    return (routing_max_error,)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### 2-1. 같은 입력을 Dense와 MoE에 넣기
+
+    Dense 기준은 expert 0과 같은 FFN입니다. MoE는 shape를 유지하면서 경로와 보유량을 바꿉니다. 아래 전문가별 출력 표를 위의 선택·가중합 표와 연결하세요.
+    """)
+    return
 
 
 @app.cell
-def _(flat_tokens, mo, moe_config, route_inputs, routed_moe, torch):
+def _(flat_tokens, route_inputs, routed_moe, torch):
     with torch.no_grad():
         _dense = routed_moe.experts[0](route_inputs)
         _mixed = routed_moe(route_inputs)
@@ -166,17 +200,22 @@ def _(flat_tokens, mo, moe_config, route_inputs, routed_moe, torch):
             {"경로": "MoE (선택 전문가 가중합)", "출력 shape": str(tuple(_mixed.shape)),
              "전체 보유량": sum(p.numel() for p in routed_moe.parameters()), "첫 토큰 출력": str(_mixed[0, 0].tolist())},
         ]
-        _all_expert_rows = [
+        all_expert_rows = [
             {"전문가": i, "같은 첫 토큰의 출력": str(expert(flat_tokens[:1])[0].tolist())}
             for i, expert in enumerate(routed_moe.experts)
         ]
+    return (all_expert_rows, dense_moe_rows,)
+
+
+@app.cell(hide_code=True)
+def _(all_expert_rows, dense_moe_rows, mo):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([
-        mo.md("### 2-1. 같은 입력을 Dense와 MoE에 넣기\n\nDense 기준은 expert 0과 같은 FFN입니다. MoE는 shape를 유지하면서 경로와 보유량을 바꿉니다. 아래 전문가별 출력 표를 위의 선택·가중합 표와 연결하세요."),
         mo.ui.table(dense_moe_rows, selection=None),
-        mo.ui.table(_all_expert_rows, selection=None),
+        mo.ui.table(all_expert_rows, selection=None),
         mo.md("**해설:** 이 진단 표를 만들 때만 모든 전문가를 같은 입력에 실행했습니다. 실제 원본 MoE의 출력 계산은 선택된 전문가를 사용합니다. 구조 비교이며 학습 성능·속도 비교가 아닙니다."),
     ])
-    return (dense_moe_rows,)
+    return
 
 
 @app.cell
@@ -196,7 +235,7 @@ def _(mo):
 
 
 @app.cell
-def _(mo, moe_config, plt, route_inputs, routed_moe, router_probabilities, selected_experts, torch):
+def _(moe_config, plt, route_inputs, routed_moe, router_probabilities, selected_experts, torch):
     with torch.no_grad():
         expert_counts = torch.bincount(selected_experts.flatten(), minlength=moe_config.num_experts)
         _mean_probability = router_probabilities.mean(0)
@@ -209,10 +248,10 @@ def _(mo, moe_config, plt, route_inputs, routed_moe, router_probabilities, selec
         assert float(routed_moe.aux_loss) == 0
         routed_moe.train()
     assert int(expert_counts.sum()) == route_inputs.shape[0] * route_inputs.shape[1] * moe_config.num_experts_per_tok
-    _fig, _ax = plt.subplots(figsize=(5, 3))
+    routing_fig, _ax = plt.subplots(figsize=(5, 3))
     _ax.bar(range(3), expert_counts.numpy())
     _ax.set(xticks=[0, 1, 2], xlabel="Expert", ylabel="Selected token assignments", title="Routing counts / toy features")
-    _fig.tight_layout()
+    routing_fig.tight_layout()
     _expert_parameters = sum(p.numel() for p in routed_moe.experts[0].parameters())
     _router_parameters = routed_moe.gate.weight.numel()
     moe_parameter_summary = {
@@ -220,17 +259,33 @@ def _(mo, moe_config, plt, route_inputs, routed_moe, router_probabilities, selec
         "MoE 전체 보유량": sum(p.numel() for p in routed_moe.parameters()),
         "선택 경로 가중치 수(토큰당 참고값)": _router_parameters + moe_config.num_experts_per_tok * _expert_parameters,
     }
+    return (expert_counts, manual_aux_loss, moe_parameter_summary, routing_fig,)
+
+
+@app.cell(hide_code=True)
+def _(manual_aux_loss, mo, moe_parameter_summary, routing_fig):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([
-        _fig,
+        routing_fig,
         mo.md(f"직접 계산한 보조 손실: `{float(manual_aux_loss):.6f}`. 원본과 일치하며 eval 모드에서는 원본이 0으로 설정합니다."),
         mo.ui.table([moe_parameter_summary], selection=None),
         mo.md("**해설:** 전문가를 일부 선택해도 전체 전문가 가중치는 보유합니다. 선택 경로 수는 FLOPs나 실제 속도 측정이 아닙니다. 이 Python 구현의 반복문·분배·미선택 전문가의 그래프 유지 비용도 있어 Dense보다 빠르다고 결론 내리지 않습니다."),
     ])
-    return expert_counts, manual_aux_loss, moe_parameter_summary
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### 3-1. 균등 선택과 편중 선택의 손실 비교
+
+    **예측:** 토큰 세 개가 모두 같은 전문가를 선택하면 어떤 값이 커질까요? 사람이 정한 top-1 확률 표 두 개로 수식을 비교합니다. 실제 학습 결과는 아닙니다.
+    """)
+    return
 
 
 @app.cell
-def _(mo, torch):
+def _(torch):
     _balanced = torch.tensor([[.9, .05, .05], [.05, .9, .05], [.05, .05, .9]])
     _collapsed = torch.tensor([[.9, .05, .05]]).repeat(3, 1)
     balance_examples = []
@@ -241,12 +296,17 @@ def _(mo, torch):
                                  "평균 확률": str([round(float(v), 3) for v in _p.mean(0)]),
                                  "계수 없는 균형 항": float(_balance), "계수 0.01의 손실": float(_balance * .01)})
     assert balance_examples[0]["계수 0.01의 손실"] < balance_examples[1]["계수 0.01의 손실"]
+    return (balance_examples,)
+
+
+@app.cell(hide_code=True)
+def _(balance_examples, mo):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([
-        mo.md("### 3-1. 균등 선택과 편중 선택의 손실 비교\n\n**예측:** 토큰 세 개가 모두 같은 전문가를 선택하면 어떤 값이 커질까요? 사람이 정한 top-1 확률 표 두 개로 수식을 비교합니다. 실제 학습 결과는 아닙니다."),
         mo.ui.table(balance_examples, selection=None),
         mo.md("**해설:** 편중된 예제의 손실이 더 큽니다. 실제 학습에서 선택은 불연속적으로 바뀌고 주 손실도 함께 최적화하므로, 이 비교만으로 사용량 균등을 보장할 수는 없습니다. 5절에서는 같은 초기 LM에서 계수 0/0.01을 비교합니다."),
     ])
-    return (balance_examples,)
+    return
 
 
 @app.cell
@@ -268,8 +328,18 @@ def _(mo):
     return
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### 4-1. scalar 하나로 먼저 비교하기
+
+    **예측:** 출력이 같으면 gradient도 같을까요? p=0.7에서 두 계산을 비교합니다.
+    """)
+    return
+
+
 @app.cell
-def _(mo, torch):
+def _(torch):
     _p = torch.tensor(.7, requires_grad=True)
     _naive = _p / _p
     _naive_gradient = torch.autograd.grad(_naive, _p)[0]
@@ -281,23 +351,37 @@ def _(mo, torch):
         {"계산식": "p/p", "순전파 값": float(_naive.detach()), "p의 gradient": float(_naive_gradient)},
         {"계산식": "p-p.detach()+1", "순전파 값": float(_straight.detach()), "p의 gradient": float(_straight_gradient)},
     ]
-    mo.vstack([
-        mo.md("### 4-1. scalar 하나로 먼저 비교하기\n\n**예측:** 출력이 같으면 gradient도 같을까요? p=0.7에서 두 계산을 비교합니다."),
-        mo.ui.table(scalar_gradient_rows, selection=None),
-        mo.md("**해설:** 출력은 모두 1이지만 gradient는 0과 1입니다. detach한 값은 이 역전파에서 상수로 취급됩니다. 이것은 현재 원본의 top-1 처리이며 모든 MoE의 필수 규칙은 아닙니다."),
-    ])
     return (scalar_gradient_rows,)
 
 
-@app.cell
+@app.cell(hide_code=True)
+def _(mo, scalar_gradient_rows):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
+    mo.vstack([
+        mo.ui.table(scalar_gradient_rows, selection=None),
+        mo.md("**해설:** 출력은 모두 1이지만 gradient는 0과 1입니다. detach한 값은 이 역전파에서 상수로 취급됩니다. 이것은 현재 원본의 top-1 처리이며 모든 MoE의 필수 규칙은 아닙니다."),
+    ])
+    return
+
+
+@app.cell(hide_code=True)
 def _(mo):
+    # ▸ 실습 설정 위젯 — 실행하면 슬라이더·선택 상자가 나타납니다 (marimo 표시 코드)
     top1_input_sign = mo.ui.dropdown([1, -1], value=1, label="top-1 실험: 입력 첫 성분의 부호")
     top1_input_sign
     return (top1_input_sign,)
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### 4-2. 실제 선택 결과에 따라 검증하기
+    """)
+    return
+
+
 @app.cell
-def _(F, MOEFeedForward, MiniMindConfig, mo, top1_input_sign, torch):
+def _(F, MOEFeedForward, MiniMindConfig, top1_input_sign, torch):
     def probe_top1_routes(x):
         config = MiniMindConfig(hidden_size=4, intermediate_size=8, num_experts=3,
                                 num_attention_heads=2, num_key_value_heads=1, use_moe=True,
@@ -328,12 +412,18 @@ def _(F, MOEFeedForward, MiniMindConfig, mo, top1_input_sign, torch):
     _x = torch.tensor([[[2., .1, 1., 0.], [1.5, .2, 0., 1.]]])
     _x[..., 0] *= top1_input_sign.value
     moe_gradient_rows, probe_selected_experts = probe_top1_routes(_x)
+    return (moe_gradient_rows, probe_selected_experts, probe_top1_routes,)
+
+
+@app.cell(hide_code=True)
+def _(mo, moe_gradient_rows, probe_selected_experts):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([
-        mo.md(f"### 4-2. 실제 선택 결과에 따라 검증하기\n\n두 토큰의 선택 전문가: `{probe_selected_experts}`. 부호를 바꿔도 고정 전문가 번호를 가정하지 않습니다."),
+        mo.md(f"두 토큰의 선택 전문가: `{probe_selected_experts}`. 부호를 바꿔도 고정 전문가 번호를 가정하지 않습니다."),
         mo.ui.table(moe_gradient_rows, selection=None),
         mo.md("**관찰·해설:** 출력은 각 토큰이 실제로 선택한 전문가 출력과 같습니다. 선택된 전문가와 router의 gradient를 확인하세요. 선택되지 않은 전문가는 0 gradient를 받습니다. 선택된 쪽도 입력·목표에 따라 gradient가 0일 수 있습니다. optimizer의 weight decay 등과 실제 가중치 변화는 별개입니다."),
     ])
-    return moe_gradient_rows, probe_selected_experts, probe_top1_routes
+    return
 
 
 @app.cell
@@ -357,8 +447,9 @@ def _(mo):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(mo):
+    # ▸ 실습 설정 위젯 — 실행하면 슬라이더·선택 상자가 나타납니다 (marimo 표시 코드)
     lm_experts_per_token = mo.ui.dropdown([1, 2], value=2, label="LM 재학습: 토큰당 전문가 k")
     lm_normalize_routes = mo.ui.checkbox(value=True, label="LM 재학습: 가중치 정규화")
     mo.hstack([lm_experts_per_token, lm_normalize_routes])
@@ -366,7 +457,7 @@ def _(mo):
 
 
 @app.cell
-def _(F, MiniMindConfig, MiniMindForCausalLM, copy, lm_experts_per_token, lm_normalize_routes, mo, plt, torch):
+def _(F, MiniMindConfig, MiniMindForCausalLM, copy, lm_experts_per_token, lm_normalize_routes, plt, torch):
     _config = MiniMindConfig(
         hidden_size=16, intermediate_size=32, num_hidden_layers=1,
         num_attention_heads=2, num_key_value_heads=1, vocab_size=8,
@@ -459,7 +550,7 @@ def _(F, MiniMindConfig, MiniMindForCausalLM, copy, lm_experts_per_token, lm_nor
             moe_lm_metrics = {"initial_main_loss": _history[0]["main"], "final_eval_main_loss": float(_final.loss),
                               "next_token_accuracy": float((_predictions == _ids[:, 1:]).float().mean())}
     assert _snapshots[0.0][0] == _snapshots[0.01][0]
-    _fig, _axes = plt.subplots(1, 2, figsize=(9, 3))
+    lm_loss_fig, _axes = plt.subplots(1, 2, figsize=(9, 3))
     for _coefficient, _history in lm_comparison_histories.items():
         _axes[0].plot([r["main"] for r in _history], label=f"coef={_coefficient}")
         _axes[1].plot([r["aux"] for r in _history], label=f"coef={_coefficient}")
@@ -468,8 +559,8 @@ def _(F, MiniMindConfig, MiniMindForCausalLM, copy, lm_experts_per_token, lm_nor
     for _axis in _axes:
         _axis.set(xlabel="Step", ylabel="Loss")
         _axis.legend()
-    _fig.tight_layout()
-    _usage_fig, _usage_axes = plt.subplots(1, 2, figsize=(9, 3), sharey=True)
+    lm_loss_fig.tight_layout()
+    usage_fig, _usage_axes = plt.subplots(1, 2, figsize=(9, 3), sharey=True)
     for _axis, _coefficient in zip(_usage_axes, [0.0, 0.01]):
         _before, _after = _snapshots[_coefficient]
         _axis.bar([i - .18 for i in range(3)], _before["counts"], width=.36, label="Before")
@@ -477,17 +568,30 @@ def _(F, MiniMindConfig, MiniMindForCausalLM, copy, lm_experts_per_token, lm_nor
         _axis.set(xticks=[0, 1, 2], xlabel="Expert", ylabel="Selected token assignments", title=f"coef={_coefficient}")
         _axis.set_ylim(0, _ids.numel() + 1)
         _axis.legend()
-    _usage_fig.tight_layout()
+    usage_fig.tight_layout()
+    return (
+        aux_comparison_rows,
+        lm_comparison_histories,
+        lm_loss_fig,
+        moe_lm_metrics,
+        moe_training_history,
+        routing_snapshot_rows,
+        snapshot_lm_routes,
+        trained_moe_lm,
+        usage_fig,
+    )
+
+
+@app.cell(hide_code=True)
+def _(aux_comparison_rows, lm_loss_fig, mo, moe_training_history, routing_snapshot_rows, usage_fig):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([
-        _fig, mo.ui.table(aux_comparison_rows, selection=None), _usage_fig,
+        lm_loss_fig, mo.ui.table(aux_comparison_rows, selection=None), usage_fig,
         mo.ui.table(routing_snapshot_rows, selection=None),
         mo.ui.table(moe_training_history[:3], selection=None),
         mo.md("**관찰·해설:** 같은 초기 가중치·데이터·optimizer·80 step이며 보조 손실 계수만 다릅니다. 계수 0의 aux=0이 균형 잡힌 선택을 뜻하지 않습니다. 계수 없는 균형 항, 사용량과 주 손실을 함께 비교하세요. 어느 계수가 반드시 더 균등하거나 정확하다고 가정하지 않습니다. EOS 포함 입력 8위치의 선택 합은 8*k입니다. BOS의 다음 정답이 둘이어서 전 위치 정답이나 손실 0을 요구하지 않습니다."),
     ])
-    return (
-        aux_comparison_rows, lm_comparison_histories, moe_lm_metrics, moe_training_history,
-        routing_snapshot_rows, snapshot_lm_routes, trained_moe_lm,
-    )
+    return
 
 
 @app.cell
@@ -509,6 +613,9 @@ def _(mo):
 
     **기록할 것:** k, 정규화 여부, 전문가별 선택 횟수, 보조 손실, 전체 보유 매개변수, LM 손실을 적으세요.
     실제 대규모 MoE의 GPU 분산 실행·통신·속도 비교·전문가 역할 평가는 이 실습에 포함하지 않습니다.
+
+    **다음 실습:** 구조 파트를 마쳤습니다. `minimind_pretraining.py`에서 학습 파이프라인을 시작합니다.
+    이후 학습 노트북은 모두 Dense 모델을 쓰지만, 원본 trainer가 `loss + aux_loss`를 더하는 이유는 이 노트북 5절입니다.
     """)
     return
 

@@ -27,11 +27,9 @@ def _(mo):
     # MiniMind FeedForward: 토큰의 특징을 바꾸기
 
     **목표:** 원본 `FeedForward`의 SwiGLU 계산을 직접 따라가고, 토큰 사이의 정보를
-    섞지 않는다는 성질과 역전파·학습을 확인합니다. Python 함수, shape, 행렬 곱을 알고 시작하세요.
+    섞지 않는다는 성질과 역전파·학습을 확인합니다.
+    `minimind_structure.py` 4절에서 한 줄로 검증한 MLP를 자세히 해부하는 **구조 심화** 실습입니다.
     외부 모델·데이터·GPU 없이 CPU에서 단독 실행합니다. 숫자 벡터는 계산을 보기 위한 가상 특징입니다.
-
-    각 절에서 **예측 → 실행 → 관찰 → 설명**을 진행합니다. `@app.cell`은 marimo 셀 표시이고
-    인자·return은 셀 간 데이터 전달입니다. `_` 변수는 셀 내부에서만 사용합니다.
     설정을 바꾸면 새 모델로 다시 시작하므로 학습이 누적되지 않습니다.
     """)
     return
@@ -44,10 +42,7 @@ def _(mo):
 
     MiniMind의 FeedForward는 다음 계산입니다. 기본 설정의 활성화는 SiLU입니다.
 
-    ```text
-    x [B,T,D] ── gate_proj → [B,T,M] → SiLU ─┐
-            └── up_proj   → [B,T,M] ─────────× → down_proj → [B,T,D]
-    ```
+    <img src="public/diagrams/feedforward.png" alt="SwiGLU FeedForward 계산 흐름" width="620">
 
     `D`는 은닉 차원, `M`은 중간 차원입니다. gate와 up은 서로 다른 학습 가능한 특징 조합입니다.
     `*`는 같은 위치·같은 차원끼리 곱하고, `@`는 행렬 곱입니다.
@@ -61,7 +56,7 @@ def _(mo):
 
 
 @app.cell
-def _(FeedForward, MiniMindConfig, mo, torch):
+def _(FeedForward, MiniMindConfig, torch):
     demo_config = MiniMindConfig(
         hidden_size=4, intermediate_size=8, num_hidden_layers=1,
         num_attention_heads=2, num_key_value_heads=1,
@@ -74,15 +69,21 @@ def _(FeedForward, MiniMindConfig, mo, torch):
         [[1., -1., 0., 2.], [0., 1., 2., -1.], [2., 0., -1., 1.]],
         [[-1., 1., 0., 1.], [1., 0., 1., -2.], [0., -1., 1., 2.]],
     ])
+    return (demo_config, demo_ffn, sample_x,)
+
+
+@app.cell(hide_code=True)
+def _(demo_ffn, mo):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.ui.table([
         {"가중치": n, "shape": str(tuple(p.shape)), "개수": p.numel()}
         for n, p in demo_ffn.named_parameters()
     ], selection=None)
-    return demo_config, demo_ffn, sample_x
+    return
 
 
 @app.cell
-def _(F, demo_ffn, mo, sample_x, torch):
+def _(F, demo_ffn, sample_x, torch):
     with torch.no_grad():
         gate_values = sample_x @ demo_ffn.gate_proj.weight.T
         activated_gate = F.silu(gate_values)
@@ -91,6 +92,12 @@ def _(F, demo_ffn, mo, sample_x, torch):
         manual_ffn = gated_features @ demo_ffn.down_proj.weight.T
         torch.testing.assert_close(manual_ffn, demo_ffn(sample_x))
     assert sum(p.numel() for p in demo_ffn.parameters()) == 96
+    return (activated_gate, gate_values, gated_features, manual_ffn, up_values,)
+
+
+@app.cell(hide_code=True)
+def _(activated_gate, gate_values, gated_features, manual_ffn, mo, sample_x, up_values):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([
         mo.md(f"입력 `{tuple(sample_x.shape)}` → 중간 `{tuple(gated_features.shape)}` → 출력 `{tuple(manual_ffn.shape)}`. 원본 출력과 일치합니다."),
         mo.ui.table([
@@ -103,8 +110,9 @@ def _(F, demo_ffn, mo, sample_x, torch):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(F, mo, plt, torch):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     _z = torch.linspace(-5, 5, 101)
     _fig, _ax = plt.subplots(figsize=(6, 3))
     _ax.plot(_z.numpy(), F.silu(_z).numpy(), label="SiLU(z)")
@@ -130,21 +138,27 @@ def _(mo):
 
 
 @app.cell
-def _(demo_ffn, mo, sample_x, torch):
+def _(demo_ffn, sample_x, torch):
     with torch.no_grad():
         _changed = sample_x.clone()
         _changed[0, 1, 0] += 3
         _before = demo_ffn(sample_x)
         _after = demo_ffn(_changed)
-        _difference = (_after - _before).abs().amax(-1)
+        ffn_token_change = (_after - _before).abs().amax(-1)
         _unchanged = torch.ones(2, 3, dtype=torch.bool)
         _unchanged[0, 1] = False
         torch.testing.assert_close(_before[_unchanged], _after[_unchanged])
-        assert _difference[0, 1] > 0
+        assert ffn_token_change[0, 1] > 0
         _separate = torch.stack([demo_ffn(sample_x[:, i]) for i in range(3)], dim=1)
         torch.testing.assert_close(_before, _separate)
+    return (ffn_token_change,)
+
+
+@app.cell(hide_code=True)
+def _(ffn_token_change, mo):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.ui.table([
-        {"배치": b, "토큰 위치": t, "출력 최대 변화": float(_difference[b, t])}
+        {"배치": b, "토큰 위치": t, "출력 최대 변화": float(ffn_token_change[b, t])}
         for b in range(2) for t in range(3)
     ], selection=None)
     return
@@ -158,23 +172,23 @@ def _(mo):
     **예측:** FeedForward 단독 출력에 입력 x가 이미 더해져 있을까요?
     원본 FeedForward는 특징 변환만 합니다. 블록의 뒷부분에서
     `h + FeedForward(RMSNorm(h))`를 계산합니다. h는 Attention과 첫 잔차 연결을 지난 값입니다.
-    따라서 FFN이 위치를 직접 섞지 않아도, 입력 h에는 이미 다른 토큰의 문맥이 들어 있습니다.
-    따라서 출력 D는 입력 D와 같아 더할 수 있습니다. 아래에서는 원본 블록 전체와 비교합니다.
+    FFN이 위치를 직접 섞지 않아도, 입력 h에는 이미 다른 토큰의 문맥이 들어 있습니다.
+    FFN 출력의 마지막 차원은 입력과 같은 D이므로 h에 더할 수 있습니다. 아래에서는 원본 블록 전체와 비교합니다.
     """)
     return
 
 
 @app.cell
-def _(MiniMindBlock, demo_config, mo, precompute_freqs_cis, sample_x, torch):
+def _(MiniMindBlock, demo_config, precompute_freqs_cis, sample_x, torch):
     with torch.random.fork_rng(devices=[]):
         torch.manual_seed(22)
         _block = MiniMindBlock(0, demo_config).eval()
     with torch.no_grad():
         _position = precompute_freqs_cis(demo_config.head_dim, end=sample_x.shape[1])
         _attention, _ = _block.self_attn(_block.input_layernorm(sample_x), _position)
-        _h = sample_x + _attention
-        _ff_output = _block.mlp(_block.post_attention_layernorm(_h))
-        _manual = _h + _ff_output
+        block_hidden = sample_x + _attention
+        _ff_output = _block.mlp(_block.post_attention_layernorm(block_hidden))
+        _manual = block_hidden + _ff_output
         _actual, _ = _block(sample_x, _position)
         torch.testing.assert_close(_manual, _actual)
         _changed = sample_x.clone()
@@ -189,13 +203,19 @@ def _(MiniMindBlock, demo_config, mo, precompute_freqs_cis, sample_x, torch):
         {"배치": b, "토큰 위치": t, "FFN 단독 출력 변화": float(_ffn_change[b, t]), "전체 블록 출력 변화": float(_block_change[b, t])}
         for b in range(2) for t in range(3)
     ]
+    return (block_hidden, context_change_rows,)
+
+
+@app.cell(hide_code=True)
+def _(block_hidden, context_change_rows, mo):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([
-        mo.md(f"직접 조립한 블록과 원본 출력이 같습니다. h·FFN·잔차 출력 shape는 모두 `{tuple(_h.shape)}`입니다. 잔차 연결은 FeedForward 바깥에서 수행합니다."),
+        mo.md(f"직접 조립한 블록과 원본 출력이 같습니다. h·FFN·잔차 출력 shape는 모두 `{tuple(block_hidden.shape)}`입니다. 잔차 연결은 FeedForward 바깥에서 수행합니다."),
         mo.md("**예측:** 배치 0의 위치 1을 바꾸면 위치 2도 바뀔까요? 아래 두 경로의 같은 위치를 비교하세요."),
         mo.ui.table(context_change_rows, selection=None),
         mo.md("**해설:** FFN 단독에서는 위치 1만 달라집니다. 전체 블록은 Attention으로 위치 2도 달라집니다. 위치 0은 미래를 볼 수 없어 유지됩니다. 'FFN이 위치를 섞지 않는다'는 말이 '문맥을 활용하지 않는다'는 뜻은 아닙니다."),
     ])
-    return (context_change_rows,)
+    return
 
 
 @app.cell
@@ -214,8 +234,9 @@ def _(mo):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(mo):
+    # ▸ 실습 설정 위젯 — 실행하면 슬라이더·선택 상자가 나타납니다 (marimo 표시 코드)
     ffn_width = mo.ui.dropdown([8, 16, 32], value=16, label="중간 차원 M")
     ffn_steps = mo.ui.slider(100, 300, step=100, value=200, label="학습 step")
     mo.hstack([ffn_width, ffn_steps])
@@ -236,16 +257,16 @@ def _(F, torch):
 
 
 @app.cell
-def _(F, FeedForward, MiniMindConfig, ff_train_x, ff_train_y, ff_valid_x, ff_valid_y, ffn_steps, ffn_width, mo, plt, torch):
+def _(F, FeedForward, MiniMindConfig, ff_train_x, ff_train_y, ff_valid_x, ff_valid_y, ffn_steps, ffn_width, plt, torch):
     _train_x, _train_y = ff_train_x, ff_train_y
-    _valid_x, _valid_y = ff_valid_x, ff_valid_y
+    ffn_eval_x, ffn_eval_y = ff_valid_x, ff_valid_y
     with torch.random.fork_rng(devices=[]):
         torch.manual_seed(24)
         trained_ffn = FeedForward(MiniMindConfig(hidden_size=4, intermediate_size=ffn_width.value,
                                                 num_attention_heads=2, num_key_value_heads=1))
     _optimizer = torch.optim.AdamW(trained_ffn.parameters(), lr=0.02, weight_decay=0)
     with torch.no_grad():
-        _initial_valid = float(F.mse_loss(trained_ffn(_valid_x), _valid_y))
+        _initial_valid = float(F.mse_loss(trained_ffn(ffn_eval_x), ffn_eval_y))
     ffn_losses = []
     ffn_gradient_norms = {}
     for _step in range(ffn_steps.value):
@@ -260,28 +281,43 @@ def _(F, FeedForward, MiniMindConfig, ff_train_x, ff_train_y, ff_valid_x, ff_val
         ffn_losses.append(float(_loss.detach()))
     trained_ffn.eval()
     with torch.no_grad():
-        _prediction = trained_ffn(_valid_x)
+        ffn_prediction = trained_ffn(ffn_eval_x)
         _train_final = float(F.mse_loss(trained_ffn(_train_x), _train_y))
-        _valid_final = float(F.mse_loss(_prediction, _valid_y))
+        _valid_final = float(F.mse_loss(ffn_prediction, ffn_eval_y))
     assert _train_final < ffn_losses[0]
     ffn_metrics = {"parameters": sum(p.numel() for p in trained_ffn.parameters()),
                    "train_before": ffn_losses[0], "train_after": _train_final,
                    "validation_before": _initial_valid, "validation_after": _valid_final}
-    _fig, _ax = plt.subplots(figsize=(6, 3))
+    ffn_fig, _ax = plt.subplots(figsize=(6, 3))
     _ax.plot(ffn_losses)
     _ax.set(xlabel="Step", ylabel="MSE", title="FeedForward regression / train split")
-    _fig.tight_layout()
+    ffn_fig.tight_layout()
+    return (
+        ffn_eval_x,
+        ffn_eval_y,
+        ffn_fig,
+        ffn_gradient_norms,
+        ffn_losses,
+        ffn_metrics,
+        ffn_prediction,
+        trained_ffn,
+    )
+
+
+@app.cell(hide_code=True)
+def _(ffn_eval_x, ffn_eval_y, ffn_fig, ffn_gradient_norms, ffn_metrics, ffn_prediction, mo):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([
-        _fig,
+        ffn_fig,
         mo.ui.table([ffn_metrics], selection=None),
         mo.ui.table([{"가중치": n, "첫 backward의 gradient norm": v} for n, v in ffn_gradient_norms.items()], selection=None),
         mo.ui.table([
-            {"검증 입력": str(_valid_x[0, i].tolist()), "목표": str(_valid_y[0, i].tolist()), "예측": str(_prediction[0, i].tolist())}
+            {"검증 입력": str(ffn_eval_x[0, i].tolist()), "목표": str(ffn_eval_y[0, i].tolist()), "예측": str(ffn_prediction[0, i].tolist())}
             for i in range(4)
         ], selection=None),
         mo.md("**관찰·해설:** 세 projection 모두 gradient를 받습니다. 학습 오차 감소와 검증 오차는 별도로 읽으세요. 이 숫자 과제의 결과가 언어 모델 성능을 뜻하지는 않습니다."),
     ])
-    return ffn_gradient_norms, ffn_losses, ffn_metrics, trained_ffn
+    return
 
 
 @app.cell
@@ -308,7 +344,7 @@ def _(mo):
 
 
 @app.cell
-def _(F, FeedForward, MiniMindConfig, ff_train_x, ff_train_y, ff_valid_x, ff_valid_y, ffn_losses, ffn_metrics, ffn_steps, ffn_width, mo, plt, torch):
+def _(F, FeedForward, MiniMindConfig, ff_train_x, ff_train_y, ff_valid_x, ff_valid_y, ffn_losses, ffn_metrics, ffn_steps, ffn_width, plt, torch):
     ffn_comparison_rows = [{"구조": "SwiGLU", **ffn_metrics}]
     _histories = {"SwiGLU": ffn_losses}
     for _name in ["Linear", "TwoLinear", "SiLU MLP"]:
@@ -344,17 +380,23 @@ def _(F, FeedForward, MiniMindConfig, ff_train_x, ff_train_y, ff_valid_x, ff_val
                                     "train_before": _losses[0], "train_after": _train_after,
                                     "validation_before": _validation_before, "validation_after": _validation_after})
         _histories[_name] = _losses
-    _fig, _ax = plt.subplots(figsize=(7, 3))
+    comparison_fig, _ax = plt.subplots(figsize=(7, 3))
     for _name, _losses in _histories.items():
         _ax.plot(_losses, label=_name)
     _ax.set(xlabel="Step", ylabel="Train MSE", title="Same regression data / different feature transforms")
     _ax.legend()
-    _fig.tight_layout()
+    comparison_fig.tight_layout()
+    return (comparison_fig, ffn_comparison_rows,)
+
+
+@app.cell(hide_code=True)
+def _(comparison_fig, ffn_comparison_rows, mo):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([
-        _fig, mo.ui.table(ffn_comparison_rows, selection=None),
+        comparison_fig, mo.ui.table(ffn_comparison_rows, selection=None),
         mo.md("**관찰·해설:** 선형 모델도 목표의 일부를 맞히지만, 곱셈·비선형 특징을 표현하는 방식은 다릅니다. 학습·검증 MSE와 매개변수 수를 함께 읽으세요. 한 seed의 결과로 모든 과제의 우열을 결론 내리지 않습니다."),
     ])
-    return (ffn_comparison_rows,)
+    return
 
 
 @app.cell

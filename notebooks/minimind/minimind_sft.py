@@ -1,3 +1,10 @@
+# /// script
+# requires-python = ">=3.13"
+# dependencies = [
+#     "marimo>=0.25.2",
+# ]
+# ///
+
 import marimo
 
 __generated_with = "0.25.2"
@@ -22,7 +29,7 @@ def _():
     import torch.nn.functional as F
     from tokenizers import Tokenizer, models, pre_tokenizers
     from torch.utils.data import DataLoader
-    from transformers import PreTrainedTokenizerFast
+    from transformers import AutoTokenizer, PreTrainedTokenizerFast
 
     repo_root = Path(__file__).resolve().parents[2]
     sys.path.insert(0, str(repo_root / "projects/minimind"))
@@ -37,9 +44,28 @@ def _():
     datasets.disable_progress_bars()
     torch.set_num_threads(2)
     return (
-        DataLoader, F, MiniMindConfig, MiniMindForCausalLM, PreTrainedTokenizerFast,
-        PretrainDataset, SFTDataset, Tokenizer, copy, get_lr, json, mo, models,
-        output_dir, plt, post_processing_chat, pre_tokenizers, random, torch, uuid4,
+        AutoTokenizer,
+        DataLoader,
+        F,
+        MiniMindConfig,
+        MiniMindForCausalLM,
+        PreTrainedTokenizerFast,
+        PretrainDataset,
+        SFTDataset,
+        Tokenizer,
+        copy,
+        get_lr,
+        json,
+        mo,
+        models,
+        output_dir,
+        plt,
+        post_processing_chat,
+        pre_tokenizers,
+        random,
+        repo_root,
+        torch,
+        uuid4,
     )
 
 
@@ -58,10 +84,9 @@ def _(mo):
     SFT는 학습 목적이고 Full/LoRA는 업데이트할 매개변수를 정하는 방법입니다.
     여기서는 모델 전체를 학습하는 Full SFT를 사용합니다.
 
-    **순서:** 대화 JSONL → chat template → 정답 마스킹 → 다음 토큰 손실 → 학습 → 평가·생성·저장.
-    각 절에서 결과를 먼저 예측하고, 실행한 표와 비교해 이유를 설명하세요.
-    Python 함수·텐서 shape·기본 역전파를 알고 시작합니다.
-    `@app.cell`은 marimo 셀이며 함수 인자와 return은 셀 사이 데이터를 전달합니다.
+    **순서:** 대화 JSONL → chat template → 정답 마스킹 → 다음 토큰 손실 →
+    실제 MiniMind 템플릿과 추론(reasoning) 데이터 → 학습 → 평가·생성·저장.
+    정답 이동·기울기 누적·학습률은 `minimind_pretraining.py`와 같으므로 짧게 확인만 합니다.
 
     GPU나 다운로드 없이 작은 CPU 모델을 직접 준비합니다. 기준 모델 준비도 이 노트북 안에서
     실행하므로 다른 노트북의 가중치가 필요 없습니다. 작은 합성 과제의 결과를 관찰하는 실습이며
@@ -71,8 +96,22 @@ def _(mo):
     return
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md("""
+    ## 1. 원본 형식의 대화 JSONL
+
+    한 줄에 `conversations` 배열을 둡니다. `role`은 화자, `content`는 발화입니다.
+    학습 질문 8개와 **단어는 같고 순서 조합이 다른 검증 질문 4개**를 분리합니다.
+    검증 정답은 평가에만 씁니다. 여러 턴 예제는 마스킹 관찰용이며 학습에는 넣지 않습니다.
+    실제 데이터에서 `reasoning_content`, `tools`, `tool_calls`도 지원하지만 여기서는 일반 대화에 집중합니다.
+    **예측:** 두 번 답하는 대화에서 마지막 응답만 정답으로 남을까요?
+    """)
+    return
+
+
 @app.cell
-def _(json, mo, output_dir):
+def _(json, output_dir):
     animals = [("고양이", "야옹"), ("강아지", "멍멍"), ("소", "음메"), ("오리", "꽥꽥")]
 
     def conversation(question, answer):
@@ -104,27 +143,57 @@ def _(json, mo, output_dir):
         (inspection_path, [{"conversations": multiturn}]),
     ]:
         _path.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in _records), encoding="utf-8")
-    mo.vstack([
-        mo.md("""
-        ## 1. 원본 형식의 대화 JSONL
+    return (
+        animals,
+        inspection_path,
+        multiturn,
+        train_path,
+        train_records,
+        validation_path,
+        validation_records,
+    )
 
-        한 줄에 `conversations` 배열을 둡니다. `role`은 화자, `content`는 발화입니다.
-        학습 질문 8개와 **단어는 같고 순서 조합이 다른 검증 질문 4개**를 분리합니다.
-        검증 정답은 평가에만 씁니다. 여러 턴 예제는 마스킹 관찰용이며 학습에는 넣지 않습니다.
-        실제 데이터에서 `reasoning_content`, `tools`, `tool_calls`도 지원하지만 여기서는 일반 대화에 집중합니다.
-        **예측:** 두 번 답하는 대화에서 마지막 응답만 정답으로 남을까요?
-        """),
+
+@app.cell(hide_code=True)
+def _(json, mo, multiturn, train_records, validation_records):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
+    mo.vstack([
         mo.ui.table([
             {"분할": split, "질문": r["conversations"][1]["content"], "모범 응답": r["conversations"][2]["content"]}
             for split, records in [("학습", train_records), ("검증", validation_records)] for r in records
         ], selection=None),
         mo.md(f"여러 턴 JSON 예제:\n```json\n{json.dumps({'conversations': multiturn}, ensure_ascii=False, indent=2)}\n```"),
     ])
-    return animals, inspection_path, multiturn, train_path, train_records, validation_path, validation_records
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ## 2. chat template: 화자와 발화 경계 표시
+
+    읽기 쉬운 **공백 단위 작은 토크나이저**를 학습 데이터 단어만으로 만듭니다.
+    `[BOS]user\n질문[EOS]\n[BOS]assistant\n응답[EOS]\n` 형식입니다.
+    학습에서는 완성된 대화 전체를 넣고 `add_generation_prompt=False`를 사용합니다.
+    생성에서는 정답 응답을 빼고 `add_generation_prompt=True`로 assistant 헤더까지 만듭니다.
+
+    원본 SFTDataset은 `BOS + assistant\n`을 찾아 응답 시작을,
+    `EOS + \n`을 찾아 종료를 판단합니다. **토크나이저와 template의 경계 표현이 일치해야 합니다.**
+    이 실습 사전에서는 공백·줄바꿈이 토큰으로 남지 않아 종료 패턴은 `[EOS]` 한 토큰입니다.
+    실제 MiniMind 서브워드 사전의 ID·길이와는 다릅니다.
+    """)
+    return
 
 
 @app.cell
-def _(PreTrainedTokenizerFast, Tokenizer, mo, models, output_dir, pre_tokenizers, train_records):
+def _(
+    PreTrainedTokenizerFast,
+    Tokenizer,
+    models,
+    output_dir,
+    pre_tokenizers,
+    train_records,
+):
     vocabulary = ["[PAD]", "[BOS]", "[EOS]", "[UNK]", "system", "user", "assistant"] + sorted({
         word for record in train_records for message in record["conversations"] for word in message["content"].split()
     })
@@ -141,24 +210,30 @@ def _(PreTrainedTokenizerFast, Tokenizer, mo, models, output_dir, pre_tokenizers
         "{% if add_generation_prompt %}{{ bos_token + 'assistant\n' }}{% endif %}"
     )
     tokenizer.save_pretrained(output_dir / "tokenizer")
-    mo.md("""
-    ## 2. chat template: 화자와 발화 경계 표시
-
-    읽기 쉬운 **공백 단위 작은 토크나이저**를 학습 데이터 단어만으로 만듭니다.
-    `[BOS]user\\n질문[EOS]\\n[BOS]assistant\\n응답[EOS]\\n` 형식입니다.
-    학습에서는 완성된 대화 전체를 넣고 `add_generation_prompt=False`를 사용합니다.
-    생성에서는 정답 응답을 빼고 `add_generation_prompt=True`로 assistant 헤더까지 만듭니다.
-
-    원본 SFTDataset은 `BOS + assistant\\n`을 찾아 응답 시작을,
-    `EOS + \\n`을 찾아 종료를 판단합니다. **토크나이저와 template의 경계 표현이 일치해야 합니다.**
-    이 실습 사전에서는 공백·줄바꿈이 토큰으로 남지 않아 종료 패턴은 `[EOS]` 한 토큰입니다.
-    실제 MiniMind 서브워드 사전의 ID·길이와는 다릅니다.
-    """)
     return tokenizer, vocabulary
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md("""
+    ## 3. 실제 SFTDataset의 정답 마스킹
+
+    `pre_processing_chat → create_chat_prompt → post_processing_chat → tokenize → 절단·패딩 → generate_labels`
+    순서입니다. 원본은 system이 없을 때 20% 확률로 system을 넣고, 빈 think 태그도 확률적으로 제거합니다.
+    이 예제는 명시적 system과 think 없는 발화를 써서 결과가 일정합니다.
+    """)
+    return
+
+
 @app.cell
-def _(DataLoader, SFTDataset, inspection_path, mo, multiturn, tokenizer, train_path, validation_path):
+def _(
+    DataLoader,
+    SFTDataset,
+    inspection_path,
+    tokenizer,
+    train_path,
+    validation_path,
+):
     train_dataset = SFTDataset(str(train_path), tokenizer, max_length=32)
     validation_dataset = SFTDataset(str(validation_path), tokenizer, max_length=32)
     inspection_dataset = SFTDataset(str(inspection_path), tokenizer, max_length=40)
@@ -168,34 +243,71 @@ def _(DataLoader, SFTDataset, inspection_path, mo, multiturn, tokenizer, train_p
     assert (inspection_labels[inspection_ids == tokenizer.pad_token_id] == -100).all()
     assert tokenizer.decode(inspection_labels[inspection_labels != -100].tolist()) == "야옹 [EOS] 멍멍 [EOS]"
     assert tokenizer.unk_token_id not in input_ids
+    return (
+        input_ids,
+        inspection_dataset,
+        inspection_ids,
+        inspection_labels,
+        labels,
+        train_dataset,
+        validation_dataset,
+    )
+
+
+@app.cell(hide_code=True)
+def _(
+    input_ids,
+    inspection_dataset,
+    inspection_ids,
+    inspection_labels,
+    mo,
+    multiturn,
+    tokenizer,
+):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([
         mo.md(f"""
-        ## 3. 실제 SFTDataset의 정답 마스킹
-
-        `pre_processing_chat → create_chat_prompt → post_processing_chat → tokenize → 절단·패딩 → generate_labels`
-        순서입니다. 원본은 system이 없을 때 20% 확률로 system을 넣고, 빈 think 태그도 확률적으로 제거합니다.
-        이 예제는 명시적 system과 think 없는 발화를 써서 결과가 일정합니다.
-
         **해설:** 두 assistant 응답과 각 종료 토큰은 모두 정답으로 남습니다.
         system·user·assistant 헤더·정상 종료 뒤 PAD는 `-100`입니다.
         `-100`은 토큰 ID가 아니라 **손실 계산에서 무시하라는 표시**입니다.
         입력에는 질문도 응답도 그대로 있습니다. 질문은 응답을 예측하는 문맥입니다.
         배치 shape는 `{tuple(input_ids.shape)}` = [B,T], dtype은 `{input_ids.dtype}`입니다.
-        ```text
-        {inspection_dataset.create_chat_prompt(multiturn)}
-        ```
+        여러 턴 예제의 template:
         """),
+        # 여러 줄 template은 들여쓰기 없이 따로 감싸야 마크다운 들여쓰기 제거가 깨지지 않습니다.
+        mo.md("```text\n" + inspection_dataset.create_chat_prompt(multiturn) + "\n```"),
         mo.ui.table([
             {"위치": t, "입력 토큰": tokenizer.convert_ids_to_tokens(int(x)),
              "input ID": int(x), "label": int(y), "손실 포함": int(y) != -100}
             for t, (x, y) in enumerate(zip(inspection_ids, inspection_labels))
         ], selection=None),
     ])
-    return input_ids, inspection_dataset, inspection_ids, inspection_labels, labels, train_dataset, validation_dataset
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md("""
+    ## 4. 정답 이동은 사전 학습과 같다 — 달라진 것은 정답 위치뿐
+
+    **예측:** `야옹`을 예측하는 logits는 `야옹` 입력 위치일까요, 그 앞 위치일까요?
+    모델 내부의 한 칸 이동(`logits[:, :-1]` ↔ `labels[:, 1:]`)은 사전 학습 노트북 4절과 같습니다.
+    SFT에서는 **assistant 헤더의 마지막 토큰 출력이 첫 응답을** 예측한다는 점만 새로 확인합니다.
+    """)
+    return
 
 
 @app.cell
-def _(F, MiniMindConfig, MiniMindForCausalLM, input_ids, labels, mo, tokenizer, torch, vocabulary):
+def _(
+    F,
+    MiniMindConfig,
+    MiniMindForCausalLM,
+    input_ids,
+    labels,
+    tokenizer,
+    torch,
+    vocabulary,
+):
     torch.manual_seed(42)
     config = MiniMindConfig(
         hidden_size=32, num_hidden_layers=2, num_attention_heads=4,
@@ -205,24 +317,21 @@ def _(F, MiniMindConfig, MiniMindForCausalLM, input_ids, labels, mo, tokenizer, 
     )
     _model = MiniMindForCausalLM(config).eval()
     with torch.no_grad():
-        _result = _model(input_ids, labels=labels)
-        _manual_loss = F.cross_entropy(
-            _result.logits[:, :-1].reshape(-1, len(vocabulary)), labels[:, 1:].reshape(-1), ignore_index=-100,
+        initial_result = _model(input_ids, labels=labels)
+        manual_loss = F.cross_entropy(
+            initial_result.logits[:, :-1].reshape(-1, len(vocabulary)), labels[:, 1:].reshape(-1), ignore_index=-100,
         )
-    assert torch.allclose(_result.loss, _manual_loss)
+    assert torch.allclose(initial_result.loss, manual_loss)
+    return config, initial_result, manual_loss
+
+
+@app.cell(hide_code=True)
+def _(initial_result, input_ids, labels, manual_loss, mo, tokenizer):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([
         mo.md(f"""
-        ## 4. 정답은 모델 안에서 한 번 이동한다
+        원본 손실 `{initial_result.loss.item():.6f}`와 직접 계산 `{manual_loss.item():.6f}`가 일치합니다.
 
-        **예측:** `야옹`을 예측하는 logits는 `야옹` 입력 위치일까요, 그 앞 위치일까요?
-        원본 모델은 `logits[:, :-1]`과 `labels[:, 1:]`를 비교합니다.
-        assistant 헤더의 마지막 토큰 출력이 첫 응답을, 응답 마지막 출력이 EOS를 예측합니다.
-        **Dataset에서 미리 이동하면 두 번 이동하므로 틀린 정답을 학습합니다.**
-        아래는 첫 샘플에서 손실에 포함되는 쌍입니다. 원본 손실 `{_result.loss.item():.6f}`와
-        직접 계산 `{_manual_loss.item():.6f}`가 일치합니다.
-
-        학습 입력에 정답이 있어도 causal attention이 미래를 가립니다.
-        이를 teacher forcing이라고 합니다. 생성할 때는 앞서 생성한 토큰을 다음 입력으로 사용합니다.
         마스킹한 질문 위치의 **직접 손실**은 없지만, 응답이 질문 문맥을 참조하므로
         질문 임베딩과 Attention 매개변수에도 gradient가 흐를 수 있습니다.
         """),
@@ -232,49 +341,185 @@ def _(F, MiniMindConfig, MiniMindForCausalLM, input_ids, labels, mo, tokenizer, 
             for t in range(1, labels.shape[1]) if labels[0, t] != -100
         ], selection=None),
     ])
-    return (config,)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md("""
+    ## 5. 길이를 줄이면 어떤 정답을 잃을까?
+
+    원본은 **template을 만든 다음 앞에서 max_length까지 자릅니다.**
+    응답 시작 전까지 잘리면 유효 정답이 0개이고, 전부 무시된 배치의 평균 CE는 NaN이 될 수 있습니다.
+    응답 중간에서 잘리면 일부 응답은 학습하지만 종료 토큰은 학습하지 못합니다.
+    학습 전 `labels[:, 1:] != -100`인 토큰 수를 확인하세요.
+
+    원본 `generate_labels`는 응답의 종료 패턴을 못 찾으면 배열 끝까지 정답으로 남깁니다.
+    **완성되지 않은 assistant 발화 뒤에 PAD가 붙은 경우 PAD도 정답으로 포함될 수 있습니다.**
+    정상 template의 완성 대화와 중간에서 절단된 대화, 원래부터 잘못된 대화를 구분해야 합니다.
+    아래는 원본 동작을 관찰하는 예제로, 학습에는 사용하지 않습니다.
+    """)
+    return
 
 
 @app.cell
-def _(copy, inspection_dataset, inspection_ids, mo, post_processing_chat, tokenizer):
+def _(
+    copy,
+    inspection_dataset,
+    inspection_ids,
+    post_processing_chat,
+    tokenizer,
+):
     _full = inspection_ids.tolist()
     _start = next(i for i in range(len(_full)) if _full[i:i + len(inspection_dataset.bos_id)] == inspection_dataset.bos_id)
     _cut = _start + len(inspection_dataset.bos_id)
     # 원본 __getitem__처럼 배열 길이와 max_length를 일치시켜 관찰합니다.
     _probe = copy.copy(inspection_dataset)
     _probe.max_length = _cut
-    _short_labels = _probe.generate_labels(_full[:_cut])
+    short_labels = _probe.generate_labels(_full[:_cut])
     _broken = _full[:_cut + 1] + [tokenizer.pad_token_id] * 3
     _probe.max_length = len(_broken)
-    _broken_labels = _probe.generate_labels(_broken)
-    assert all(y == -100 for y in _short_labels)
-    assert _broken_labels[-1] == tokenizer.pad_token_id
+    broken_labels = _probe.generate_labels(_broken)
+    assert all(y == -100 for y in short_labels)
+    assert broken_labels[-1] == tokenizer.pad_token_id
     assert post_processing_chat("<think>\n\n</think>\n\n야옹", remove_empty_think=True) == "야옹"
+    return broken_labels, short_labels
+
+
+@app.cell(hide_code=True)
+def _(broken_labels, mo, short_labels):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([
-        mo.md("""
-        ## 5. 길이를 줄이면 어떤 정답을 잃을까?
-
-        원본은 **template을 만든 다음 앞에서 max_length까지 자릅니다.**
-        응답 시작 전까지 잘리면 유효 정답이 0개이고, 전부 무시된 배치의 평균 CE는 NaN이 될 수 있습니다.
-        응답 중간에서 잘리면 일부 응답은 학습하지만 종료 토큰은 학습하지 못합니다.
-        학습 전 `labels[:, 1:] != -100`인 토큰 수를 확인하세요.
-
-        원본 `generate_labels`는 응답의 종료 패턴을 못 찾으면 배열 끝까지 정답으로 남깁니다.
-        **완성되지 않은 assistant 발화 뒤에 PAD가 붙은 경우 PAD도 정답으로 포함될 수 있습니다.**
-        정상 template의 완성 대화와 중간에서 절단된 대화, 원래부터 잘못된 대화를 구분해야 합니다.
-        아래는 원본 동작을 관찰하는 예제로, 학습에는 사용하지 않습니다.
-        """),
         mo.ui.table([
-            {"입력": "assistant 헤더에서 절단", "정답 수": sum(y != -100 for y in _short_labels)},
-            {"입력": "종료 없는 응답 + PAD 3개", "정답 수": sum(y != -100 for y in _broken_labels)},
+            {"입력": "assistant 헤더에서 절단", "정답 수": sum(y != -100 for y in short_labels)},
+            {"입력": "종료 없는 응답 + PAD 3개", "정답 수": sum(y != -100 for y in broken_labels)},
         ], selection=None),
     ])
     return
 
 
 @app.cell
-def _(DataLoader, MiniMindForCausalLM, PretrainDataset, animals, config, json, mo, output_dir, tokenizer, torch):
-    # 사전 학습을 모사하는 기준 모델: 일반 문장에 모든 비패딩 위치의 정답을 둡니다.
+def _(mo):
+    mo.md(r"""
+    ## 5-1. 실제 MiniMind 템플릿과 추론(reasoning) 데이터
+
+    지금까지는 읽기 쉬운 교육용 template(`[BOS]role\n…[EOS]`)을 썼습니다. 실제 MiniMind tokenizer는
+    `<|im_start|>role\n…<|im_end|>` 형식이고, **모든 assistant 응답 앞에 `<think>…</think>` 블록**을 둡니다.
+    대화 JSONL의 assistant 발화에 `reasoning_content`가 있으면 그 내용이 think 블록에 들어갑니다.
+
+    ```text
+    <|im_start|>assistant\n<think>\n{reasoning_content}\n</think>\n\n{content}<|im_end|>\n
+    ```
+
+    **예측:** think 블록 안의 추론 문장도 손실에 포함될까요?
+    `generate_labels`는 `<|im_start|>assistant\n` 뒤부터 `<|im_end|>\n`까지 전부 정답으로 남기므로
+    **추론 과정과 최종 답을 함께 학습**합니다. 추론 모델을 SFT로 만드는 방법이 바로 이것입니다.
+
+    `reasoning_content`가 없으면 template은 빈 블록 `<think>\n\n</think>\n\n`을 넣습니다.
+    원본 `post_processing_chat`은 이 빈 블록을 **80% 확률로 제거**합니다. 그래서 같은 데이터에서도
+    "think 없이 바로 답하기"와 "빈 think 뒤에 답하기"가 섞여 학습됩니다.
+    추론 형식에 보상을 주는 강화 학습은 `minimind_grpo.py`의 추론 절에서 이어집니다.
+
+    아래는 저장소의 실제 tokenizer(6400 어휘, byte-level BPE)로 데이터 경로만 관찰합니다.
+    앞의 작은 사전·모델과 ID 체계가 다르므로 이 데이터로 아래 모델을 학습하지는 않습니다.
+    """)
+    return
+
+
+@app.cell
+def _(
+    AutoTokenizer,
+    SFTDataset,
+    json,
+    output_dir,
+    post_processing_chat,
+    random,
+    repo_root,
+):
+    real_tokenizer = AutoTokenizer.from_pretrained(repo_root / "projects/minimind/model", local_files_only=True)
+    _messages = [
+        {"role": "system", "content": "수학 도우미"},
+        {"role": "user", "content": "2 + 3은?"},
+    ]
+    _reasoning_path = output_dir / "reasoning_inspection.jsonl"
+    _reasoning_path.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in [
+        {"conversations": _messages + [{"role": "assistant", "content": "5입니다.", "reasoning_content": "2에 3을 더하면 5다."}]},
+        {"conversations": _messages + [{"role": "assistant", "content": "5입니다."}]},
+    ]), encoding="utf-8")
+    real_dataset = SFTDataset(str(_reasoning_path), real_tokenizer, max_length=96)
+    _state = random.getstate()
+    try:
+        random.seed(0)  # 빈 think 제거 여부를 고정하기 위한 seed (추론 있는 샘플은 영향 없음)
+        _ids, real_labels = real_dataset[0]
+    finally:
+        random.setstate(_state)
+    real_active = _ids != real_tokenizer.pad_token_id
+    real_supervised = real_tokenizer.decode(_ids[real_labels != -100].tolist())
+    real_context = real_tokenizer.decode(_ids[real_active & (real_labels == -100)].tolist())
+    assert real_supervised.startswith("<think>") and "2에 3을 더하면 5다." in real_supervised
+    assert real_supervised.rstrip().endswith("5입니다.<|im_end|>")
+    empty_think_prompt = real_dataset.create_chat_prompt(real_dataset.samples[1]["conversations"])
+    assert "<think>\n\n</think>\n\n" in empty_think_prompt
+    assert "<think>" not in post_processing_chat(empty_think_prompt, remove_empty_think=True)
+    return (
+        empty_think_prompt,
+        real_active,
+        real_context,
+        real_dataset,
+        real_labels,
+        real_supervised,
+    )
+
+
+@app.cell(hide_code=True)
+def _(
+    empty_think_prompt,
+    mo,
+    post_processing_chat,
+    real_active,
+    real_context,
+    real_dataset,
+    real_labels,
+    real_supervised,
+):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
+    mo.vstack([
+        mo.md(f"`reasoning_content`가 있는 대화의 template:\n```text\n{real_dataset.create_chat_prompt(real_dataset.samples[0]['conversations'])}```"),
+        mo.ui.table([
+            {"구간": "문맥 (label=-100)", "토큰 수": int((real_active & (real_labels == -100)).sum()), "디코딩": repr(real_context)},
+            {"구간": "정답 (손실 포함)", "토큰 수": int((real_labels != -100).sum()), "디코딩": repr(real_supervised)},
+        ], selection=None),
+        mo.ui.table([
+            {"추론 없는 대화": "template 원문", "assistant 부분": repr(empty_think_prompt.split("assistant\n")[-1])},
+            {"추론 없는 대화": "빈 think 제거(80%)", "assistant 부분": repr(post_processing_chat(empty_think_prompt, remove_empty_think=True).split("assistant\n")[-1])},
+        ], selection=None),
+        mo.md("**관찰·해설:** think 블록 전체와 최종 답, 종료 토큰이 하나의 정답 구간입니다. "
+              "추론 문장을 학습한다고 그 추론이 옳다는 보장은 없습니다. 데이터의 추론 품질이 그대로 학습됩니다. "
+              "실제 tokenizer에서 `assistant\\n` 경계는 5토큰, 종료 경계는 `<|im_end|>`+줄바꿈 2토큰입니다."),
+    ])
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md("""
+    ## 6. SFT를 시작할 기준 모델 준비
+    """)
+    return
+
+
+@app.cell
+def _(
+    DataLoader,
+    MiniMindForCausalLM,
+    PretrainDataset,
+    animals,
+    config,
+    json,
+    output_dir,
+    tokenizer,
+    torch,
+):
     _path = output_dir / "pretrain.jsonl"
     _path.write_text("".join(json.dumps({"text": f"{a} 소리 {s}"}, ensure_ascii=False) + "\n" for a, s in animals), encoding="utf-8")
     _dataset = PretrainDataset(str(_path), tokenizer, max_length=8)
@@ -293,9 +538,13 @@ def _(DataLoader, MiniMindForCausalLM, PretrainDataset, animals, config, json, m
         preparation_losses.append(_loss.item())
     baseline_model.eval()
     torch.save(baseline_model.state_dict(), output_dir / "pretrain_32.pth")
-    mo.md(f"""
-    ## 6. SFT를 시작할 기준 모델 준비
+    return baseline_model, preparation_losses
 
+
+@app.cell(hide_code=True)
+def _(mo, preparation_losses):
+    # ▸ 결과 설명 — 실행하면 계산 값이 들어간 설명이 나타납니다 (marimo 표시 코드)
+    mo.md(f"""
     원본 trainer의 기본값 `--from_weight pretrain`은 사전 학습된 가중치를 읽습니다.
     여기서는 동물 소리 일반 문장 4개로 작은 모델을 100 step 준비하고 저장합니다.
     준비 손실: `{preparation_losses[0]:.4f} → {preparation_losses[-1]:.4f}`.
@@ -305,12 +554,11 @@ def _(DataLoader, MiniMindForCausalLM, PretrainDataset, animals, config, json, m
     실제 규모의 사전 학습을 재현한 것은 아닙니다. 동일 동물·소리 대응을 준비 단계에서도 봅니다.
     검증에서 측정할 것은 이미 아는 단어의 **새 질문 조합에 대한 응답**입니다.
     """)
-    return baseline_model, preparation_losses
+    return
 
 
 @app.cell
-def _(DataLoader, mo, tokenizer, torch):
-    @torch.inference_mode()
+def _(DataLoader, tokenizer, torch):
     def evaluate(model, dataset):
         model.eval()
         total_loss, tokens = 0.0, 0
@@ -339,16 +587,22 @@ def _(DataLoader, mo, tokenizer, torch):
             ids = torch.cat([ids, torch.tensor([[next_id]])], dim=1)
         return tokenizer.decode(generated, skip_special_tokens=False), stopped
 
+    return evaluate, respond
+
+
+@app.cell(hide_code=True)
+def _(mo):
     mo.md("""
     **평가 기준:** teacher forcing 응답 토큰 평균 CE와 실제 greedy 생성의 응답 일치율을 따로 봅니다.
     CE가 낮아져도 생성에서 앞선 오류가 누적될 수 있습니다. 여기서는 EOS 종료 여부도 함께 기록합니다.
     검증 손실은 유효 토큰 수로 가중 평균하고, optimizer 갱신이나 설정 선택에 사용하지 않습니다.
     """)
-    return evaluate, respond
+    return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(mo):
+    # ▸ 실습 설정 위젯 — 실행하면 슬라이더·선택 상자가 나타납니다 (marimo 표시 코드)
     sft_epochs = mo.ui.slider(20, 100, step=20, value=60, label="SFT epoch")
     sft_accumulation = mo.ui.dropdown([1, 2, 3], value=2, label="기울기 누적 수")
     mo.vstack([
@@ -356,12 +610,8 @@ def _(mo):
         ## 7. 원본 trainer의 핵심 학습 루프
 
         **예측:** microbatch 4개에서 누적 수가 2라면 optimizer는 몇 번 갱신할까요?
-        `forward → (주 손실 + aux)/누적 수 → backward → clipping → step → zero_grad`입니다.
-        Full SFT에서는 모든 매개변수에 `requires_grad=True`를 유지합니다.
-        원본은 `get_lr`의 cosine 감소를 **microstep마다** 적용합니다.
-        Dense의 aux는 0이며, MoE를 사용하면 원본 모델이 계수를 반영한 aux를 반환하므로 한 번 더합니다.
-
-        이 실습은 CPU float32·단일 프로세스입니다. AMP/GradScaler·DDP·wandb·중간 재개는 생략합니다.
+        루프 구조(`(loss + aux)/누적 수 → backward → clip → step`, microstep마다 `get_lr`)는
+        사전 학습 노트북 5~6절과 같습니다. Full SFT에서는 모든 매개변수에 `requires_grad=True`를 유지합니다.
         작은 모델에 맞춰 초기 LR=0.003을 쓰며 원본 기본 LR=1e-5와 다릅니다.
         UI를 바꾸면 항상 같은 기준 모델의 새 복사본에서 학습을 시작합니다.
         """),
@@ -371,12 +621,27 @@ def _(mo):
 
 
 @app.cell
-def _(DataLoader, baseline_model, copy, evaluate, get_lr, json, mo, output_dir, random, sft_accumulation, sft_epochs, torch, train_dataset, uuid4, validation_dataset):
+def _(
+    DataLoader,
+    baseline_model,
+    copy,
+    evaluate,
+    get_lr,
+    json,
+    output_dir,
+    random,
+    sft_accumulation,
+    sft_epochs,
+    torch,
+    train_dataset,
+    uuid4,
+    validation_dataset,
+):
     random.seed(42)
     torch.manual_seed(42)
     sft_model = copy.deepcopy(baseline_model)
     optimizer = torch.optim.AdamW(sft_model.parameters(), lr=0.003)
-    _loader = DataLoader(train_dataset, batch_size=2, shuffle=True, num_workers=0,
+    train_loader = DataLoader(train_dataset, batch_size=2, shuffle=True, num_workers=0,
                          generator=torch.Generator().manual_seed(42))
     _epochs, _accum = sft_epochs.value, sft_accumulation.value
     before_metrics = {"train_ce": evaluate(baseline_model, train_dataset), "validation_ce": evaluate(baseline_model, validation_dataset)}
@@ -385,15 +650,15 @@ def _(DataLoader, baseline_model, copy, evaluate, get_lr, json, mo, output_dir, 
     optimizer.zero_grad(set_to_none=True)
     for _epoch in range(_epochs):
         sft_model.train()
-        for _step, (_ids, _labels) in enumerate(_loader, start=1):
+        for _step, (_ids, _labels) in enumerate(train_loader, start=1):
             assert (_labels[:, 1:] != -100).any(dim=1).all(), "응답이 절단되었습니다"
-            _lr = get_lr(_epoch * len(_loader) + _step, _epochs * len(_loader), 0.003)
+            _lr = get_lr(_epoch * len(train_loader) + _step, _epochs * len(train_loader), 0.003)
             for _group in optimizer.param_groups:
                 _group["lr"] = _lr
             _res = sft_model(_ids, labels=_labels)
             _loss = (_res.loss + _res.aux_loss) / _accum
             _loss.backward()
-            _update = _step % _accum == 0 or _step == len(_loader)
+            _update = _step % _accum == 0 or _step == len(train_loader)
             _grad_norm = None
             if _update:
                 _grad_norm = float(torch.nn.utils.clip_grad_norm_(sft_model.parameters(), 1.0))
@@ -408,32 +673,65 @@ def _(DataLoader, baseline_model, copy, evaluate, get_lr, json, mo, output_dir, 
                             "validation_ce": evaluate(sft_model, validation_dataset)})
     after_metrics = {"train_ce": evaluate(sft_model, train_dataset), "validation_ce": evaluate(sft_model, validation_dataset)}
     assert all(p.requires_grad for p in sft_model.parameters())
-    _changed = sum(not torch.equal(p, dict(baseline_model.named_parameters())[n]) for n, p in sft_model.named_parameters())
+    changed_tensors = sum(not torch.equal(p, dict(baseline_model.named_parameters())[n]) for n, p in sft_model.named_parameters())
     training_dir = output_dir / f"training-{uuid4().hex[:6]}"
     training_dir.mkdir()
     training_settings = {"epochs": _epochs, "accumulation_steps": _accum, "batch_size": 2,
                          "learning_rate": 0.003, "seed": 42, "pretrain_steps": 100}
     (training_dir / "training.json").write_text(json.dumps({"settings": training_settings, "before": before_metrics,
         "after": after_metrics, "history": history, "microsteps": step_history}, indent=2), encoding="utf-8")
+    return (
+        after_metrics,
+        before_metrics,
+        changed_tensors,
+        history,
+        optimizer_updates,
+        sft_model,
+        step_history,
+        train_loader,
+        training_dir,
+        training_settings,
+    )
+
+
+@app.cell(hide_code=True)
+def _(
+    after_metrics,
+    before_metrics,
+    changed_tensors,
+    mo,
+    optimizer_updates,
+    sft_model,
+    step_history,
+    train_loader,
+):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([
         mo.md(f"""
-        1 epoch에 microbatch `{len(_loader)}`개, 총 optimizer 갱신 `{optimizer_updates}`회입니다.
+        1 epoch에 microbatch `{len(train_loader)}`개, 총 optimizer 갱신 `{optimizer_updates}`회입니다.
         학습 대상 `{sum(p.numel() for p in sft_model.parameters()):,}`개,
-        값이 바뀐 매개변수 텐서는 `{_changed}`개입니다.
-
-        **원본과 같은 평균 방식:** 각 microbatch 평균 손실을 누적 수로 나눕니다.
-        누적 수 3이면 마지막 1개 그룹도 3으로 나누므로 완전한 그룹보다 gradient가 작습니다.
-        응답 길이나 microbatch 크기가 다르면 전체 유효 토큰 평균과도 다릅니다.
-        현재 예제는 응답 길이와 microbatch 크기가 같아 완전한 누적 그룹에서 두 평균이 같습니다.
+        값이 바뀐 매개변수 텐서는 `{changed_tensors}`개입니다.
+        불완전한 마지막 누적 그룹의 평균 방식은 사전 학습 노트북 5절을 참고하세요.
         """),
-        mo.ui.table(step_history[:len(_loader)], selection=None),
+        mo.ui.table(step_history[:len(train_loader)], selection=None),
         mo.ui.table([{"시점": k, **v} for k, v in [("SFT 전", before_metrics), ("SFT 후", after_metrics)]], selection=None),
     ])
-    return after_metrics, before_metrics, history, sft_model, training_dir, training_settings
+    return
 
 
-@app.cell
-def _(before_metrics, history, mo, plt, training_dir):
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ## 8. 손실과 실제 생성은 함께 확인하기
+
+    **관찰:** 학습·검증 손실은 같은 방향으로 움직이나요? 다음 표에서도 같은 경향인가요?
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(before_metrics, history, plt, training_dir):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     _fig, _ax = plt.subplots(figsize=(7, 3))
     _ax.plot([0] + [r["epoch"] for r in history], [before_metrics["train_ce"]] + [r["train_ce"] for r in history], label="Train")
     _ax.plot([0] + [r["epoch"] for r in history], [before_metrics["validation_ce"]] + [r["validation_ce"] for r in history], label="Validation")
@@ -441,12 +739,20 @@ def _(before_metrics, history, mo, plt, training_dir):
     _ax.legend()
     _fig.tight_layout()
     _fig.savefig(training_dir / "loss.png", dpi=140)
-    mo.vstack([mo.md("## 8. 손실과 실제 생성은 함께 확인하기\n\n**관찰:** 학습·검증 손실은 같은 방향으로 움직이나요? 다음 표에서도 같은 경향인가요?"), _fig])
+    _fig
     return
 
 
 @app.cell
-def _(baseline_model, json, mo, respond, sft_model, train_records, training_dir, validation_records):
+def _(
+    baseline_model,
+    json,
+    respond,
+    sft_model,
+    train_records,
+    training_dir,
+    validation_records,
+):
     generation_rows = []
     for _split, _records in [("학습", train_records), ("검증", validation_records)]:
         for _record in _records:
@@ -463,6 +769,12 @@ def _(baseline_model, json, mo, respond, sft_model, train_records, training_dir,
         for split in ["학습", "검증"] for stage in ["SFT 전", "SFT 후"]
     ]
     (training_dir / "generation.json").write_text(json.dumps({"summary": generation_summary, "rows": generation_rows}, ensure_ascii=False, indent=2), encoding="utf-8")
+    return generation_rows, generation_summary
+
+
+@app.cell(hide_code=True)
+def _(generation_rows, generation_summary, mo):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([
         mo.md("""
         생성 함수에는 `conversations[:-1]`만 넘겼습니다. **정답 응답이 입력에 섞이지 않았는지** 확인하세요.
@@ -472,11 +784,19 @@ def _(baseline_model, json, mo, respond, sft_model, train_records, training_dir,
         mo.ui.table(generation_summary, selection=None),
         mo.ui.table(generation_rows, selection=None),
     ])
-    return generation_summary, generation_rows
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md("""
+    ## 9. 저장·복원과 원본 trainer로 연결
+    """)
+    return
 
 
 @app.cell
-def _(MiniMindForCausalLM, config, input_ids, mo, sft_model, torch, training_dir, training_settings):
+def _(MiniMindForCausalLM, config, input_ids, sft_model, torch, training_dir):
     checkpoint_path = training_dir / "full_sft_32.pth"
     # 원본 배포 가중치는 half 저장. 여기서는 정확한 복원 관찰을 위해 float32를 보존합니다.
     torch.save(sft_model.state_dict(), checkpoint_path)
@@ -488,12 +808,16 @@ def _(MiniMindForCausalLM, config, input_ids, mo, sft_model, torch, training_dir
     with torch.no_grad():
         _original = sft_model(input_ids).logits
         _restored = restored_model(input_ids).logits
-    _difference = (_original - _restored).abs().max().item()
+    restore_difference = (_original - _restored).abs().max().item()
     assert torch.equal(_original, _restored)
-    mo.md(f"""
-    ## 9. 저장·복원과 원본 trainer로 연결
+    return checkpoint_path, restore_difference
 
-    저장 파일: `{checkpoint_path}`. 같은 설정으로 복원한 logits의 최대 차이: `{_difference}`.
+
+@app.cell(hide_code=True)
+def _(checkpoint_path, mo, restore_difference, training_settings):
+    # ▸ 결과 설명 — 실행하면 계산 값이 들어간 설명이 나타납니다 (marimo 표시 코드)
+    mo.md(f"""
+    저장 파일: `{checkpoint_path}`. 같은 설정으로 복원한 logits의 최대 차이: `{restore_difference}`.
     설정·학습 기록·생성 결과·tokenizer도 이번 실행 폴더에 보관했습니다.
     설정: `{training_settings}`.
     여기서 저장한 것은 추론용 state_dict입니다. 학습 중간 재개에는 optimizer·scaler·epoch·step 등도 필요합니다.
@@ -513,7 +837,7 @@ def _(MiniMindForCausalLM, config, input_ids, mo, sft_model, torch, training_dir
     실행 전 사전 학습 가중치의 차원·층 수·토크나이저와 JSONL 데이터 경로를 확인해야 합니다.
     이 노트북의 32차원 가중치는 기본 768차원 모델에 불러올 수 없습니다.
     """)
-    return (checkpoint_path,)
+    return
 
 
 @app.cell
@@ -537,7 +861,10 @@ def _(mo):
     **힌트·해설:** user/system은 예측 조건이고 assistant 응답이 지도 신호입니다.
     EOS도 포함해야 멈추는 행동을 학습합니다. SFT는 모범 응답의 확률을 높이므로 잘못된 정답도 배울 수 있습니다.
     낮은 학습 손실은 좋은 데이터나 일반화 성능의 보장이 아닙니다.
-    LoRA로 넘어가면 같은 SFT 목표에서 **어떤 매개변수를 갱신하는지** 비교해 보세요.
+
+    **다음 실습:** `minimind_lora.py`(같은 목표, 갱신 대상만 축소) → `minimind_distillation.py`
+    (정답 대신 교사 분포) → `minimind_dpo.py`(정답 하나 대신 선호 쌍)로 이어집니다.
+    5-1절의 추론 형식은 `minimind_grpo.py`에서 보상으로 다시 다룹니다.
 
     출처: `minimind/trainer/train_full_sft.py`, `minimind/dataset/lm_dataset.py`,
     `minimind/model/model_minimind.py`, `minimind/trainer/trainer_utils.py`.

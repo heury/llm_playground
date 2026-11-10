@@ -1,0 +1,9 @@
+flowchart TD
+    T["텍스트 ID"] --> TE["텍스트 임베딩"] --> INJ["자리 교체로 합친 임베딩"]
+    AU["음성"] --> FB["fbank"] --> SV["SenseVoice"] --> AP["Audio Projector"] -- 음성 자리 교체 --> INJ
+    IM["이미지"] --> SG["SigLIP"] --> VP["Vision Projector"] -- 이미지 자리 교체 --> INJ
+    INJ --> TH["Thinker 블록들"] --> TN["norm → LM head"] --> TL["텍스트 logits"]
+    TH -- "중간 bridge_states<br/>embed_proj × text_scale" --> ADD(("+"))
+    PC["이전 음향 코드 8개"] --> TKE["TalkerEmbedding"] -- "codec_proj × audio_scale" --> ADD
+    ADD --> TK["Talker 블록들"] --> TKN["norm → 8개 head"] --> AC["음향 코드 8개"]
+    AC --> MIMI["외부 Mimi 디코더"] --> WAV["파형"]

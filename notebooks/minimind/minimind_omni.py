@@ -54,24 +54,11 @@ def _(mo):
     ① 서로 다른 입력을 같은 은닉 차원으로 연결하고 ② Thinker와 Talker를 구분하며
     ③ 텍스트와 8개 음향 코드의 시간 정렬 및 손실을 설명합니다.
 
-    Python, `[배치, 길이, 차원]` 텐서와 다음 토큰 예측을 알고 시작하세요.
-    **모델 구조 노트북 → 이 노트북 → 실제 Omni 데이터·추론 코드** 순서를 권장합니다.
-    예상 60~90분. 각 절에서 **예측 → 실행 → 관찰 → 해설**을 진행하세요.
+    **멀티모달 파트의 마지막 노트북**입니다. `minimind_vlm.py`(이미지 자리 교체·Projector)와
+    `minimind_v_finetuning.py`(Projector 학습·동결)를 먼저 읽으세요. 이미지 경로는 같으므로 짧게 확인하고,
+    새로 추가되는 **음성 입력, Thinker→Talker 연결, 8개 음향 코드북의 출력**에 집중합니다. 예상 60~90분.
 
-    ```text
-    텍스트 ID ───────────────→ 텍스트 임베딩 ───────────┐
-    음성 → fbank → SenseVoice → Audio Projector ── 자리 교체 ┤
-    이미지 → SigLIP → Vision Projector ─────────── 자리 교체 ┘
-                                     ↓
-                               Thinker 블록들 → norm → LM head → 텍스트 logits
-                                     │ 중간 bridge_states
-                                     ↓ embed_proj × text_scale
-    이전 음향 코드 8개 → TalkerEmbedding → codec_proj × audio_scale
-                                     ↓ 두 경로 합산
-                               Talker 블록들 → norm → 8개 head → 음향 코드
-                                                                         ↓
-                                                           외부 Mimi 디코더 → 파형
-    ```
+    <img src="public/diagrams/omni.png" alt="MiniMind-O: Thinker와 Talker 연결 흐름" width="480">
 
     여기서 *Omni*는 여러 모달리티를 다루는 모델이라는 뜻입니다. 이 구현의 출력은
     **텍스트와 음성 코드**이며 이미지를 생성하는 경로는 없습니다.
@@ -82,13 +69,12 @@ def _(mo):
     모델·데이터 다운로드, 음성 녹음, 실제 인식·합성, 대규모 학습을 수행하지 않습니다.
     실제 원본 클래스를 사용하되 외부 인코더 로딩만 생략하고, 뒤에서 명시적인 교육용
     가짜 인코더를 연결합니다. 의미 있는 답변이나 들을 수 있는 음성을 만드는 실습은 아닙니다.
-    marimo의 셀 인자와 return은 셀 사이 데이터 전달입니다. UI 변경은 관련 셀을 다시 실행합니다.
     """)
     return
 
 
 @app.cell
-def _(MiniMindOmni, OmniConfig, mo, torch):
+def _(MiniMindOmni, OmniConfig, torch):
     class ClassroomOmni(MiniMindOmni):
         """외부 가중치 로딩만 생략. forward와 projector·삽입·생성은 원본 그대로."""
         @staticmethod
@@ -114,6 +100,12 @@ def _(MiniMindOmni, OmniConfig, mo, torch):
     assert initial_model.thinker is initial_model.model
     assert initial_model.thinker.lm_head is initial_model.lm_head
     assert initial_model.lm_head.weight is initial_model.thinker.embed_tokens.weight
+    return (ClassroomOmni, config, initial_model,)
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.ui.table([
         {"설정": "Thinker", "실습": "2층, D=32, Q=4, KV=2", "원본 기본": "8층, D=768, Q=8, KV=4"},
         {"설정": "Talker", "실습": "1층, D=32, Q=8, KV=4", "원본 기본": "4층, D=768, Q=8, KV=4"},
@@ -121,7 +113,7 @@ def _(MiniMindOmni, OmniConfig, mo, torch):
         {"설정": "텍스트 어휘 / 음향 어휘", "실습": "64 / 2112", "원본 기본": "6400 / 2112"},
         {"설정": "이미지 자리 수", "실습": "3", "원본 기본": "64"},
     ], selection=None)
-    return ClassroomOmni, config, initial_model
+    return
 
 
 @app.cell
@@ -148,26 +140,32 @@ def _(mo):
 
 
 @app.cell
-def _(config, initial_model, mo, torch):
+def _(config, initial_model, torch):
     text_ids = torch.tensor([[1, 12, 12, 12, 9, 16, 16, 16, 10, 11, 2]])
     audio_ids = torch.full((1, 8, text_ids.size(1)), config.audio_pad_token, dtype=torch.long)
     packed_ids = torch.cat([audio_ids, text_ids.unsqueeze(1)], dim=1)
     with torch.no_grad():
         _plain = initial_model(text_ids)
-        _packed = initial_model(packed_ids)
-    torch.testing.assert_close(_plain.logits, _packed.logits)
-    for _left, _right in zip(_plain.audio_logits, _packed.audio_logits):
+        packed_output = initial_model(packed_ids)
+    torch.testing.assert_close(_plain.logits, packed_output.logits)
+    for _left, _right in zip(_plain.audio_logits, packed_output.audio_logits):
         torch.testing.assert_close(_left, _right)
+    return (audio_ids, packed_ids, packed_output, text_ids,)
+
+
+@app.cell(hide_code=True)
+def _(mo, packed_ids, packed_output):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([
-        mo.md(f"입력 `{tuple(packed_ids.shape)}` → 텍스트 `{tuple(_packed.logits.shape)}`, "
-              f"음향은 길이 `{len(_packed.audio_logits)}`인 list, 원소마다 `{tuple(_packed.audio_logits[0].shape)}`"),
+        mo.md(f"입력 `{tuple(packed_ids.shape)}` → 텍스트 `{tuple(packed_output.logits.shape)}`, "
+              f"음향은 길이 `{len(packed_output.audio_logits)}`인 list, 원소마다 `{tuple(packed_output.audio_logits[0].shape)}`"),
         mo.ui.table([
             {"행": _i, "종류": "텍스트" if _i == 8 else f"음향 코드북 {_i}",
              "ID": str(packed_ids[0, _i].tolist())} for _i in range(9)
         ], selection=None),
         mo.md("검증: 2차원 입력과 PAD 음향을 붙인 3차원 입력의 두 출력이 같습니다."),
     ])
-    return audio_ids, packed_ids, text_ids
+    return
 
 
 @app.cell
@@ -175,10 +173,9 @@ def _(mo):
     mo.md(r"""
     ## 2. Projector는 차원을 바꾸고, 자리 교체는 길이를 맞춘다
 
-    `MMAudioProjector`와 `MMVisionProjector` 모두
-    `LayerNorm → Linear → GELU → Linear`입니다. `[B,N,D_encoder]`를
-    `[B,N,D_thinker]`로 바꾸며 **토큰 수 N을 줄이는 연산은 없습니다**.
-    `MMVisionProjector`의 `source_tokens`, `target_tokens` 인자는 현재 구현에서 사용되지 않습니다.
+    이미지 경로는 VLM 노트북 3~4절과 같습니다. 새로 등장하는 `MMAudioProjector`도 같은
+    `LayerNorm → Linear → GELU → Linear` 구조로 **마지막 차원만** 바꾸고 토큰 수는 줄이지 않습니다.
+    차이는 음성 자리 교체 함수 `inject_audio_features`의 규칙입니다(아래 해설).
 
     아래에서는 인코더 출력이라고 가정한 숫자 특징을 직접 만듭니다.
     외부 SenseVoice나 SigLIP의 의미 표현을 재현하지 않습니다.
@@ -189,7 +186,7 @@ def _(mo):
 
 
 @app.cell
-def _(initial_model, mo, text_ids, torch):
+def _(initial_model, text_ids, torch):
     raw_audio = torch.arange(18, dtype=torch.float32).reshape(1, 3, 6) / 10
     raw_vision = torch.arange(15, dtype=torch.float32).reshape(1, 3, 5) / 10
     with torch.no_grad():
@@ -206,13 +203,26 @@ def _(initial_model, mo, text_ids, torch):
     torch.testing.assert_close(injected_embeddings[:, 5:8], projected_audio)
     torch.testing.assert_close(injected_embeddings[:, [0, 4, 8, 9, 10]], base_embeddings[:, [0, 4, 8, 9, 10]])
     assert injected_embeddings.shape == base_embeddings.shape
+    return (
+        base_embeddings,
+        injected_embeddings,
+        projected_audio,
+        projected_vision,
+        raw_audio,
+        raw_vision,
+    )
+
+
+@app.cell(hide_code=True)
+def _(base_embeddings, injected_embeddings, mo, text_ids):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.ui.table([
         {"위치": _t, "텍스트 ID": int(text_ids[0, _t]),
          "입력 출처": "이미지 특징" if 1 <= _t <= 3 else "음성 특징" if 5 <= _t <= 7 else "텍스트 임베딩",
          "교체 전후 L2 차이": float((injected_embeddings[0, _t] - base_embeddings[0, _t]).norm())}
         for _t in range(text_ids.size(1))
     ], selection=None)
-    return base_embeddings, injected_embeddings, projected_audio, projected_vision, raw_audio, raw_vision
+    return
 
 
 @app.cell
@@ -267,8 +277,9 @@ def _(SimpleNamespace, copy, initial_model, raw_audio, raw_vision, torch):
     return modal_inputs, multimodal_model
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(mo):
+    # ▸ 실습 설정 위젯 — 실행하면 슬라이더·선택 상자가 나타납니다 (marimo 표시 코드)
     bridge_scale = mo.ui.slider(0.0, 5.0, step=0.5, value=3.0, label="Thinker 전달 배율 text_scale")
     mo.vstack([
         mo.md("예측: Thinker→Talker 배율을 바꾸면 텍스트 logits도 달라질까요? 아래 표에서 두 경로를 비교하세요."),
@@ -278,7 +289,7 @@ def _(mo):
 
 
 @app.cell
-def _(bridge_scale, copy, injected_embeddings, mo, modal_inputs, multimodal_model, packed_ids, torch):
+def _(bridge_scale, copy, injected_embeddings, modal_inputs, multimodal_model, packed_ids, torch):
     observed_model = copy.deepcopy(multimodal_model)
     with torch.no_grad():
         observed_model.talker.text_scale.fill_(bridge_scale.value)
@@ -306,20 +317,26 @@ def _(bridge_scale, copy, injected_embeddings, mo, modal_inputs, multimodal_mode
     torch.testing.assert_close(traces["injected"], injected_embeddings)
     with torch.no_grad():
         _baseline = multimodal_model(packed_ids, **modal_inputs)
-    _text_diff = float((multimodal_output.logits - _baseline.logits).abs().max())
-    _audio_diff = float((multimodal_output.audio_logits[0] - _baseline.audio_logits[0]).abs().max())
-    assert _text_diff == 0
+    text_diff = float((multimodal_output.logits - _baseline.logits).abs().max())
+    audio_diff = float((multimodal_output.audio_logits[0] - _baseline.audio_logits[0]).abs().max())
+    assert text_diff == 0
     if bridge_scale.value != 3.0:
-        assert _audio_diff > 0
+        assert audio_diff > 0
+    return (audio_diff, multimodal_output, text_diff, traces,)
+
+
+@app.cell(hide_code=True)
+def _(audio_diff, mo, text_diff, traces):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([
         mo.ui.table([{"지점": _k, "shape": str(tuple(_v.shape)), "L2 norm": float(_v.norm())}
                      for _k, _v in traces.items()], selection=None),
-        mo.md(f"기본 배율 3 대비 최대 차이: 텍스트 **{_text_diff:.6f}**, 코드북 0 **{_audio_diff:.6f}**.\n\n"
+        mo.md(f"기본 배율 3 대비 최대 차이: 텍스트 **{text_diff:.6f}**, 코드북 0 **{audio_diff:.6f}**.\n\n"
               "Talker 입력 = `embed_proj(bridge) × text_scale + codec_proj(audio_embedding) × audio_scale`. "
               "배율은 학습 가능한 Parameter입니다. 0으로 만들어도 codec 경로와 각 층의 bias 등이 남습니다. "
               "이 실험은 한쪽 방향 연결을 확인하며 생성 품질을 비교하지 않습니다."),
     ])
-    return multimodal_output, traces
+    return
 
 
 @app.cell
@@ -340,21 +357,27 @@ def _(mo):
 
 
 @app.cell
-def _(TalkerEmbedding, TalkerHead, mo, torch):
+def _(TalkerEmbedding, TalkerHead, torch):
     with torch.random.fork_rng(devices=[]):
         torch.manual_seed(7)
         _emb = TalkerEmbedding(20, 8, num_layers=8, rank=4)
         _head = TalkerHead(8, 20, num_layers=8, rank=4)
         _codes = torch.randint(0, 20, (1, 8, 3))
         _hidden = torch.randn(1, 3, 8)
-    _manual_emb = sum(_emb.base(_codes[:, _i]) + _emb.adapters[_i](_codes[:, _i]) for _i in range(8)) / 8
-    torch.testing.assert_close(_emb(_codes), _manual_emb)
-    _outputs = _head(_hidden)
+    manual_emb = sum(_emb.base(_codes[:, _i]) + _emb.adapters[_i](_codes[:, _i]) for _i in range(8)) / 8
+    torch.testing.assert_close(_emb(_codes), manual_emb)
+    head_outputs = _head(_hidden)
     for _i in range(8):
-        torch.testing.assert_close(_outputs[_i], _head.base(_hidden) + _head.adapters[_i](_hidden))
-    mo.md(f"Embedding 검증 통과: `[1,8,3] → {tuple(_manual_emb.shape)}`. "
-          f"Head 검증 통과: `{len(_outputs)}`개 × `{tuple(_outputs[0].shape)}`. "
-          f"head 0과 1의 최대 차이: `{float((_outputs[0] - _outputs[1]).detach().abs().max()):.4f}`.")
+        torch.testing.assert_close(head_outputs[_i], _head.base(_hidden) + _head.adapters[_i](_hidden))
+    return (head_outputs, manual_emb,)
+
+
+@app.cell(hide_code=True)
+def _(head_outputs, manual_emb, mo):
+    # ▸ 결과 설명 — 실행하면 계산 값이 들어간 설명이 나타납니다 (marimo 표시 코드)
+    mo.md(f"Embedding 검증 통과: `[1,8,3] → {tuple(manual_emb.shape)}`. "
+          f"Head 검증 통과: `{len(head_outputs)}`개 × `{tuple(head_outputs[0].shape)}`. "
+          f"head 0과 1의 최대 차이: `{float((head_outputs[0] - head_outputs[1]).detach().abs().max()):.4f}`.")
     return
 
 
@@ -376,7 +399,7 @@ def _(mo):
 
 
 @app.cell
-def _(config, mo, torch):
+def _(config, torch):
     assistant_start = 3
     frame_count = 2
     sequence_length = 16
@@ -394,22 +417,28 @@ def _(config, mo, torch):
     text_targets[:, :assistant_start - 1] = -100
     text_targets[:, 5:] = -100
     audio_targets = original_audio_labels[:, :, 1:]
-    _rows = []
+    delay_rows = []
     for _k in range(8):
         _row = {"코드북": _k}
         for _t in range(sequence_length - 1):
             _v = int(audio_targets[0, _k, _t])
             _f = _t - assistant_start - _k
             _row[f"t={_t}"] = "·" if _v == -100 else "STOP" if _v == config.audio_stop_token else f"k{_k}:f{_f}"
-        _rows.append(_row)
+        delay_rows.append(_row)
         assert int(audio_targets[0, _k, assistant_start + _k]) == 10 + _k
+    return (assistant_start, audio_targets, delay_rows, text_targets, training_ids,)
+
+
+@app.cell(hide_code=True)
+def _(audio_targets, delay_rows, mo, text_targets, training_ids):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([
-        mo.ui.table(_rows, selection=None),
+        mo.ui.table(delay_rows, selection=None),
         mo.md(f"모델 입력 `{tuple(training_ids.shape)}`, 텍스트 정답 `{tuple(text_targets.shape)}`, "
               f"음향 정답 `{tuple(audio_targets.shape)}`. `·`는 손실 제외(-100)입니다. "
               "입력과 정답이 이미 한 칸 어긋나 있으므로 모델 안에서 또 이동하지 않습니다."),
     ])
-    return assistant_start, audio_targets, text_targets, training_ids
+    return
 
 
 @app.cell
@@ -451,7 +480,7 @@ def _(F, torch):
 
 
 @app.cell
-def _(audio_targets, copy, initial_model, mo, omni_losses, text_targets, torch, training_ids):
+def _(audio_targets, copy, initial_model, omni_losses, text_targets, torch, training_ids):
     gradient_model = copy.deepcopy(initial_model)
     gradient_model.train()
     _out = gradient_model(training_ids)
@@ -484,6 +513,12 @@ def _(audio_targets, copy, initial_model, mo, omni_losses, text_targets, torch, 
     with torch.no_grad():
         final_losses = tuple(float(_v) for _v in omni_losses(gradient_model(training_ids), text_targets, audio_targets))
     assert sum(final_losses) < sum(initial_losses)
+    return (final_losses, gradient_rows, initial_losses,)
+
+
+@app.cell(hide_code=True)
+def _(final_losses, gradient_rows, initial_losses, mo):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([
         mo.ui.table(gradient_rows, selection=None),
         mo.ui.table([
@@ -494,7 +529,7 @@ def _(audio_targets, copy, initial_model, mo, omni_losses, text_targets, torch, 
               "이 손실의 경로가 없습니다. 공동 손실에서는 텍스트 CE가 뒤쪽 Thinker도 학습합니다. "
               "5 step 결과는 동일 합성 배치의 손실 감소이며 일반화·음질 지표가 아닙니다."),
     ])
-    return final_losses, gradient_rows, initial_losses
+    return
 
 
 @app.cell
@@ -511,7 +546,7 @@ def _(mo):
 
 
 @app.cell
-def _(audio_targets, copy, mo, modal_inputs, multimodal_model, omni_losses, packed_ids, text_ids, text_targets, torch):
+def _(audio_targets, copy, modal_inputs, multimodal_model, omni_losses, packed_ids, text_ids, text_targets):
     _model = copy.deepcopy(multimodal_model)
     for _p in _model.parameters():
         _p.requires_grad_(False)
@@ -525,12 +560,18 @@ def _(audio_targets, copy, mo, modal_inputs, multimodal_model, omni_losses, pack
     assert projector_grad_norm > 0
     assert all(_p.grad is None for _p in _model.audio_encoder.parameters())
     assert all(_p.grad is None for _p in _model.thinker.parameters())
+    return (projector_grad_norm,)
+
+
+@app.cell(hide_code=True)
+def _(mo, projector_grad_norm):
+    # ▸ 결과 설명 — 실행하면 계산 값이 들어간 설명이 나타납니다 (marimo 표시 코드)
     mo.md(f"Audio Projector gradient norm: **{projector_grad_norm:.6f}**. "
           "고정 음성 인코더와 Thinker의 parameter gradient는 없습니다. "
           "Thinker 연산 자체를 no_grad로 감싸면 projector로 돌아가는 경로도 끊기므로 구분하세요.\n\n"
           "원본 trainer의 `all`은 동결 설정을 별도로 확인해야 하며, `audio_proj`와 `vision_proj`는 "
           "전체 parameter를 먼저 동결한 뒤 해당 projector만 다시 활성화합니다.")
-    return (projector_grad_norm,)
+    return
 
 
 @app.cell
@@ -548,25 +589,31 @@ def _(mo):
 
 
 @app.cell
-def _(config, initial_model, mo, packed_ids, torch):
+def _(config, initial_model, packed_ids, torch):
     _prefix = packed_ids[:, :, :6]
     _last = packed_ids[:, :, 6:7]
     with torch.no_grad():
-        _first = initial_model(_prefix, use_cache=True)
-        _cached = initial_model(_last, past_key_values=_first.past_key_values, use_cache=True)
+        cache_prefix_output = initial_model(_prefix, use_cache=True)
+        _cached = initial_model(_last, past_key_values=cache_prefix_output.past_key_values, use_cache=True)
         _full = initial_model(packed_ids[:, :, :7], use_cache=False)
     cache_text_error = float((_cached.logits[:, -1] - _full.logits[:, -1]).abs().max())
     cache_audio_error = max(float((_a[:, -1] - _b[:, -1]).abs().max()) for _a, _b in zip(_cached.audio_logits, _full.audio_logits))
     torch.testing.assert_close(_cached.logits[:, -1], _full.logits[:, -1], atol=1e-5, rtol=1e-4)
     for _a, _b in zip(_cached.audio_logits, _full.audio_logits):
         torch.testing.assert_close(_a[:, -1], _b[:, -1], atol=1e-5, rtol=1e-4)
-    assert len(_first.past_key_values) == config.num_hidden_layers + config.num_talker_hidden_layers
-    mo.md(f"cache 원소 `{len(_first.past_key_values)}`개, 첫 K shape "
-          f"`{tuple(_first.past_key_values[0][0].shape)}`. "
+    assert len(cache_prefix_output.past_key_values) == config.num_hidden_layers + config.num_talker_hidden_layers
+    return (cache_audio_error, cache_prefix_output, cache_text_error,)
+
+
+@app.cell(hide_code=True)
+def _(cache_audio_error, cache_prefix_output, cache_text_error, mo):
+    # ▸ 결과 설명 — 실행하면 계산 값이 들어간 설명이 나타납니다 (marimo 표시 코드)
+    mo.md(f"cache 원소 `{len(cache_prefix_output.past_key_values)}`개, 첫 K shape "
+          f"`{tuple(cache_prefix_output.past_key_values[0][0].shape)}`. "
           f"최대 logits 오차: 텍스트 `{cache_text_error:.2e}`, 음향 `{cache_audio_error:.2e}`. "
           "이는 CPU float32의 텍스트·코드 입력 cache 동등성 검사입니다. "
           "외부 인코더를 포함한 실제 음성 스트리밍 검증은 아닙니다.")
-    return cache_audio_error, cache_text_error
+    return
 
 
 @app.cell
@@ -591,37 +638,48 @@ def _(mo):
 
 
 @app.cell
-def _(mo):
-    _rows = []
+def _():
+    stream_schedule_rows = []
     for _s in range(10):
         _row = {"생성 step": _s, "텍스트": f"새 토큰 {_s}", "반환 프레임": "f0" if _s == 8 else "f1" if _s == 9 else "아직 없음"}
         for _k in range(8):
             _row[f"k{_k}"] = "PAD" if _s - 1 < _k else f"f{_s - 1 - _k}"
-        _rows.append(_row)
+        stream_schedule_rows.append(_row)
     # 원본의 역지연 인덱스가 모든 k에서 프레임 f0를 가리키는지 확인.
     for _k in range(8):
         _list_index = 8 - 7 + _k
         assert _list_index - 1 - _k == 0
-    mo.ui.table(_rows, selection=None)
+    return (stream_schedule_rows,)
+
+
+@app.cell(hide_code=True)
+def _(mo, stream_schedule_rows):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
+    mo.ui.table(stream_schedule_rows, selection=None)
     return
 
 
 @app.cell
-def _(initial_model, mo, torch):
-    # 실제 원본 stream_generate도 짧게 실행합니다. 임의 출력이며 디코딩하지 않습니다.
+def _(initial_model, torch):
     with torch.random.fork_rng(devices=[]), torch.no_grad():
         torch.manual_seed(123)
-        _stream = list(initial_model.generate(
+        stream_steps = list(initial_model.generate(
             torch.tensor([[1, 7, 8]]), eos_token_id=-1, max_new_tokens=10,
             stream=True, return_audio_codes=True, temperature=0.7,
         ))
-    assert len(_stream) == 10
-    assert all(_text is not None and _text.shape == (1, _i + 1) for _i, (_text, _frame) in enumerate(_stream))
-    assert all(_frame is None for _text, _frame in _stream[:8])
+    assert len(stream_steps) == 10
+    assert all(_text is not None and _text.shape == (1, _i + 1) for _i, (_text, _frame) in enumerate(stream_steps))
+    assert all(_frame is None for _text, _frame in stream_steps[:8])
+    return (stream_steps,)
+
+
+@app.cell(hide_code=True)
+def _(mo, stream_steps):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.ui.table([
         {"step": _i, "누적 텍스트 길이": _text.size(1),
          "audio_frame": str(_frame), "코드 수": len(_frame) if _frame is not None else 0}
-        for _i, (_text, _frame) in enumerate(_stream)
+        for _i, (_text, _frame) in enumerate(stream_steps)
     ], selection=None)
     return
 
@@ -650,7 +708,7 @@ def _(mo):
 
 
 @app.cell
-def _(config, copy, initial_model, mo, packed_ids, torch):
+def _(config, copy, initial_model, packed_ids, torch):
     _model = copy.deepcopy(initial_model)
     _ids = packed_ids.clone()
     _ids[:, :8, 0] = config.audio_spk_token
@@ -669,17 +727,23 @@ def _(config, copy, initial_model, mo, packed_ids, torch):
     torch.testing.assert_close(_seen[1][:, 0], _expected)
     torch.testing.assert_close(_seen[0][:, 1:], _seen[1][:, 1:])
     torch.testing.assert_close(_without.logits, _with.logits)
-    _difference = float((_without.audio_logits[0] - _with.audio_logits[0]).abs().max())
-    assert _difference > 0
+    speaker_logit_diff = float((_without.audio_logits[0] - _with.audio_logits[0]).abs().max())
+    assert speaker_logit_diff > 0
+    return (speaker_logit_diff,)
+
+
+@app.cell(hide_code=True)
+def _(mo, speaker_logit_diff):
+    # ▸ 결과 설명 — 실행하면 계산 값이 들어간 설명이 나타납니다 (marimo 표시 코드)
     mo.md(f"화자 자리의 Talker embedding이 spk_proj 출력과 일치합니다. "
           f"다른 자리의 embedding은 같고, 텍스트 logits도 같습니다. "
-          f"코드북 0 logits 최대 차이: `{_difference:.5f}`. "
+          f"코드북 0 logits 최대 차이: `{speaker_logit_diff:.5f}`. "
           "이는 조건 전달 검사이며 실제 화자 유사도 측정은 아닙니다.")
     return
 
 
 @app.cell
-def _(RealtimeSession, mo, torch):
+def _(RealtimeSession, torch):
     class ScriptedVAD:
         def __init__(self, probabilities):
             self.values = list(probabilities)
@@ -702,13 +766,19 @@ def _(RealtimeSession, mo, torch):
 
     _session = ClassroomSession([0.0, 0.95, 0.95, 0.0, 0.0])
     _chunk = torch.zeros(1024).numpy()
-    _events = [_session.push_chunk(_chunk) for _ in range(5)]
-    assert _events[-1] == "speech_end"
+    events = [_session.push_chunk(_chunk) for _ in range(5)]
+    assert events[-1] == "speech_end"
     _interrupt_session = ClassroomSession([0.95, 0.95])
     _interrupt_session.generating = True
-    _interrupt_events = [_interrupt_session.push_chunk(_chunk) for _ in range(2)]
-    assert _interrupt_events[-1] == "interrupt"
-    mo.md(f"발화→무음 이벤트: `{_events}`\n\n생성 중 발화: `{_interrupt_events}`\n\n"
+    interrupt_events = [_interrupt_session.push_chunk(_chunk) for _ in range(2)]
+    assert interrupt_events[-1] == "interrupt"
+    return (events, interrupt_events,)
+
+
+@app.cell(hide_code=True)
+def _(events, interrupt_events, mo):
+    # ▸ 결과 설명 — 실행하면 계산 값이 들어간 설명이 나타납니다 (marimo 표시 코드)
+    mo.md(f"발화→무음 이벤트: `{events}`\n\n생성 중 발화: `{interrupt_events}`\n\n"
           "1024샘플은 16kHz에서 64ms입니다. 여기서는 2청크(128ms)를 최소 발화·무음으로 "
           "설정했습니다. 원본의 기본 최소 무음은 800ms입니다. 확률은 정해 준 값이며 VAD 정확도를 평가하지 않습니다.")
     return
@@ -761,7 +831,7 @@ def _(mo):
 
 
 @app.cell
-def _(cache_audio_error, cache_text_error, datetime, final_losses, gradient_rows, hashlib, initial_losses, json, mo, projector_grad_norm, repo_root, uuid4, ZoneInfo):
+def _(ZoneInfo, cache_audio_error, cache_text_error, datetime, final_losses, gradient_rows, hashlib, initial_losses, json, projector_grad_norm, repo_root, uuid4):
     _run_id = datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y%m%d-%H%M%S") + "-" + uuid4().hex[:6] + "-omni"
     artifact_dir = repo_root / "outputs/notebooks" / _run_id
     artifact_dir.mkdir(parents=True, exist_ok=True)
@@ -778,9 +848,15 @@ def _(cache_audio_error, cache_text_error, datetime, final_losses, gradient_rows
         "scope": "CPU synthetic tensors; fixed fake encoders; no pretrained weights or real audio",
     }
     (artifact_dir / "metrics.json").write_text(json.dumps(_metrics, ensure_ascii=False, indent=2), encoding="utf-8")
+    return (artifact_dir,)
+
+
+@app.cell(hide_code=True)
+def _(artifact_dir, mo, repo_root):
+    # ▸ 결과 설명 — 실행하면 계산 값이 들어간 설명이 나타납니다 (marimo 표시 코드)
     mo.md(f"이번 실행의 수치 기록: `{artifact_dir.relative_to(repo_root)}/metrics.json`. "
           "UI를 바꾸면 관련 셀과 수치 저장도 다시 실행됩니다. 이전 결과는 별도 실행 폴더로 남습니다.")
-    return (artifact_dir,)
+    return
 
 
 if __name__ == "__main__":

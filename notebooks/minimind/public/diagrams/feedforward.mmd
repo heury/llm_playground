@@ -1,0 +1,4 @@
+flowchart LR
+    X["x<br/>[B,T,D]"] --> G["gate_proj<br/>[B,T,M]"] --> S["SiLU"] --> MUL(("× 원소별 곱"))
+    X --> U["up_proj<br/>[B,T,M]"] --> MUL
+    MUL --> D["down_proj<br/>[B,T,D]"]

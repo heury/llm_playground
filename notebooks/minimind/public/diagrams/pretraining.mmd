@@ -1,0 +1,7 @@
+flowchart TD
+    EP["epoch별 순서 섞기"] --> DL["DataLoader에서 microbatch"] --> LR["get_lr로 학습률 설정"] --> F["forward"]
+    F --> L["(주 손실 + 보조 손실)<br/>÷ 누적 수"] --> B["backward<br/>gradient 누적"] --> C{"누적 경계 또는<br/>마지막 배치?"}
+    C -- 예 --> CL["clip_grad_norm"] --> ST["optimizer.step"] --> Z["zero_grad"] --> N{"남은 배치?"}
+    C -- 아니요 --> N
+    N -- 예 --> DL
+    N -- 아니요 --> EV["학습·검증 평가"] -- 다음 epoch --> EP

@@ -74,9 +74,9 @@ def _(mo):
     LoRA는 학습할 매개변수를 정하는 방법이고 DPO는 학습 목적이므로 함께 쓸 수도 있습니다.
     이 실습은 전체 매개변수를 업데이트합니다.
 
-    **선수 지식:** 다음 토큰 예측·logits·softmax·SFT·backward.
-    `minimind_structure.py` → `minimind_pretraining.py`를 먼저 읽으면 좋습니다.
-    예측 → 실행 → 관찰 → 설명 순서로 진행하세요. marimo의 함수 인자·return은 셀 간 전달입니다.
+    **선수 실습:** `minimind_sft.py`(assistant 마스크·대화 template). DPODataset의 마스크 규칙은 SFT와 같고,
+    다른 점은 **Dataset이 미리 한 칸 이동한 x/y를 돌려준다**는 것입니다(2절).
+    **선호 학습·강화 학습 파트의 첫 노트북**이며 다음은 PPO → GRPO입니다.
     CPU에서 단독 실행하며 모델·데이터 다운로드가 없습니다. 작은 합성 데이터 실습입니다.
 
     산출물은 저장소의 `outputs/notebooks/<실행 ID>/`에 저장합니다.
@@ -103,7 +103,7 @@ def _(mo):
 
 
 @app.cell
-def _(json, mo, output_dir):
+def _(json, output_dir):
     preference_train, preference_validation = [], []
     for _i, (_animal, _sound) in enumerate([
         ("고양이", "야옹"), ("강아지", "멍멍"), ("소", "음메"), ("오리", "꽥꽥"),
@@ -125,12 +125,18 @@ def _(json, mo, output_dir):
         for _row in _rows:
             assert _row["chosen"][:-1] == _row["rejected"][:-1]
             assert _row["chosen"][-1]["role"] == _row["rejected"][-1]["role"] == "assistant"
+    return (preference_train, preference_validation, train_path, validation_path,)
+
+
+@app.cell(hide_code=True)
+def _(mo, preference_train, preference_validation):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.ui.table([
         {"분할": split, "질문": row["chosen"][0]["content"],
          "chosen": row["chosen"][-1]["content"], "rejected": row["rejected"][-1]["content"]}
         for split, rows in [("학습", preference_train), ("검증", preference_validation)] for row in rows
     ], selection=None)
-    return preference_train, preference_validation, train_path, validation_path
+    return
 
 
 @app.cell
@@ -183,7 +189,7 @@ def _(mo):
 
 
 @app.cell
-def _(DPODataset, DataLoader, mo, tokenizer, train_path, validation_path):
+def _(DPODataset, DataLoader, tokenizer, train_path, validation_path):
     train_dataset = DPODataset(str(train_path), tokenizer, max_length=24)
     validation_dataset = DPODataset(str(validation_path), tokenizer, max_length=24)
     train_batch = next(iter(DataLoader(train_dataset, batch_size=len(train_dataset), shuffle=False)))
@@ -193,25 +199,37 @@ def _(DPODataset, DataLoader, mo, tokenizer, train_path, validation_path):
             assert (_batch[f"mask_{_side}"].sum(-1) > 0).all(), "응답이 전부 잘렸습니다."
             assert not (_batch[f"y_{_side}"] == tokenizer.unk_token_id).any()
             assert not (_batch[f"mask_{_side}"].bool() & (_batch[f"y_{_side}"] == tokenizer.pad_token_id)).any()
+    return (train_batch, validation_batch,)
+
+
+@app.cell(hide_code=True)
+def _(mo, tokenizer, train_batch):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.ui.table([
         {"위치 t": t, "입력 x[t]": tokenizer.convert_ids_to_tokens(int(train_batch["x_chosen"][0, t])),
          "예측 정답 y[t]": tokenizer.convert_ids_to_tokens(int(train_batch["y_chosen"][0, t])),
          "mask[t]": int(train_batch["mask_chosen"][0, t])}
         for t in range(train_batch["x_chosen"].shape[1])
     ], selection=None)
-    return train_batch, validation_batch
+    return
 
 
 @app.cell
-def _(DPODataset, mo, tokenizer, train_path):
-    _rows = []
+def _(DPODataset, tokenizer, train_path):
+    truncation_rows = []
     for _length in [6, 10, 24]:
         _item = DPODataset(str(train_path), tokenizer, max_length=_length)[0]
-        _rows.append({"max_length": _length,
+        truncation_rows.append({"max_length": _length,
                       "chosen 유효 정답": int(_item["mask_chosen"].sum()),
                       "rejected 유효 정답": int(_item["mask_rejected"].sum())})
+    return (truncation_rows,)
+
+
+@app.cell(hide_code=True)
+def _(mo, truncation_rows):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([
-        mo.ui.table(_rows, selection=None),
+        mo.ui.table(truncation_rows, selection=None),
         mo.md("**관찰·해설:** 너무 짧게 자르면 응답이 사라지거나 EOS 없이 일부만 남습니다. 원본은 mask가 전부 0인 쌍도 거부하지 않습니다. 양쪽 모두 0이면 손실은 log(2)이지만 gradient 신호가 없습니다. 데이터 검사에서 제외하거나 길이를 늘리세요. 원본은 별도 attention_mask를 전달하지 않습니다. 여기서는 오른쪽 패딩과 causal Attention을 쓰므로 앞의 유효 위치는 뒤 PAD를 보지 않습니다."),
     ])
     return
@@ -238,15 +256,21 @@ def _(mo):
 
 
 @app.cell
-def _(F, logits_to_log_probs, mo, torch):
+def _(F, logits_to_log_probs, torch):
     _logits = torch.tensor([[[2., 0., -1.], [0., 1., 2.]]])
-    _labels = torch.tensor([[0, 2]])
-    _actual = logits_to_log_probs(_logits, _labels)
-    _manual = torch.stack([F.log_softmax(_logits[0, t], dim=0)[_labels[0, t]] for t in range(2)])
-    torch.testing.assert_close(_actual[0], _manual)
+    demo_labels = torch.tensor([[0, 2]])
+    demo_logps = logits_to_log_probs(_logits, demo_labels)
+    _manual = torch.stack([F.log_softmax(_logits[0, t], dim=0)[demo_labels[0, t]] for t in range(2)])
+    torch.testing.assert_close(demo_logps[0], _manual)
+    return (demo_labels, demo_logps,)
+
+
+@app.cell(hide_code=True)
+def _(demo_labels, demo_logps, mo):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.ui.table([
-        {"위치": t, "정답 ID": int(_labels[0, t]), "p(정답)": float(_actual[0, t].exp()),
-         "log p(정답)": float(_actual[0, t])} for t in range(2)
+        {"위치": t, "정답 ID": int(demo_labels[0, t]), "p(정답)": float(demo_logps[0, t].exp()),
+         "log p(정답)": float(demo_logps[0, t])} for t in range(2)
     ], selection=None)
     return
 
@@ -277,8 +301,9 @@ def _(mo):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(mo):
+    # ▸ 실습 설정 위젯 — 실행하면 슬라이더·선택 상자가 나타납니다 (marimo 표시 코드)
     demo_delta = mo.ui.slider(-4, 4, step=0.5, value=1, label="참조 대비 선호 차이 Δ")
     demo_beta = mo.ui.dropdown([0.1, 0.5, 1.0], value=0.5, label="숫자 실험 β")
     mo.hstack([demo_delta, demo_beta])
@@ -286,25 +311,31 @@ def _(mo):
 
 
 @app.cell
-def _(demo_beta, demo_delta, dpo_loss, math, mo, plt, torch):
-    _delta = torch.tensor(float(demo_delta.value), requires_grad=True)
+def _(demo_beta, demo_delta, dpo_loss, math, plt, torch):
+    delta_tensor = torch.tensor(float(demo_delta.value), requires_grad=True)
     # 순서: chosen, rejected. 한 위치가 전체 응답 점수를 대표하는 숫자 예제.
     _ref = torch.tensor([[-4.], [-3.]])
-    _policy = torch.stack([-4. + _delta, torch.tensor(-3.)]).reshape(2, 1)
-    _loss = dpo_loss(_ref, _policy, torch.ones(2, 1), demo_beta.value)
-    _loss.backward()
-    torch.testing.assert_close(_delta.grad, -demo_beta.value * torch.sigmoid(-demo_beta.value * _delta.detach()))
-    _zero = dpo_loss(_ref, _ref, torch.ones(2, 1), demo_beta.value)
-    assert abs(_zero.item() - math.log(2)) < 1e-6
+    _policy = torch.stack([-4. + delta_tensor, torch.tensor(-3.)]).reshape(2, 1)
+    demo_loss = dpo_loss(_ref, _policy, torch.ones(2, 1), demo_beta.value)
+    demo_loss.backward()
+    torch.testing.assert_close(delta_tensor.grad, -demo_beta.value * torch.sigmoid(-demo_beta.value * delta_tensor.detach()))
+    zero_delta_loss = dpo_loss(_ref, _ref, torch.ones(2, 1), demo_beta.value)
+    assert abs(zero_delta_loss.item() - math.log(2)) < 1e-6
     _axis = torch.linspace(-5, 5, 101)
-    _fig, _ax = plt.subplots(figsize=(6, 3))
+    dpo_loss_fig, _ax = plt.subplots(figsize=(6, 3))
     for _beta in [0.1, 0.5, 1.0]:
         _ax.plot(_axis, torch.nn.functional.softplus(-_beta * _axis), label=f"beta={_beta}")
-    _ax.scatter([demo_delta.value], [_loss.item()], color="black")
+    _ax.scatter([demo_delta.value], [demo_loss.item()], color="black")
     _ax.set(xlabel="Delta", ylabel="DPO loss")
     _ax.legend()
-    _fig.tight_layout()
-    mo.vstack([_fig, mo.md(f"손실 = **{_loss.item():.4f}**, dL/dΔ = **{_delta.grad.item():.4f}**. Δ=0 손실 = {_zero.item():.4f}. **해설:** 손실값뿐 아니라 gradient 부호도 확인하세요.")])
+    dpo_loss_fig.tight_layout()
+    return (delta_tensor, demo_loss, dpo_loss_fig, zero_delta_loss,)
+
+
+@app.cell(hide_code=True)
+def _(delta_tensor, demo_loss, dpo_loss_fig, mo, zero_delta_loss):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
+    mo.vstack([dpo_loss_fig, mo.md(f"손실 = **{demo_loss.item():.4f}**, dL/dΔ = **{delta_tensor.grad.item():.4f}**. Δ=0 손실 = {zero_delta_loss.item():.4f}. **해설:** 손실값뿐 아니라 gradient 부호도 확인하세요.")])
     return
 
 
@@ -356,8 +387,9 @@ def _(F, MiniMindConfig, MiniMindForCausalLM, torch, train_batch, vocabulary):
     return config, pack_pairs, sft_history, sft_model
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(mo):
+    # ▸ 실습 설정 위젯 — 실행하면 슬라이더·선택 상자가 나타납니다 (marimo 표시 코드)
     train_beta = mo.ui.dropdown([0.1, 0.5, 1.0], value=0.5, label="DPO 학습 β")
     train_steps = mo.ui.slider(10, 80, step=10, value=40, label="DPO step")
     mo.hstack([train_beta, train_steps])
@@ -445,39 +477,45 @@ def _(
 
 
 @app.cell
-def _(
-    after_metrics,
-    before_metrics,
-    dpo_history,
-    mo,
-    plt,
-    preference_train,
-    preference_validation,
-):
-    _fig, _axes = plt.subplots(1, 2, figsize=(9, 3))
+def _(after_metrics, before_metrics, dpo_history, plt, preference_train, preference_validation):
+    dpo_curve_fig, _axes = plt.subplots(1, 2, figsize=(9, 3))
     _axes[0].plot([r["step"] for r in dpo_history], [r["dpo_loss"] for r in dpo_history])
     _axes[0].set(xlabel="Step (before update)", ylabel="Train DPO loss")
     for _name in ["train", "validation"]:
         _axes[1].plot(["Before", "After"], [before_metrics[_name]["loss"], after_metrics[_name]["loss"]], marker="o", label=_name)
     _axes[1].set(ylabel="DPO loss")
     _axes[1].legend()
-    _fig.tight_layout()
-    _rows = []
+    dpo_curve_fig.tight_layout()
+    pair_rows = []
     for _split, _data in [("train", preference_train), ("validation", preference_validation)]:
         for _i, _row in enumerate(_data):
             _m = after_metrics[_split]
-            _rows.append({"분할": _split, "질문": _row["chosen"][0]["content"],
+            pair_rows.append({"분할": _split, "질문": _row["chosen"][0]["content"],
                           "학습 전 raw gap": before_metrics[_split]["raw_gap"][_i],
                           "후 chosen log p": _m["chosen"][_i], "후 rejected log p": _m["rejected"][_i],
                           "후 raw gap": _m["raw_gap"][_i], "참조 대비 Δ": _m["delta"][_i]})
-    mo.vstack([_fig, mo.ui.table(_rows, selection=None), mo.md(
+    return (dpo_curve_fig, pair_rows,)
+
+
+@app.cell(hide_code=True)
+def _(dpo_curve_fig, mo, pair_rows):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
+    mo.vstack([dpo_curve_fig, mo.ui.table(pair_rows, selection=None), mo.md(
         "**관찰·해설:** Δ>0은 참조보다 선호 격차가 커졌다는 뜻입니다. chosen 원확률이 rejected보다 높다는 조건(raw gap>0)과 다릅니다. 초기 Δ=0은 엄격한 >0 지표에서 승리로 세지 않습니다. 검증도 두 문장의 조합 확인일 뿐이며 일반적인 선호 정렬 성능을 증명하지 않습니다. 곡선의 마지막 점은 마지막 갱신 전, After 값은 마지막 갱신 후입니다."
     )])
     return
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ## 7. 같은 검증 질문으로 생성 비교
+    """)
+    return
+
+
 @app.cell
-def _(mo, policy, preference_validation, reference, tokenizer, torch):
+def _(policy, preference_validation, reference, tokenizer, torch):
     def complete(model, row):
         prompt = tokenizer.apply_chat_template(row["chosen"][:-1], tokenize=False, add_generation_prompt=True)
         ids = tokenizer(prompt, return_tensors="pt").input_ids
@@ -492,9 +530,15 @@ def _(mo, policy, preference_validation, reference, tokenizer, torch):
          "DPO greedy": complete(policy, row), "선호 답변": row["chosen"][-1]["content"]}
         for row in preference_validation
     ]
-    mo.vstack([mo.md("## 7. 같은 검증 질문으로 생성 비교"), mo.ui.table(generated_examples, selection=None),
-               mo.md("**예측·관찰:** Δ가 커지면 greedy 결과도 반드시 바뀔까요? 쌍의 점수 차이는 전체 응답의 확률을 비교하고, greedy는 매 위치의 최대 확률 토큰을 고릅니다. loss 감소·후보 순위·실제 생성·새 질문 일반화는 각각 확인해야 합니다. 정해진 두 후보 이외의 응답을 억제하는 보장은 없습니다.")])
     return (generated_examples,)
+
+
+@app.cell(hide_code=True)
+def _(generated_examples, mo):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
+    mo.vstack([mo.ui.table(generated_examples, selection=None),
+               mo.md("**예측·관찰:** Δ가 커지면 greedy 결과도 반드시 바뀔까요? 쌍의 점수 차이는 전체 응답의 확률을 비교하고, greedy는 매 위치의 최대 확률 토큰을 고릅니다. loss 감소·후보 순위·실제 생성·새 질문 일반화는 각각 확인해야 합니다. 정해진 두 후보 이외의 응답을 억제하는 보장은 없습니다.")])
+    return
 
 
 @app.cell
@@ -505,7 +549,6 @@ def _(
     dpo_history,
     generated_examples,
     json,
-    mo,
     output_dir,
     policy,
     sft_history,
@@ -514,6 +557,8 @@ def _(
     train_steps,
     uuid4,
 ):
+    from importlib.metadata import version as _package_version
+
     experiment_dir = output_dir / f"training-{uuid4().hex[:6]}"
     experiment_dir.mkdir()
     torch.save(policy.state_dict(), experiment_dir / "dpo_policy.pth")
@@ -521,13 +566,19 @@ def _(
     experiment_metrics = {
         "settings": {"seed": 42, "beta": train_beta.value, "dpo_steps": train_steps.value,
                      "learning_rate": 0.001, "device": "cpu", "dtype": "float32", "sft_steps": 100},
-        "environment": {"torch": torch.__version__, "marimo": mo.__version__},
+        "environment": {"torch": torch.__version__, "marimo": _package_version("marimo")},
         "sft_loss": sft_history, "dpo_history": dpo_history,
         "before": before_metrics, "after": after_metrics, "generation": generated_examples,
         "checks": {"initial_loss_log2": True, "reference_unchanged": True,
                    "reference_no_grad": True, "policy_changed": True, "train_loss_decreased": True},
     }
     (experiment_dir / "metrics.json").write_text(json.dumps(experiment_metrics, ensure_ascii=False, indent=2), encoding="utf-8")
+    return (experiment_dir,)
+
+
+@app.cell(hide_code=True)
+def _(experiment_dir, mo, output_dir):
+    # ▸ 결과 설명 — 실행하면 계산 값이 들어간 설명이 나타납니다 (marimo 표시 코드)
     mo.md(f"데이터·토크나이저는 `{output_dir}`, 이번 설정의 가중치·config·지표는 `{experiment_dir}`에 저장했습니다. 각 설정 실행은 별도 폴더를 만듭니다. 원본 trainer의 optimizer·scaler 재개 형식을 검증한 것은 아닙니다.")
     return
 
@@ -556,6 +607,9 @@ def _(mo):
     학습 질문과 별도 평가 질문이 섞이지 않았는지 확인하세요.
     이 실습은 6쌍 학습·2쌍 검증이며 대규모 학습, 사용자 선호 평가, 망각 평가, GPU 분산 실행은 포함하지 않습니다.
     원본 저작권·라이선스는 `minimind/LICENSE`를 따릅니다.
+
+    **다음 실습:** `minimind_ppo.py`. DPO는 **이미 수집한** 선호 쌍을 쓰는 오프라인 방법입니다.
+    PPO는 모델이 **직접 생성한** 응답에 보상을 주는 온라인 방법이며 Critic이 추가됩니다.
     """)
     return
 

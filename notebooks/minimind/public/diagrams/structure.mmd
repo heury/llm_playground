@@ -1,0 +1,10 @@
+flowchart TD
+    S["문장"] --> I["토큰 ID<br/>[B,T]"] --> E["Embedding<br/>[B,T,D]"] --> H0["h"]
+    subgraph L["MiniMindBlock × 층 수"]
+        H0 --> N1["RMSNorm"] --> A["Attention<br/>RoPE · GQA · causal mask"] --> R1(("+"))
+        H0 -. 잔차 연결 .-> R1
+        R1 --> N2["RMSNorm"] --> M["MLP (SwiGLU)"] --> R2(("+"))
+        R1 -. 잔차 연결 .-> R2
+    end
+    R2 --> FN["RMSNorm"] --> LM["LM head<br/>[B,T,V]"] --> O["다음 토큰 logits"]
+    E -. 가중치 공유 .- LM

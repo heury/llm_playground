@@ -50,11 +50,9 @@ def _(mo):
 
     **목표:** 정답과 확률 분포의 차이 → 온도·KL·CE 계산 → assistant 마스크와 다음 토큰 정렬
     → 교사 동결 → 작은 학생 학습·비교를 직접 해봅니다.
-    Python 함수, softmax, 텐서 shape, backward를 알고 시작하세요.
-    `minimind_structure.py` → `minimind_pretraining.py` → 이 실습 순서를 권장합니다.
+    `minimind_structure.py` → `minimind_pretraining.py` → `minimind_sft.py` → 이 실습 순서를 권장합니다.
+    SFTDataset의 template·assistant 마스크는 SFT 노트북에서 설명했으므로 여기서는 **KL을 어느 위치에 적용하는지**만 봅니다.
 
-    **예측 → 실행 → 관찰 → 해설**을 따라 진행하세요. `@app.cell`의 인자와 return은
-    marimo 셀 사이의 데이터 전달이고 `_` 변수는 셀 내부 계산입니다.
     원본 `trainer/train_distillation.py`의 **distillation_loss를 직접 호출**하고,
     `dataset/lm_dataset.py`의 **실제 SFTDataset**을 사용합니다.
     저작권·라이선스는 `minimind/LICENSE`를 참고하세요.
@@ -94,8 +92,9 @@ def _(mo):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(mo):
+    # ▸ 실습 설정 위젯 — 실행하면 슬라이더·선택 상자가 나타납니다 (marimo 표시 코드)
     temperature_ui = mo.ui.slider(1.0, 4.0, step=0.5, value=2.0, label="증류 온도 τ")
     alpha_ui = mo.ui.slider(0.0, 1.0, step=0.25, value=0.5, label="CE 비중 α")
     mo.hstack([temperature_ui, alpha_ui])
@@ -126,29 +125,44 @@ def _(mo):
 
 
 @app.cell
-def _(F, alpha_ui, distillation_loss, mo, temperature_ui, torch):
+def _(F, alpha_ui, distillation_loss, temperature_ui, torch):
     _tau = temperature_ui.value
-    _s = torch.tensor([[1.0, 1.5, -0.5]], requires_grad=True)
-    _t = torch.tensor([[4.0, 2.0, 0.0]], requires_grad=True)
-    _pt = F.softmax(_t.detach() / _tau, dim=-1)
-    _logps = F.log_softmax(_s / _tau, dim=-1)
-    _terms = _pt * (_pt.log() - _logps)
-    _kd = distillation_loss(_s, _t, temperature=_tau)
-    _ce = F.cross_entropy(_s, torch.tensor([0]))
-    _mixed = alpha_ui.value * _ce + (1 - alpha_ui.value) * _kd
-    _mixed.backward()
-    assert torch.allclose(_tau ** 2 * _terms.sum(), _kd)
-    assert _t.grad is None and torch.isfinite(_s.grad).all()
-    assert torch.allclose(distillation_loss(_s.repeat(2, 1), _t.repeat(2, 1), _tau), _kd)
+    demo_student_logits = torch.tensor([[1.0, 1.5, -0.5]], requires_grad=True)
+    demo_teacher_logits = torch.tensor([[4.0, 2.0, 0.0]], requires_grad=True)
+    demo_teacher_probs = F.softmax(demo_teacher_logits.detach() / _tau, dim=-1)
+    demo_student_logps = F.log_softmax(demo_student_logits / _tau, dim=-1)
+    demo_kl_terms = demo_teacher_probs * (demo_teacher_probs.log() - demo_student_logps)
+    demo_kd = distillation_loss(demo_student_logits, demo_teacher_logits, temperature=_tau)
+    demo_ce = F.cross_entropy(demo_student_logits, torch.tensor([0]))
+    demo_mixed = alpha_ui.value * demo_ce + (1 - alpha_ui.value) * demo_kd
+    demo_mixed.backward()
+    assert torch.allclose(_tau ** 2 * demo_kl_terms.sum(), demo_kd)
+    assert demo_teacher_logits.grad is None and torch.isfinite(demo_student_logits.grad).all()
+    assert torch.allclose(distillation_loss(demo_student_logits.repeat(2, 1), demo_teacher_logits.repeat(2, 1), _tau), demo_kd)
+    return (
+        demo_ce,
+        demo_kd,
+        demo_kl_terms,
+        demo_mixed,
+        demo_student_logits,
+        demo_student_logps,
+        demo_teacher_logits,
+        demo_teacher_probs,
+    )
+
+
+@app.cell(hide_code=True)
+def _(F, demo_ce, demo_kd, demo_kl_terms, demo_mixed, demo_student_logits, demo_student_logps, demo_teacher_logits, demo_teacher_probs, mo):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([
         mo.ui.table([
-            {"후보": word, "hard 정답": int(i == 0), "교사 τ=1": float(F.softmax(_t.detach(), -1)[0, i]),
-             "교사 pτ": float(_pt[0, i]), "학생 pτ": float(_logps.detach().exp()[0, i]),
-             "KL 기여": float(_terms.detach()[0, i]), "학생 gradient": float(_s.grad[0, i])}
+            {"후보": word, "hard 정답": int(i == 0), "교사 τ=1": float(F.softmax(demo_teacher_logits.detach(), -1)[0, i]),
+             "교사 pτ": float(demo_teacher_probs[0, i]), "학생 pτ": float(demo_student_logps.detach().exp()[0, i]),
+             "KL 기여": float(demo_kl_terms.detach()[0, i]), "학생 gradient": float(demo_student_logits.grad[0, i])}
             for i, word in enumerate(["야옹", "멍멍", "음메"])
         ], selection=None),
-        mo.md(f"CE={_ce.item():.5f}, KL(보정 전)={_terms.sum().item():.5f}, "
-              f"τ²×KL={_kd.item():.5f}, 혼합={_mixed.item():.5f}. 교사 gradient: `{_t.grad}`.\n\n"
+        mo.md(f"CE={demo_ce.item():.5f}, KL(보정 전)={demo_kl_terms.sum().item():.5f}, "
+              f"τ²×KL={demo_kd.item():.5f}, 혼합={demo_mixed.item():.5f}. 교사 gradient: `{demo_teacher_logits.grad}`.\n\n"
               "**해설:** 양의 온도로 나눠도 순위는 유지됩니다. 개별 KL 항은 음수일 수 있지만 합은 0 이상입니다(수치 오차 제외). "
               "N이 두 배여도 유효 토큰 평균은 같습니다. 교사에는 gradient가 흐르지 않습니다."),
     ])
@@ -157,15 +171,13 @@ def _(F, alpha_ui, distillation_loss, mo, temperature_ui, torch):
 
 @app.cell
 def _(mo):
-    mo.md("""
+    mo.md(r"""
     ## 3. 대화 JSONL → 실제 SFTDataset
 
-    `conversations`의 role/content를 chat template로 연결합니다. 교육용 단어 사전은
-    **줄바꿈도 토큰 하나로 유지**해 assistant 시작·응답 끝 패턴을 보여 줍니다.
-    원본 토크나이저의 서브워드 분할은 재현하지 않습니다.
-    원본 전처리는 system이 없으면 20% 확률로 system을 붙이고 빈 think 태그도 확률적으로 제거합니다.
-    여기서는 system을 명시하고 think를 넣지 않아 같은 입력을 얻습니다.
-    도구 호출·reasoning 데이터는 이번 실습에 포함하지 않습니다.
+    SFT 노트북과 같은 교육용 template이지만, 이번 단어 사전은 **줄바꿈도 토큰 하나로 유지**해
+    원본과 같은 `[BOS]assistant\n` 시작·`[EOS]\n` 종료 패턴을 보여 줍니다.
+    system을 명시해 원본 전처리의 무작위 system 추가를 피합니다(SFT 노트북 3절).
+    첫 대화는 두 턴이어서 유효 정답이 다른 샘플보다 많습니다.
     """)
     return
 
@@ -205,7 +217,7 @@ def _(PreTrainedTokenizerFast, Regex, Tokenizer, json, models, output_dir, pre_t
 
 
 @app.cell
-def _(DataLoader, SFTDataset, data_path, mo, tokenizer, torch):
+def _(DataLoader, SFTDataset, data_path, tokenizer, torch):
     sft_dataset = SFTDataset(str(data_path), tokenizer, max_length=64)
     input_ids, labels = next(iter(DataLoader(sft_dataset, batch_size=4, shuffle=False, num_workers=0)))
     valid_mask = labels[:, 1:] != -100
@@ -213,6 +225,12 @@ def _(DataLoader, SFTDataset, data_path, mo, tokenizer, torch):
     assert (labels[input_ids == tokenizer.pad_token_id] == -100).all()
     assert not (input_ids == tokenizer.unk_token_id).any()
     assert torch.equal(valid_mask.sum(dim=1), torch.tensor([10, 5, 5, 5]))
+    return (input_ids, labels, sft_dataset, valid_mask,)
+
+
+@app.cell(hide_code=True)
+def _(input_ids, labels, mo, sft_dataset, tokenizer, valid_mask):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([
         mo.md(f"첫 샘플의 템플릿:\n\n```text\n{sft_dataset.create_chat_prompt(sft_dataset.samples[0]['conversations'])}\n```\n\n"
               f"입력·labels shape: `{tuple(input_ids.shape)}`, 유효 정답 수: `{valid_mask.sum(dim=1).tolist()}`"),
@@ -224,18 +242,16 @@ def _(DataLoader, SFTDataset, data_path, mo, tokenizer, torch):
             for t in range(63)
         ], selection=None, page_size=18),
     ])
-    return input_ids, labels, sft_dataset, valid_mask
+    return
 
 
 @app.cell
 def _(mo):
     mo.md(r"""
-    ## 4. 한 칸 이동과 마스크: 손실을 적용할 위치
+    ## 4. 한 칸 이동과 마스크: KL을 적용할 위치
 
-    `generate_labels`는 **assistant 헤더 뒤부터 EOS+줄바꿈까지** labels를 남깁니다.
-    system/user/assistant 헤더와 응답 뒤 PAD는 -100입니다. 두 턴의 응답도 모두 학습합니다.
-    `-100`은 입력 토큰이 아니라 정답 무시 값입니다. 입력에서는 user 문맥이 그대로 보입니다.
-    원본 trainer에서 다음 토큰 이동은 모델 밖에서 딱 한 번 수행합니다.
+    마스크 규칙은 SFT와 같습니다(assistant 본문+EOS만 정답). 다른 점은 **원본 증류 trainer가
+    `labels`를 모델에 넘기지 않고 모델 밖에서 직접 한 번 이동**한다는 것입니다.
 
     ```python
     student_logits = model(input_ids).logits[:, :-1, :]  # [B, L-1, V]
@@ -249,29 +265,32 @@ def _(mo):
     유효 토큰 평균 KL이 됩니다. `[B,L-1,V]`를 그대로 넣으면 B로 나눠 손실 크기가 달라집니다.
     응답이 긴 샘플은 더 많은 유효 토큰을 제공합니다.
 
-    손실 마스크는 Attention을 차단하지 않습니다. 원본처럼 attention_mask를 생략해도
-    이번 오른쪽 패딩·causal Attention에서는 앞의 실제 토큰이 뒤의 PAD를 보지 못합니다.
-    labels를 미리 이동한 뒤 여기서 다시 이동하면 정답이 두 칸 어긋납니다.
-
     **예측:** 첫 응답 토큰을 예측하는 logits는 어디에 있나요?
     **해설:** 그 토큰 바로 앞, assistant 헤더의 마지막 줄바꿈 위치입니다.
     """)
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(mo):
+    # ▸ 실습 설정 위젯 — 실행하면 슬라이더·선택 상자가 나타납니다 (marimo 표시 코드)
     truncation_ui = mo.ui.dropdown([8, 24, 64], value=24, label="마스크 관찰용 max_length (학습에는 64 사용)")
     truncation_ui
     return (truncation_ui,)
 
 
 @app.cell
-def _(SFTDataset, data_path, mo, tokenizer, truncation_ui):
+def _(SFTDataset, data_path, tokenizer, truncation_ui):
     _short = SFTDataset(str(data_path), tokenizer, max_length=truncation_ui.value)
-    _x, _y = _short[0]
-    mo.md(f"길이={truncation_ui.value}, 유효 정답={int((_y[1:] != -100).sum())}개. "
-          f"토큰: `{tokenizer.convert_ids_to_tokens(_x.tolist())}`\n\n"
+    short_ids, short_labels = _short[0]
+    return (short_ids, short_labels,)
+
+
+@app.cell(hide_code=True)
+def _(mo, short_ids, short_labels, tokenizer, truncation_ui):
+    # ▸ 결과 설명 — 실행하면 계산 값이 들어간 설명이 나타납니다 (marimo 표시 코드)
+    mo.md(f"길이={truncation_ui.value}, 유효 정답={int((short_labels[1:] != -100).sum())}개. "
+          f"토큰: `{tokenizer.convert_ids_to_tokens(short_ids.tolist())}`\n\n"
           "원본 SFTDataset은 자른 뒤 EOS를 새로 붙이지 않습니다. 응답이 모두 잘리면 유효 정답이 0개입니다. "
           "원본 KL에 빈 텐서를 넘기면 NaN이 될 수 있으므로 아래 실습 함수는 이 배치를 거부합니다. "
           "길이 8/24/64를 비교하세요.")
@@ -315,7 +334,7 @@ def _(mo):
 
 
 @app.cell
-def _(MiniMindConfig, MiniMindForCausalLM, input_ids, labels, mo, torch, vocabulary):
+def _(MiniMindConfig, MiniMindForCausalLM, input_ids, labels, torch, vocabulary):
     def new_model(width, layers, seed):
         config = MiniMindConfig(
             hidden_size=width, num_hidden_layers=layers, vocab_size=len(vocabulary),
@@ -344,13 +363,19 @@ def _(MiniMindConfig, MiniMindForCausalLM, input_ids, labels, mo, torch, vocabul
     with torch.no_grad():
         teacher_logits = teacher(input_ids).logits.detach()
     assert teacher_history[-1] < teacher_history[0]
+    return (new_model, student_initial, teacher, teacher_history, teacher_logits,)
+
+
+@app.cell(hide_code=True)
+def _(mo, student_initial, teacher):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.ui.table([
         {"역할": role, "은닉": model.config.hidden_size, "층": model.config.num_hidden_layers,
          "고유 매개변수 수": sum(p.numel() for p in model.parameters()),
          "학습 가능 수": sum(p.numel() for p in model.parameters() if p.requires_grad)}
         for role, model in [("동결된 교사", teacher), ("초기 학생", student_initial)]
     ], selection=None)
-    return new_model, student_initial, teacher, teacher_history, teacher_logits
+    return
 
 
 @app.cell
@@ -410,9 +435,9 @@ def _(F, compute_losses, input_ids, labels, teacher_logits, temperature_ui, torc
 
 
 @app.cell
-def _(evaluate_model, histories, mo, plt, student_initial, teacher, teacher_history, trained_students):
+def _(evaluate_model, histories, plt, student_initial, teacher, teacher_history, trained_students):
     evaluation = {name: evaluate_model(model) for name, model in [("Teacher", teacher), ("Initial student", student_initial), *trained_students.items()]}
-    _fig, _axes = plt.subplots(1, 3, figsize=(12, 3))
+    student_curve_fig, _axes = plt.subplots(1, 3, figsize=(12, 3))
     _axes[0].plot(teacher_history)
     _axes[0].set(title="Teacher SFT", xlabel="step", ylabel="CE")
     for _name, _history in histories.items():
@@ -422,15 +447,21 @@ def _(evaluate_model, histories, mo, plt, student_initial, teacher, teacher_hist
     _axes[2].set(title="Student soft targets", xlabel="step", ylabel="tau^2 KL")
     _axes[1].legend()
     _axes[2].legend()
-    _fig.tight_layout()
+    student_curve_fig.tight_layout()
+    return (evaluation, student_curve_fig,)
+
+
+@app.cell(hide_code=True)
+def _(evaluation, metrics, mo, student_curve_fig):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([
-        mo.ui.table([{"model": name, **metrics} for name, metrics in evaluation.items()], selection=None), _fig,
+        mo.ui.table([{"model": name, **metrics} for name, metrics in evaluation.items()], selection=None), student_curve_fig,
         mo.md("**해설:** 정답률은 유효한 다음 토큰의 정답 비율, 교사 1등 일치율은 교사와 argmax가 같은 비율입니다. "
               "모두 학습한 같은 4개 대화에서 측정합니다. EOS·줄바꿈도 포함하므로 다음 절의 소리·생성도 따로 보세요. "
               "CE·KL 개선이 미학습 질문의 성능 향상을 뜻하지 않습니다. 곡선은 갱신 전, 표는 마지막 갱신 후 손실입니다. "
               "교사 가중치 불변과 gradient 없음은 assertion으로 확인했습니다."),
     ])
-    return (evaluation,)
+    return
 
 
 @app.cell
@@ -446,7 +477,7 @@ def _(mo):
 
 
 @app.cell
-def _(conversations, mo, pairs, teacher, tokenizer, torch, trained_students):
+def _(conversations, pairs, teacher, tokenizer, torch, trained_students):
     generation_rows, probability_rows = [], []
     for _i, (_animal, _answer) in enumerate(pairs):
         _prompt_ids = tokenizer.apply_chat_template(conversations[_i][:2], tokenize=True, add_generation_prompt=True)
@@ -462,8 +493,14 @@ def _(conversations, mo, pairs, teacher, tokenizer, torch, trained_students):
                                     "첫 토큰 정답": bool(_new_ids and _new_ids[0] == tokenizer.convert_tokens_to_ids(_answer))})
             probability_rows.append({"질문 동물": _animal, "model": _name,
                                      **{sound: float(_prob[tokenizer.convert_tokens_to_ids(sound)]) for _, sound in pairs}})
+    return (generation_rows, probability_rows,)
+
+
+@app.cell(hide_code=True)
+def _(generation_rows, mo, probability_rows):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([mo.ui.table(probability_rows, selection=None), mo.ui.table(generation_rows, selection=None)])
-    return generation_rows, probability_rows
+    return
 
 
 @app.cell
@@ -482,8 +519,9 @@ def _(alpha_ui, evaluation, generation_rows, hashlib, histories, json, output_di
     return experiment_dir, metrics
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(experiment_dir, mo):
+    # ▸ 결과 설명 — 실행하면 계산 값이 들어간 설명이 나타납니다 (marimo 표시 코드)
     mo.md(f"""
     ## 8. 원본 코드로 돌아가기와 수강생 과제
 
@@ -521,6 +559,9 @@ def _(experiment_dir, mo):
     **완료 기준:** KL 방향·온도·α를 설명하고 첫 응답 예측 위치를 찾으며,
     교사 gradient가 없고 학생은 갱신됨을 확인합니다. 일반화 평가는 별도 검증 데이터가 필요합니다.
     지표·곡선 원자료·생성·소스 해시: `{experiment_dir / 'metrics.json'}`
+
+    **다음 실습:** `minimind_dpo.py`. 지금까지는 "정답(또는 교사 분포)을 따라 하기"였고,
+    이제부터는 **두 응답 중 어느 쪽이 더 나은지**라는 선호 신호로 학습합니다.
     """)
     return
 

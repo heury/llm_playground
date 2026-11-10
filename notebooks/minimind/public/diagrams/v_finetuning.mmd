@@ -1,0 +1,9 @@
+flowchart TD
+            A["PNG bytes → PIL → processor"] --> B["pixels: B,N,3,32,32"]
+            B --> C["고정 SigLIP: B×N,4,16"]
+            C --> D["학습 Projector: B×N,4,32"]
+            E["input_ids: B,40"] --> F["토큰 임베딩: B,40,32"]
+            D --> G["image marker 4자리 교체"]
+            F --> G
+            G --> H["causal LLM → logits: B,40,V"]
+            H --> I["assistant 다음 토큰 CE"]

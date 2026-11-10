@@ -34,24 +34,19 @@ def _():
 
 @app.cell
 def _(mo):
-    mo.md("""
+    mo.md(r"""
     # MiniMind LoRA 실습: 작은 행렬만 학습하기
 
     **목표:** 학습된 모델의 원래 가중치는 유지하면서 저랭크 행렬 A/B만 학습해 출력 행동을 바꿉니다.
     `minimind/model/model_lora.py`의 적용·저장·복원·병합 함수를 직접 사용합니다.
-    모델 구조의 상세 설명은 `minimind_structure.py`에서 확인하세요.
 
-    이 노트북은 **단독 실행**할 수 있습니다. 첫 두 단계에서 네 문장을 학습한 작은 기준 모델을
-    CPU에서 직접 준비합니다. 이 준비 단계는 전체 매개변수 학습이고, 그 뒤가 LoRA 실습입니다.
-    다른 노트북 실행이나 체크포인트·모델 다운로드가 필요하지 않습니다.
+    SFT 노트북에서 본 것처럼 **SFT·DPO는 학습 목적**이고 **Full/LoRA는 갱신할 매개변수의 선택**입니다.
+    원본 `train_lora.py`는 `SFTDataset`으로 SFT와 같은 손실을 쓰되 LoRA 행렬만 학습합니다.
+    이 노트북은 LoRA 자체에 집중하기 위해 대화 template 대신 **구조 노트북의 네 문장 데이터**를 재사용합니다.
 
-    B는 배치 크기, T는 토큰 수, D는 은닉 차원입니다. 샘플 암기 결과이며 한국어 일반화 평가는 아닙니다.
-    셀을 재실행할 때는 항상 기준 모델의 새 복사본에 LoRA를 적용합니다.
-
-    **실습 방법:** 결과 예측 → 실행 → 관찰 → 이유 설명 순서로 진행합니다.
-    `@app.cell`은 셀 표시이며 함수의 인자·return은 셀 간 데이터 전달입니다.
-    `_`로 시작하는 중간 변수는 셀 안에서만 씁니다. 데이터와 rank를 바꾸면 관련 학습이 다시 시작됩니다.
-    아래의 `A`, `B`는 저랭크 행렬 이름이고, 앞에서 사용한 배치 크기 B와는 다른 기호입니다.
+    단독 실행을 위해 1~2절에서 기준 모델을 직접 준비합니다. 이 부분은 `minimind_structure.py`
+    1·5절과 같은 코드이므로 설명 없이 결과만 보고 3절부터 읽어도 됩니다.
+    아래의 `A`, `B`는 저랭크 행렬 이름이며 배치 크기 B와는 다른 기호입니다.
     """)
     return
 
@@ -59,17 +54,16 @@ def _(mo):
 @app.cell
 def _(mo):
     mo.md("""
-    ## 1. 샘플 데이터와 단어 사전
+    ## 1~2. 기준 모델 준비 (구조 노트북과 동일)
 
-    띄어쓰기 단위 사전으로 네 동물의 소리를 표현합니다. `<bos>`는 시작, `<eos>`는 끝입니다.
-    패딩 위치의 정답은 -100으로 두어 손실에서 제외합니다.
-    정답은 원래 입력 위치를 유지하며, 모델 내부에서 다음 토큰으로 한 칸 이동합니다.
+    네 문장 단어 사전 → 은닉 32·2층 MiniMind(seed 42) → 전체 매개변수 100 step 학습.
+    실제 작업에서는 사전 학습·SFT를 마친 체크포인트가 이 자리에 옵니다. 이 모델을 이후 동결합니다.
     """)
     return
 
 
 @app.cell
-def _(mo, torch):
+def _(torch):
     sentences = [
         "고양이 는 야옹 한다 .",
         "강아지 는 멍멍 한다 .",
@@ -97,10 +91,6 @@ def _(mo, torch):
         return ids, mask, targets
 
     input_ids, attention_mask, labels = make_batch(sentences)
-    mo.vstack([
-        mo.ui.table([{"ID": i, "토큰": w} for i, w in enumerate(vocabulary)], selection=None),
-        mo.md(f"첫 문장: `{decode(input_ids[0])}`\n\n입력 shape: `{tuple(input_ids.shape)}`"),
-    ])
     return (
         attention_mask, decode, encode, input_ids, labels,
         make_batch, sentences, token_to_id, vocabulary,
@@ -108,19 +98,7 @@ def _(mo, torch):
 
 
 @app.cell
-def _(mo):
-    mo.md("""
-    ## 2. 기준 모델 준비: 전체 매개변수 학습
-
-    은닉 차원 32, 2층인 MiniMind를 seed 42로 초기화하고 100 step 학습합니다.
-    동물 이름 뒤에 원래 소리를 생성하는지 확인하세요. 이후 이 모델을 동결합니다.
-    LoRA의 효과를 비교하기 위한 준비 단계이며, 실제 작업에서는 사전 학습된 체크포인트를 사용합니다.
-    """)
-    return
-
-
-@app.cell
-def _(MiniMindConfig, MiniMindForCausalLM, mo, torch, vocabulary):
+def _(MiniMindConfig, MiniMindForCausalLM, torch, vocabulary):
     config = MiniMindConfig(
         hidden_size=32, num_hidden_layers=2,
         num_attention_heads=4, num_key_value_heads=2,
@@ -129,20 +107,9 @@ def _(MiniMindConfig, MiniMindForCausalLM, mo, torch, vocabulary):
         flash_attn=False, use_moe=False,
         bos_token_id=1, eos_token_id=2,
     )
-    assert config.hidden_size % config.num_attention_heads == 0
-    assert config.num_attention_heads % config.num_key_value_heads == 0
-    assert config.head_dim % 2 == 0
     with torch.random.fork_rng(devices=[]):
         torch.manual_seed(42)
         initial_model = MiniMindForCausalLM(config).cpu().eval()
-    assert initial_model.lm_head.weight is initial_model.model.embed_tokens.weight
-    mo.vstack([
-        mo.md(f"고유 매개변수: **{sum(p.numel() for p in initial_model.parameters()):,}개**"),
-        mo.ui.table([
-            {"이름": name, "shape": str(tuple(p.shape)), "개수": p.numel()}
-            for name, p in initial_model.named_parameters()
-        ], selection=None, page_size=12),
-    ])
     return config, initial_model
 
 
@@ -166,7 +133,7 @@ def _(attention_mask, copy, initial_model, input_ids, labels, torch):
 
 
 @app.cell
-def _(decode, encode, final_pretrain_loss, initial_model, mo, plt, pretrain_losses, torch, trained_model):
+def _(decode, encode, plt, pretrain_losses, torch):
     def complete(model, prompt):
         model.eval()
         ids = torch.tensor([encode(prompt, add_eos=False)])
@@ -177,19 +144,25 @@ def _(decode, encode, final_pretrain_loss, initial_model, mo, plt, pretrain_loss
             )
         return decode(result[0])
 
-    _fig, _ax = plt.subplots(figsize=(6, 3))
+    base_training_fig, _ax = plt.subplots(figsize=(6, 3))
     _ax.plot(pretrain_losses)
     _ax.set(xlabel="Step", ylabel="Cross entropy", title="Full parameter training")
-    _fig.tight_layout()
+    base_training_fig.tight_layout()
+    return (base_training_fig, complete,)
+
+
+@app.cell(hide_code=True)
+def _(base_training_fig, complete, final_pretrain_loss, initial_model, mo, pretrain_losses, trained_model):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([
-        _fig,
+        base_training_fig,
         mo.md(f"같은 배치의 학습 전/후 손실: **{pretrain_losses[0]:.4f} → {final_pretrain_loss:.4f}**"),
         mo.ui.table([
             {"입력": p, "학습 전": complete(initial_model, p), "학습 후": complete(trained_model, p)}
             for p in ["고양이 는", "강아지 는", "소 는", "오리 는"]
         ], selection=None),
     ])
-    return (complete,)
+    return
 
 
 @app.cell
@@ -221,11 +194,7 @@ def _(mo):
     입력 4차원, 출력 3차원, rank 2인 작은 층으로 계산합니다.
     원본 `LoRA` 클래스는 직사각형도 지원하지만, 자동 적용 함수 `apply_lora`는 정사각형만 선택합니다.
 
-    ```text
-    x [1,4] ───────── W [3,4] ─────────→ 원본 출력 [1,3]
-       └── A [2,4] → 중간값 [1,2] → B [3,2] → 변화량 [1,3]
-                                                   두 출력을 더한다
-    ```
+    <img src="public/diagrams/lora.png" alt="LoRA: 동결된 W 경로와 A·B 경로의 합" width="700">
 
     PyTorch는 행 벡터를 쓰므로 실제 코드는 `x @ W.T + (x @ A.T) @ B.T`입니다.
     일반적으로 A는 `[r,in]`, B는 `[out,r]`이고, 변화 행렬 ΔW=BA는 `[out,in]`입니다.
@@ -235,34 +204,40 @@ def _(mo):
 
 
 @app.cell
-def _(LoRA, mo, torch):
+def _(LoRA, torch):
     with torch.random.fork_rng(devices=[]):
         torch.manual_seed(11)
         _linear = torch.nn.Linear(4, 3, bias=False)
         _adapter = LoRA(4, 3, rank=2)
     _x = torch.tensor([[1., 2., 0., -1.]])
     with torch.no_grad():
-        _original = _linear(_x)
-        _middle = _x @ _adapter.A.weight.T
-        _delta_initial = _middle @ _adapter.B.weight.T
-        torch.testing.assert_close(_adapter(_x), _delta_initial)
-        torch.testing.assert_close(_original + _delta_initial, _original)
+        demo_wx = _linear(_x)
+        demo_ax = _x @ _adapter.A.weight.T
+        demo_lora_delta_initial = demo_ax @ _adapter.B.weight.T
+        torch.testing.assert_close(_adapter(_x), demo_lora_delta_initial)
+        torch.testing.assert_close(demo_wx + demo_lora_delta_initial, demo_wx)
         # 0이 아닌 변화량도 관찰하도록 B에 직접 값을 넣습니다.
         _adapter.B.weight.fill_(0.2)
-        _delta = _adapter(_x)
+        demo_lora_delta = _adapter(_x)
         _merged_weight = _linear.weight + _adapter.B.weight @ _adapter.A.weight
-        torch.testing.assert_close(_original + _delta, _x @ _merged_weight.T)
-        _rank = int(torch.linalg.matrix_rank(_adapter.B.weight @ _adapter.A.weight))
-        assert _rank <= 2
+        torch.testing.assert_close(demo_wx + demo_lora_delta, _x @ _merged_weight.T)
+        demo_rank = int(torch.linalg.matrix_rank(_adapter.B.weight @ _adapter.A.weight))
+        assert demo_rank <= 2
+    return (demo_ax, demo_lora_delta, demo_lora_delta_initial, demo_rank, demo_wx,)
+
+
+@app.cell(hide_code=True)
+def _(demo_ax, demo_lora_delta, demo_lora_delta_initial, demo_rank, demo_wx, mo):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([
         mo.ui.table([
-            {"단계": "원본 Wx", "값": str(_original.tolist())},
-            {"단계": "Ax (두 차원의 중간값)", "값": str(_middle.tolist())},
-            {"단계": "초기 B(Ax)", "값": str(_delta_initial.tolist())},
-            {"단계": "B에 0.2를 넣은 B(Ax)", "값": str(_delta.tolist())},
-            {"단계": "원본 + 변화량", "값": str((_original + _delta).tolist())},
+            {"단계": "원본 Wx", "값": str(demo_wx.tolist())},
+            {"단계": "Ax (두 차원의 중간값)", "값": str(demo_ax.tolist())},
+            {"단계": "초기 B(Ax)", "값": str(demo_lora_delta_initial.tolist())},
+            {"단계": "B에 0.2를 넣은 B(Ax)", "값": str(demo_lora_delta.tolist())},
+            {"단계": "원본 + 변화량", "값": str((demo_wx + demo_lora_delta).tolist())},
         ], selection=None),
-        mo.md(f"**관찰·해설:** 초기 변화량은 0입니다. B에 값을 넣으면 출력이 달라집니다. 원본에 분기를 더한 출력과 W+BA 병합 출력도 같습니다. 여기서는 실제 변화 행렬 rank가 {_rank}로, 설정한 상한 2보다 작습니다. 이 셀의 B 변경은 계산 관찰용이며 다음 셀은 새로 초기화합니다."),
+        mo.md(f"**관찰·해설:** 초기 변화량은 0입니다. B에 값을 넣으면 출력이 달라집니다. 원본에 분기를 더한 출력과 W+BA 병합 출력도 같습니다. 여기서는 실제 변화 행렬 rank가 {demo_rank}로, 설정한 상한 2보다 작습니다. 이 셀의 B 변경은 계산 관찰용이며 다음 셀은 새로 초기화합니다."),
     ])
     return
 
@@ -284,7 +259,7 @@ def _(mo):
 
 
 @app.cell
-def _(LoRA, mo, torch):
+def _(LoRA, torch):
     with torch.random.fork_rng(devices=[]):
         torch.manual_seed(12)
         _base = torch.nn.Linear(4, 3, bias=False).eval()
@@ -316,11 +291,17 @@ def _(LoRA, mo, torch):
             assert _norms["A"] > 0
     with torch.no_grad():
         assert not (_base(_x) + _branch(_x)).requires_grad
+    return (gradient_observations,)
+
+
+@app.cell(hide_code=True)
+def _(gradient_observations, mo):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([
         mo.ui.table(gradient_observations, selection=None),
         mo.md("**해설:** W의 gradient는 없고 값도 유지됩니다. 첫 step에는 B만 바뀌고, 두 번째에는 A도 바뀝니다. 이 관찰은 B=0 초기화와 이 예제의 목표에 따른 결과입니다. `None`과 수치 0인 gradient는 구분하세요."),
     ])
-    return (gradient_observations,)
+    return
 
 
 @app.cell
@@ -335,15 +316,16 @@ def _(mo):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(mo):
+    # ▸ 실습 설정 위젯 — 실행하면 슬라이더·선택 상자가 나타납니다 (marimo 표시 코드)
     lora_rank = mo.ui.dropdown([2, 4, 8], value=4, label="LoRA rank")
     lora_rank
     return (lora_rank,)
 
 
 @app.cell
-def _(apply_lora, copy, input_ids, lora_rank, mo, torch, trained_model):
+def _(apply_lora, copy, input_ids, lora_rank, torch, trained_model):
     def make_lora_model(base, rank):
         # apply_lora의 forward 클로저는 원래 층을 참조합니다.
         # 적용 후 deepcopy하지 말고, 원본 복사 → 동결 → 적용 순서를 지킵니다.
@@ -362,20 +344,32 @@ def _(apply_lora, copy, input_ids, lora_rank, mo, torch, trained_model):
     with torch.no_grad():
         torch.testing.assert_close(adapted_start(input_ids).logits, trained_model(input_ids).logits)
     adapter_parameter_count = sum(p.numel() for p in adapted_start.parameters() if p.requires_grad)
-    _all_count = sum(p.numel() for p in adapted_start.parameters())
-    _base_count = sum(p.numel() for p in trained_model.parameters())
+    lora_total_params = sum(p.numel() for p in adapted_start.parameters())
+    base_total_params = sum(p.numel() for p in trained_model.parameters())
+    return (
+        adapted_start,
+        adapter_parameter_count,
+        base_total_params,
+        lora_total_params,
+        make_lora_model,
+    )
+
+
+@app.cell(hide_code=True)
+def _(adapted_start, adapter_parameter_count, base_total_params, lora_total_params, mo):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([
-        mo.md(f"초기 출력 일치 검증 통과. 학습 매개변수: **{adapter_parameter_count:,} / {_all_count:,} ({100 * adapter_parameter_count / _all_count:.1f}%)**"),
+        mo.md(f"초기 출력 일치 검증 통과. 학습 매개변수: **{adapter_parameter_count:,} / {lora_total_params:,} ({100 * adapter_parameter_count / lora_total_params:.1f}%)**"),
         mo.ui.table([
-            {"구분": "원본 모델", "보유 매개변수": _base_count, "학습 대상": _base_count},
-            {"구분": "LoRA 적용 모델", "보유 매개변수": _all_count, "학습 대상": adapter_parameter_count},
+            {"구분": "원본 모델", "보유 매개변수": base_total_params, "학습 대상": base_total_params},
+            {"구분": "LoRA 적용 모델", "보유 매개변수": lora_total_params, "학습 대상": adapter_parameter_count},
         ], selection=None),
         mo.ui.table([
             {"적용된 층": n, "A shape": str(tuple(m.lora.A.weight.shape)), "B shape": str(tuple(m.lora.B.weight.shape))}
             for n, m in adapted_start.named_modules() if hasattr(m, "lora")
         ], selection=None),
     ])
-    return adapter_parameter_count, make_lora_model
+    return
 
 
 @app.cell
@@ -412,8 +406,9 @@ def _(lora_rank, make_batch, make_lora_model, torch, trained_model):
     return adapted_model, adaptation_sentences, final_lora_loss, lora_losses
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(adaptation_sentences, adapted_model, complete, final_lora_loss, lora_losses, mo, plt, trained_model):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     _fig, _ax = plt.subplots(figsize=(6, 3))
     _ax.plot(lora_losses)
     _ax.set(xlabel="Step", ylabel="Cross entropy", title="LoRA adaptation / changed animal sounds")
@@ -455,7 +450,7 @@ def _(mo):
 
 
 @app.cell
-def _(MiniMindForCausalLM, adapted_model, config, copy, input_ids, load_lora, lora_rank, make_lora_model, merge_lora, mo, save_lora, tempfile, torch, trained_model):
+def _(MiniMindForCausalLM, adapted_model, config, copy, input_ids, load_lora, lora_rank, make_lora_model, merge_lora, save_lora, tempfile, torch, trained_model):
     import os as _os
 
     with tempfile.TemporaryDirectory(prefix="minimind-lora-") as _directory:
@@ -481,11 +476,17 @@ def _(MiniMindForCausalLM, adapted_model, config, copy, input_ids, load_lora, lo
         merge_max_error = (_restored_logits - _merged_logits).abs().max().item()
         torch.testing.assert_close(_reference, _restored_logits, atol=0.03, rtol=0.01)
         torch.testing.assert_close(_restored_logits, _merged_logits, atol=0.03, rtol=0.01)
+    return (file_size_rows, merge_max_error, restore_max_error,)
+
+
+@app.cell(hide_code=True)
+def _(file_size_rows, merge_max_error, mo, restore_max_error):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([
         mo.ui.table(file_size_rows, selection=None),
         mo.md(f"저장·복원·병합 검증 통과. 복원 최대 오차 `{restore_max_error:.2e}`, 병합 최대 오차 `{merge_max_error:.2e}`. 임시 파일 정리 완료."),
     ])
-    return file_size_rows, merge_max_error, restore_max_error
+    return
 
 
 @app.cell
@@ -512,6 +513,8 @@ def _(mo):
 
     검증한 것은 작은 데이터의 학습과 가중치 불변성·저장·복원·병합입니다.
     별도 검증 세트에 대한 일반화 성능은 측정하지 않았습니다.
+
+    **다음 실습:** `minimind_distillation.py`. 갱신 대상 대신 **정답 신호의 종류**(hard label → 교사 분포)를 바꿉니다.
     """)
     return
 

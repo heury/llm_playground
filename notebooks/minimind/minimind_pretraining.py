@@ -58,8 +58,8 @@ def _(mo):
     이 저장소의 SFT는 대화에서 주로 assistant 응답 위치를 학습한다는 데이터·마스킹 차이가 있습니다.
     여기서 다루는 것은 자기회귀 사전 학습이며, 사전 학습의 모든 종류를 다루지는 않습니다.
 
-    **진행:** 예측 → 실행 → 표·곡선 관찰 → 이유 설명. `@app.cell`은 marimo 셀이고,
-    함수 인자·return은 셀 간 전달, `_` 변수는 셀 내부 계산입니다.
+    **학습 파이프라인의 첫 노트북**입니다. 여기서 정리하는 정답 이동·패딩 마스크·기울기 누적·
+    학습률·체크포인트는 SFT·LoRA·증류·DPO 노트북에서 다시 자세히 설명하지 않습니다.
     아래 데이터 설정을 바꾸면 관련 학습을 새 모델에서 시작합니다.
     원본 trainer 전체를 실행하거나 원래 모델·데이터 파일을 덮어쓰지 않습니다.
 
@@ -83,7 +83,7 @@ def _(mo):
 
 
 @app.cell
-def _(json, mo, output_dir):
+def _(json, output_dir):
     animal_sounds = [("고양이", "야옹"), ("강아지", "멍멍"), ("소", "음메"), ("오리", "꽥꽥")]
     held_out_pairs = {("큰", "고양이"), ("작은", "강아지"), ("큰", "소"), ("작은", "오리")}
     train_texts, validation_texts = [], []
@@ -99,11 +99,17 @@ def _(json, mo, output_dir):
         _path.write_text("".join(json.dumps({"text": t}, ensure_ascii=False) + "\n" for t in _texts), encoding="utf-8")
     assert len(train_texts) == 8 and len(validation_texts) == 4
     assert not set(train_texts) & set(validation_texts)
+    return (animal_sounds, train_path, train_texts, validation_path, validation_texts,)
+
+
+@app.cell(hide_code=True)
+def _(mo, train_texts, validation_texts):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.ui.table([
         {"분할": split, "text": text}
         for split, texts in [("학습", train_texts), ("검증", validation_texts)] for text in texts
     ], selection=None)
-    return animal_sounds, train_path, train_texts, validation_path, validation_texts
+    return
 
 
 @app.cell
@@ -121,7 +127,7 @@ def _(mo):
 
 
 @app.cell
-def _(PreTrainedTokenizerFast, Tokenizer, mo, models, output_dir, pre_tokenizers, train_texts, validation_texts):
+def _(PreTrainedTokenizerFast, Tokenizer, models, output_dir, pre_tokenizers, train_texts, validation_texts):
     vocabulary = ["[PAD]", "[BOS]", "[EOS]", "[UNK]"] + sorted({w for text in train_texts for w in text.split()})
     _backend = Tokenizer(models.WordLevel({word: i for i, word in enumerate(vocabulary)}, unk_token="[UNK]"))
     _backend.pre_tokenizer = pre_tokenizers.WhitespaceSplit()
@@ -134,15 +140,22 @@ def _(PreTrainedTokenizerFast, Tokenizer, mo, models, output_dir, pre_tokenizers
     tokenizer.save_pretrained(tokenizer_dir)
     assert all(tokenizer.unk_token_id not in tokenizer(t, add_special_tokens=False).input_ids for t in validation_texts)
     assert tokenizer.unk_token_id in tokenizer("새로운 고양이", add_special_tokens=False).input_ids
+    return (tokenizer, tokenizer_dir, vocabulary,)
+
+
+@app.cell(hide_code=True)
+def _(mo, tokenizer, vocabulary):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([
         mo.ui.table([{"ID": i, "단어": w} for i, w in enumerate(vocabulary)], selection=None),
         mo.md(f"검증 문장의 단어는 모두 사전에 있습니다. `새로운 고양이` → `{tokenizer('새로운 고양이', add_special_tokens=False).input_ids}`. **해설:** UNK는 단어 구분을 잃으므로 단어 습득 평가로 쓰지 않습니다."),
     ])
-    return tokenizer, tokenizer_dir, vocabulary
+    return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(mo):
+    # ▸ 실습 설정 위젯 — 실행하면 슬라이더·선택 상자가 나타납니다 (marimo 표시 코드)
     max_seq_len = mo.ui.dropdown([6, 8, 10], value=10, label="고정 시퀀스 길이")
     training_epochs = mo.ui.slider(10, 50, step=10, value=40, label="학습 epoch")
     accumulation_steps = mo.ui.dropdown([1, 2, 3], value=2, label="기울기 누적 microbatch 수")
@@ -164,12 +177,18 @@ def _(mo):
 
 
 @app.cell
-def _(DataLoader, PretrainDataset, max_seq_len, mo, tokenizer, train_path, validation_path):
+def _(DataLoader, PretrainDataset, max_seq_len, tokenizer, train_path, validation_path):
     train_dataset = PretrainDataset(str(train_path), tokenizer, max_length=max_seq_len.value)
     validation_dataset = PretrainDataset(str(validation_path), tokenizer, max_length=max_seq_len.value)
     input_ids, labels = next(iter(DataLoader(train_dataset, batch_size=2, shuffle=False, num_workers=0)))
     assert input_ids.shape == labels.shape == (2, max_seq_len.value)
     assert (labels[input_ids == tokenizer.pad_token_id] == -100).all()
+    return (input_ids, labels, train_dataset, validation_dataset,)
+
+
+@app.cell(hide_code=True)
+def _(input_ids, labels, max_seq_len, mo, tokenizer):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([
         mo.md(f"원본 Dataset → DataLoader 배치 shape: `{tuple(input_ids.shape)}`. dtype: `{input_ids.dtype}`."),
         mo.ui.table([
@@ -178,7 +197,7 @@ def _(DataLoader, PretrainDataset, max_seq_len, mo, tokenizer, train_path, valid
             for b in range(2) for t in range(max_seq_len.value)
         ], selection=None),
     ])
-    return input_ids, labels, train_dataset, validation_dataset
+    return
 
 
 @app.cell
@@ -217,30 +236,36 @@ def _(MiniMindConfig, init_model, tokenizer, tokenizer_dir, torch):
 
 
 @app.cell
-def _(F, initial_model, input_ids, labels, mo, tokenizer, torch):
+def _(F, initial_model, input_ids, labels, tokenizer, torch):
     with torch.no_grad():
         _out = initial_model(input_ids, labels=labels)
-        _targets = labels[:, 1:]
-        _valid = _targets != -100
-        _per_position = F.cross_entropy(
-            _out.logits[:, :-1].reshape(-1, len(tokenizer)), _targets.reshape(-1),
+        shifted_targets = labels[:, 1:]
+        valid_targets = shifted_targets != -100
+        per_position = F.cross_entropy(
+            _out.logits[:, :-1].reshape(-1, len(tokenizer)), shifted_targets.reshape(-1),
             ignore_index=-100, reduction="none",
-        ).reshape_as(_targets)
-        _manual_loss = _per_position[_valid].mean()
-        torch.testing.assert_close(_manual_loss, _out.loss)
+        ).reshape_as(shifted_targets)
+        manual_loss = per_position[valid_targets].mean()
+        torch.testing.assert_close(manual_loss, _out.loss)
         _changed_padding = input_ids.clone()
         _changed_padding[input_ids == tokenizer.pad_token_id] = tokenizer.unk_token_id
         _changed_out = initial_model(_changed_padding, labels=labels)
-        torch.testing.assert_close(_out.logits[:, :-1][_valid], _changed_out.logits[:, :-1][_valid])
+        torch.testing.assert_close(_out.logits[:, :-1][valid_targets], _changed_out.logits[:, :-1][valid_targets])
         torch.testing.assert_close(_out.loss, _changed_out.loss)
+    return (manual_loss, per_position, shifted_targets, valid_targets,)
+
+
+@app.cell(hide_code=True)
+def _(input_ids, manual_loss, mo, per_position, shifted_targets, tokenizer, valid_targets):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([
         mo.ui.table([
             {"입력 위치 토큰": tokenizer.convert_ids_to_tokens(int(input_ids[0, t])),
-             "다음 정답": "무시" if int(_targets[0, t]) == -100 else tokenizer.convert_ids_to_tokens(int(_targets[0, t])),
-             "평균에 포함": bool(_valid[0, t]), "위치별 손실": float(_per_position[0, t])}
+             "다음 정답": "무시" if int(shifted_targets[0, t]) == -100 else tokenizer.convert_ids_to_tokens(int(shifted_targets[0, t])),
+             "평균에 포함": bool(valid_targets[0, t]), "위치별 손실": float(per_position[0, t])}
             for t in range(input_ids.shape[1] - 1)
         ], selection=None),
-        mo.md(f"유효한 정답 {_valid.sum().item()}개만 평균: `{float(_manual_loss):.4f}`. 원본 loss와 일치합니다. **관찰:** 뒤의 PAD 입력을 바꾸어도 유효 예측과 손실은 같습니다. 길이 6 설정에는 PAD가 없을 수 있으므로 표를 함께 확인하세요."),
+        mo.md(f"유효한 정답 {valid_targets.sum().item()}개만 평균: `{float(manual_loss):.4f}`. 원본 loss와 일치합니다. **관찰:** 뒤의 PAD 입력을 바꾸어도 유효 예측과 손실은 같습니다. 길이 6 설정에는 PAD가 없을 수 있으므로 표를 함께 확인하세요."),
     ])
     return
 
@@ -263,7 +288,7 @@ def _(mo):
 
 
 @app.cell
-def _(copy, initial_model, mo, torch, train_dataset):
+def _(copy, initial_model, torch, train_dataset):
     _by_length = {}
     for _i in range(len(train_dataset)):
         _x, _y = train_dataset[_i]
@@ -286,8 +311,14 @@ def _(copy, initial_model, mo, torch, train_dataset):
     (_tail(_x[:1], labels=_y[:1]).loss / 3).backward()
     for _p, _q in zip(_full.parameters(), _tail.parameters()):
         torch.testing.assert_close(_p.grad / 3, _q.grad, atol=1e-6, rtol=1e-4)
-    mo.md(f"같은 길이의 큰 배치와 누적 gradient 최대 오차: `{accumulation_max_error:.2e}`. **해설:** A=3인데 마지막 한 microbatch만 남은 원본 방식에서는 그 배치 단독 gradient의 1/3입니다. 아래 학습은 이 원본 동작을 유지하며 그룹 크기를 기록합니다. 토큰 수 가중 평균 방식으로 바꾸려면 유효 정답 수에 따라 loss를 가중해야 합니다.")
     return (accumulation_max_error,)
+
+
+@app.cell(hide_code=True)
+def _(accumulation_max_error, mo):
+    # ▸ 결과 설명 — 실행하면 계산 값이 들어간 설명이 나타납니다 (marimo 표시 코드)
+    mo.md(f"같은 길이의 큰 배치와 누적 gradient 최대 오차: `{accumulation_max_error:.2e}`. **해설:** A=3인데 마지막 한 microbatch만 남은 원본 방식에서는 그 배치 단독 gradient의 1/3입니다. 아래 학습은 이 원본 동작을 유지하며 그룹 크기를 기록합니다. 토큰 수 가중 평균 방식으로 바꾸려면 유효 정답 수에 따라 loss를 가중해야 합니다.")
+    return
 
 
 @app.cell
@@ -313,18 +344,18 @@ def _(DataLoader, math, torch):
 
 @app.cell
 def _(mo):
-    mo.md("""
+    mo.md(r"""
     ## 6. 원본 흐름으로 작은 모델 사전 학습
 
-    ```text
-    epoch별 순서 섞기 → DataLoader → get_lr → forward
-    → (주 손실 + 보조 손실)/누적 수 → backward
-    → 누적 경계 또는 마지막 배치: clip_grad_norm → step → zero_grad
-    ```
+    <img src="public/diagrams/pretraining.png" alt="사전 학습 루프: 누적 경계에서만 optimizer step" width="280">
 
     Dense 모델이므로 aux_loss=0이지만 원본의 합산 위치를 유지합니다.
     CPU float32이므로 원본의 AMP/GradScaler는 생략하고, DDP·compile·wandb도 사용하지 않습니다.
     cosine 학습률은 원본 get_lr를 호출하며 **microstep마다** 바뀝니다. warmup은 없는 원본 수식입니다.
+
+    $$\mathrm{lr}(s)=\mathrm{lr}_{0}\left(0.1+0.45\left(1+\cos\frac{\pi s}{S}\right)\right)$$
+
+    s=0에서 lr₀, s=S(전체 microstep)에서 0.1·lr₀입니다. 0까지 내려가지 않는 바닥값이 있습니다.
     실제 optimizer step에는 그 누적 그룹의 마지막 microstep에서 설정한 학습률이 적용됩니다.
     gradient clipping은 optimizer step 직전의 누적 gradient 크기를 제한합니다.
     학습·검증 평가는 유효 토큰 수로 가중 평균하고, 검증에서는 backward를 하지 않습니다.
@@ -333,7 +364,7 @@ def _(mo):
 
 
 @app.cell
-def _(DataLoader, SkipBatchSampler, accumulation_steps, copy, evaluate_pretraining, get_lr, initial_model, mo, output_dir, plt, torch, train_dataset, training_epochs, uuid4, validation_dataset):
+def _(DataLoader, SkipBatchSampler, accumulation_steps, copy, evaluate_pretraining, get_lr, initial_model, output_dir, plt, torch, train_dataset, training_epochs, uuid4, validation_dataset):
     training_dir = output_dir / f"training-{uuid4().hex[:8]}"
     training_dir.mkdir()
     pretrained_model = copy.deepcopy(initial_model).train()
@@ -344,7 +375,7 @@ def _(DataLoader, SkipBatchSampler, accumulation_steps, copy, evaluate_pretraini
     _iters = (len(train_dataset) + 1) // 2
     _total_microsteps = training_epochs.value * _iters
     training_trace, epoch_metrics = [], []
-    _updates = 0
+    optimizer_updates = 0
     for _epoch in range(training_epochs.value):
         _generator = torch.Generator().manual_seed(42 + _epoch)
         _indices = torch.randperm(len(train_dataset), generator=_generator).tolist()
@@ -369,11 +400,11 @@ def _(DataLoader, SkipBatchSampler, accumulation_steps, copy, evaluate_pretraini
                 assert _after_clip <= 1.00001
                 pretrain_optimizer.step()
                 pretrain_optimizer.zero_grad(set_to_none=True)
-                _updates += 1
+                optimizer_updates += 1
             training_trace.append({"epoch": _epoch + 1, "microstep": _step, "global_microstep": _global_step,
                                    "lr": _lr, "raw_loss": float(_raw_loss.detach()), "backward_loss": float(_backward_loss.detach()),
                                    "valid_targets": int((_labels[:, 1:] != -100).sum()), "update": _update_now,
-                                   "optimizer_steps_so_far": _updates, "group_size": _group_size,
+                                   "optimizer_steps_so_far": optimizer_updates, "group_size": _group_size,
                                    "grad_norm_before_clip": _before_clip, "grad_norm_after_clip": _after_clip})
             if _update_now:
                 _group_size = 0
@@ -386,33 +417,58 @@ def _(DataLoader, SkipBatchSampler, accumulation_steps, copy, evaluate_pretraini
     assert final_train_metrics["loss"] < initial_train_metrics["loss"]
     pretraining_metrics = {"initial_train": initial_train_metrics, "final_train": final_train_metrics,
                            "initial_validation": initial_validation_metrics, "final_validation": final_validation_metrics,
-                           "microsteps": len(training_trace), "optimizer_steps": _updates,
+                           "microsteps": len(training_trace), "optimizer_steps": optimizer_updates,
                            "accumulation_steps": accumulation_steps.value, "epochs": training_epochs.value,
                            "max_seq_len": train_dataset.max_length}
-    _fig, _axes = plt.subplots(1, 2, figsize=(10, 3))
+    pretrain_fig, _axes = plt.subplots(1, 2, figsize=(10, 3))
     _axes[0].plot([r["epoch"] for r in epoch_metrics], [r["train_loss"] for r in epoch_metrics], label="Train")
     _axes[0].plot([r["epoch"] for r in epoch_metrics], [r["validation_loss"] for r in epoch_metrics], label="Validation")
     _axes[0].set(xlabel="Completed epoch", ylabel="Token-mean cross entropy")
     _axes[0].legend()
     _axes[1].plot([r["global_microstep"] for r in training_trace], [r["lr"] for r in training_trace])
     _axes[1].set(xlabel="Microstep", ylabel="Learning rate", title="Original get_lr / no warmup")
-    _fig.tight_layout()
-    mo.vstack([
-        _fig,
-        mo.ui.table([{"분할": name, **metrics} for name, metrics in [("학습 전 train", initial_train_metrics), ("학습 후 train", final_train_metrics), ("학습 전 validation", initial_validation_metrics), ("학습 후 validation", final_validation_metrics)]], selection=None),
-        mo.md(f"microstep {len(training_trace)}회, optimizer step {_updates}회. 유효 토큰 평균 loss의 exp가 perplexity입니다. 같은 tokenizer·같은 데이터 조건에서 비교하고 언어 능력 전체 점수로 해석하지 않습니다."),
-        mo.ui.table(training_trace[:8], selection=None),
-        mo.md("**관찰:** update=True일 때만 갱신합니다. A=3이면 epoch 마지막에 group_size=1인 갱신이 나옵니다. 이때도 loss를 3으로 나누는 원본 동작과, clip 전후 norm을 함께 확인하세요."),
-    ])
+    pretrain_fig.tight_layout()
     return (
-        epoch_metrics, final_train_metrics, final_validation_metrics, initial_train_metrics,
-        initial_validation_metrics, pretrain_optimizer, pretrained_model, pretraining_metrics,
-        training_dir, training_trace,
+        epoch_metrics,
+        final_train_metrics,
+        final_validation_metrics,
+        initial_train_metrics,
+        initial_validation_metrics,
+        optimizer_updates,
+        pretrain_fig,
+        pretrain_optimizer,
+        pretrained_model,
+        pretraining_metrics,
+        training_dir,
+        training_trace,
     )
 
 
+@app.cell(hide_code=True)
+def _(final_train_metrics, final_validation_metrics, initial_train_metrics, initial_validation_metrics, mo, optimizer_updates, pretrain_fig, training_trace):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
+    mo.vstack([
+        pretrain_fig,
+        mo.ui.table([{"분할": name, **metrics} for name, metrics in [("학습 전 train", initial_train_metrics), ("학습 후 train", final_train_metrics), ("학습 전 validation", initial_validation_metrics), ("학습 후 validation", final_validation_metrics)]], selection=None),
+        mo.md(f"microstep {len(training_trace)}회, optimizer step {optimizer_updates}회. 유효 토큰 평균 loss의 exp가 perplexity입니다. 같은 tokenizer·같은 데이터 조건에서 비교하고 언어 능력 전체 점수로 해석하지 않습니다."),
+        mo.ui.table(training_trace[:8], selection=None),
+        mo.md("**관찰:** update=True일 때만 갱신합니다. A=3이면 epoch 마지막에 group_size=1인 갱신이 나옵니다. 이때도 loss를 3으로 나누는 원본 동작과, clip 전후 norm을 함께 확인하세요."),
+    ])
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ## 7. 문장 이어 쓰기와 검증 해석
+
+    **예측:** 손실 감소가 모든 입력의 정답 생성을 보장할까요? 학습 8개와 검증 4개 원문 각각의 앞부분을 넣습니다. 원문 분할과 생성 결과를 함께 읽으세요.
+    """)
+    return
+
+
 @app.cell
-def _(animal_sounds, initial_model, mo, pretrained_model, tokenizer, torch, train_texts):
+def _(animal_sounds, initial_model, pretrained_model, tokenizer, torch, train_texts):
     def complete_pretraining(model, prompt):
         prefix = [tokenizer.bos_token_id] + tokenizer(prompt, add_special_tokens=False).input_ids
         model.eval()
@@ -428,12 +484,17 @@ def _(animal_sounds, initial_model, mo, pretrained_model, tokenizer, torch, trai
                                     "입력": _prefix, "원래 규칙의 다음 단어": _sound,
                                     "학습 전": complete_pretraining(initial_model, _prefix),
                                     "학습 후": complete_pretraining(pretrained_model, _prefix)})
+    return (complete_pretraining, generation_rows,)
+
+
+@app.cell(hide_code=True)
+def _(generation_rows, mo):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([
-        mo.md("## 7. 문장 이어 쓰기와 검증 해석\n\n**예측:** 손실 감소가 모든 입력의 정답 생성을 보장할까요? 학습 8개와 검증 4개 원문 각각의 앞부분을 넣습니다. 원문 분할과 생성 결과를 함께 읽으세요."),
         mo.ui.table(generation_rows, selection=None),
         mo.md("**해설:** greedy 생성은 점수가 가장 큰 다음 토큰을 반복 선택합니다. 학습 손실, 검증 손실, 문장별 결과를 따로 판단하세요. 길이 6으로 잘라 학습했다면 생성 문장이 짧아질 수 있습니다. 이 작은 데이터 실험은 한국어 일반화 성능 평가가 아닙니다."),
     ])
-    return complete_pretraining, generation_rows
+    return
 
 
 @app.cell
@@ -452,7 +513,7 @@ def _(mo):
 
 
 @app.cell
-def _(MiniMindForCausalLM, accumulation_steps, copy, input_ids, labels, lm_checkpoint, lm_config, mo, pretrain_optimizer, pretrained_model, tokenizer_dir, torch, training_dir, training_epochs, training_trace):
+def _(MiniMindForCausalLM, accumulation_steps, copy, input_ids, labels, lm_checkpoint, lm_config, pretrain_optimizer, pretrained_model, tokenizer_dir, torch, training_dir, training_epochs, training_trace):
     lm_checkpoint(lm_config, weight="pretrain_lab", model=pretrained_model, optimizer=pretrain_optimizer,
                   epoch=training_epochs.value - 1, step=training_trace[-1]["microstep"], save_dir=str(training_dir),
                   seed=42, accumulation_steps=accumulation_steps.value, tokenizer_path=str(tokenizer_dir))
@@ -477,12 +538,18 @@ def _(MiniMindForCausalLM, accumulation_steps, copy, input_ids, labels, lm_check
         torch.testing.assert_close(_a, _b, atol=1e-7, rtol=1e-6)
         resume_max_error = max(resume_max_error, float((_a.detach() - _b.detach()).abs().max()))
     checkpoint_rows = [{"파일": p.name, "bytes": p.stat().st_size} for p in sorted(training_dir.glob("*.pth"))]
+    return (checkpoint_rows, resume_max_error,)
+
+
+@app.cell(hide_code=True)
+def _(checkpoint_rows, mo, resume_max_error, training_dir):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([
         mo.ui.table(checkpoint_rows, selection=None),
         mo.md(f"동일한 추가 optimizer step 후 최대 가중치 오차: `{resume_max_error:.2e}`. 저장 위치: `{training_dir}`. 노트북의 원래 학습 모델은 복사했으므로 변경하지 않았습니다."),
         mo.md("**해설:** 같은 초기 가중치만이 아니라 optimizer 상태도 필요합니다. 실제 중간 재개에는 셔플 순서·건너뛸 배치·난수 상태·누적 중인 gradient도 고려해야 합니다. 여기서는 dropout=0, 고정 추가 배치, 누적 경계 저장 조건입니다."),
     ])
-    return checkpoint_rows, resume_max_error
+    return
 
 
 @app.cell
@@ -520,6 +587,8 @@ def _(mo):
 
     **기록할 것:** 설정, 유효 정답 수, 학습·검증 loss/perplexity, 생성 결과,
     microstep·optimizer step 수, 체크포인트 경로를 적으세요. 대규모 학습·GPU 성능·일반화는 별도 검증이 필요합니다.
+
+    **다음 실습:** `minimind_sft.py`. 같은 다음 토큰 손실에 **대화 형식과 assistant 정답 마스크**가 더해집니다.
     """)
     return
 

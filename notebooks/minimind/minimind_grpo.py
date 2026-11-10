@@ -27,6 +27,7 @@ def _():
     sys.path.insert(0, str(repo_root / "projects/minimind"))
     from dataset.lm_dataset import RLAIFDataset
     from model.model_minimind import MiniMindConfig, MiniMindForCausalLM
+    from trainer.gsm8k_reward import score_gsm8k_response
 
     torch.set_num_threads(2)
     run_dir = repo_root / "outputs" / "notebooks" / (
@@ -35,26 +36,25 @@ def _():
     run_dir.mkdir(parents=True, exist_ok=True)
     datasets.config.HF_DATASETS_CACHE = run_dir / "dataset-cache"
     datasets.disable_progress_bars()
-    return (ast, copy, json, random, re, sys, datetime, Path, SimpleNamespace,
+    return (ast, copy, json, random, re, SimpleNamespace,
             mo, plt, torch, repo_root, RLAIFDataset, MiniMindConfig,
-            MiniMindForCausalLM, AutoTokenizer, run_dir)
+            MiniMindForCausalLM, AutoTokenizer, run_dir, score_gsm8k_response)
 
 
 @app.cell
 def _(mo):
     mo.md(r"""
-    # MiniMind GRPO: 같은 질문에 대한 여러 답으로 정책 개선하기
+    # MiniMind GRPO와 추론(reasoning) 모델: 같은 질문의 여러 답으로 정책 개선하기
 
     **학습 목표:** `train_grpo.py`와 `lm_dataset.py`를 읽고, 질문 → 여러 응답 → 보상 →
     그룹 내 advantage → 응답 토큰의 log probability → 손실 → 가중치 갱신을 설명합니다.
-    SFT의 정답 토큰 학습을 알고 시작하며, 모델 구조는 `minimind_structure.py`를 참고하세요.
-
-    이 노트북은 기존 실습과 같은 **marimo** 형식입니다. **예측 → 실행 → 관찰 → 해설** 순서로 진행하세요.
-    셀 함수의 인자와 return은 셀 간 데이터 전달입니다. `_`로 시작하는 변수는 해당 셀에서만 사용합니다.
+    또한 `<think>` 블록을 쓰는 **추론 모델에 어떤 보상을 주는지**를 원본 보상 함수로 확인합니다.
+    SFT → DPO → PPO 다음 순서를 권장합니다. PPO의 ratio·clip·reference KL은 다시 자세히 설명하지 않습니다.
 
     1. 실제 `RLAIFDataset`과 저장소의 토크나이저로 입력 형식을 확인합니다.
-    2. 작은 숫자로 보상·advantage·마스크·GRPO/CISPO를 계산합니다.
-    3. 작은 실제 MiniMind에서 응답을 샘플링하고 CPU로 GRPO fine tuning합니다.
+    2. 작은 숫자로 보상·advantage를 계산하고, think 형식 보상과 정답(GSM8K) 보상을 비교합니다.
+    3. 마스크·GRPO/CISPO 손실을 계산합니다.
+    4. 작은 실제 MiniMind에서 응답을 샘플링하고 CPU로 GRPO fine tuning합니다.
 
     모델·데이터 다운로드와 GPU가 필요하지 않습니다. 마지막 학습은 두 질문과 한 토큰 응답으로
     축소한 교육용 실험이며, 한국어 대화 성능이나 GSM8K 성능을 평가하지 않습니다.
@@ -87,7 +87,7 @@ def _(mo):
 
 
 @app.cell
-def _(AutoTokenizer, RLAIFDataset, json, random, repo_root, run_dir, mo):
+def _(AutoTokenizer, RLAIFDataset, json, random, repo_root, run_dir):
     chat_tokenizer = AutoTokenizer.from_pretrained(repo_root / "projects/minimind/model", local_files_only=True)
     _records = [
         {"conversations": [
@@ -108,9 +108,15 @@ def _(AutoTokenizer, RLAIFDataset, json, random, repo_root, run_dir, mo):
     rl_samples = [rl_dataset[i] for i in range(len(rl_dataset))]
     assert all(s["answer"] == "" for s in rl_samples)
     assert "이 문장은" not in rl_samples[0]["prompt"]
+    return (chat_tokenizer, data_path, rl_dataset, rl_samples,)
+
+
+@app.cell(hide_code=True)
+def _(mo, rl_samples):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([mo.md("**실제 Dataset 반환값**"), mo.ui.table(rl_samples, selection=None),
                mo.md("첫 프롬프트:\n```text\n" + rl_samples[0]["prompt"] + "\n```" )])
-    return chat_tokenizer, data_path, rl_dataset, rl_samples
+    return
 
 
 @app.cell
@@ -135,18 +141,24 @@ def _(mo):
 
 
 @app.cell
-def _(chat_tokenizer, rl_samples, torch, mo):
+def _(chat_tokenizer, rl_samples):
     encoded_prompts = chat_tokenizer([s["prompt"] for s in rl_samples],
         return_tensors="pt", padding=True, padding_side="left",
         add_special_tokens=False, return_token_type_ids=False)
     B, G, R = 2, 3, 4
     expanded_prompts = encoded_prompts["input_ids"].repeat_interleave(G, dim=0)
+    return (B, G, R, encoded_prompts, expanded_prompts,)
+
+
+@app.cell(hide_code=True)
+def _(B, G, R, encoded_prompts, expanded_prompts, mo):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([mo.ui.table([
         {"응답 행": i, "질문 인덱스": i // G, "그룹 내 번호": i % G}
         for i in range(B * G)
     ], selection=None), mo.md(f"질문 shape: `{tuple(encoded_prompts['input_ids'].shape)}` → "
         f"반복 후 `{tuple(expanded_prompts.shape)}`. 생성 응답은 `[B×G, R] = [{B*G}, {R}]`." )])
-    return B, G, R, encoded_prompts, expanded_prompts
+    return
 
 
 @app.cell
@@ -170,7 +182,7 @@ def _(mo):
 
 
 @app.cell
-def _(torch, mo):
+def _(torch):
     def group_advantages(rewards, num_generations):
         groups = rewards.view(-1, num_generations)
         means = groups.mean(1).repeat_interleave(num_generations)
@@ -181,11 +193,17 @@ def _(torch, mo):
     example_advantages = group_advantages(example_rewards, 3)
     assert torch.equal(example_advantages[3:], torch.zeros(3))
     assert torch.equal(group_advantages(example_rewards, 1), torch.zeros(6))
+    return (example_advantages, example_rewards, group_advantages,)
+
+
+@app.cell(hide_code=True)
+def _(example_advantages, example_rewards, mo):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.ui.table([
         {"행": i, "질문": i // 3, "reward": float(r), "advantage": float(a)}
         for i, (r, a) in enumerate(zip(example_rewards, example_advantages))
     ], selection=None)
-    return example_rewards, example_advantages, group_advantages
+    return
 
 
 @app.cell
@@ -210,7 +228,7 @@ def _(mo):
 
 
 @app.cell
-def _(ast, repo_root, torch, re, SimpleNamespace, rl_samples, mo):
+def _(SimpleNamespace, ast, re, repo_root, rl_samples, torch):
     trainer_source = (repo_root / "projects/minimind/trainer/train_grpo.py").read_text(encoding="utf-8")
     _tree = ast.parse(trainer_source)
     _nodes = [n for n in _tree.body if isinstance(n, ast.FunctionDef)
@@ -223,13 +241,100 @@ def _(ast, repo_root, torch, re, SimpleNamespace, rl_samples, mo):
         def get_score(self, messages, answer):
             return 0.2
 
+    calculate_rewards = _namespace["calculate_rewards"]
     reward_responses = ["4", "The answer is four. This is a short explanation.",
                         "word " * 12]
-    original_rewards = _namespace["calculate_rewards"](
+    original_rewards = calculate_rewards(
         [rl_samples[0]["prompt"]], reward_responses, ConstantRewardModel())
+    return (
+        ConstantRewardModel,
+        calculate_rewards,
+        original_rewards,
+        reward_responses,
+        trainer_source,
+    )
+
+
+@app.cell(hide_code=True)
+def _(mo, original_rewards, reward_responses):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.ui.table([{"응답": s, "원본 보상(stub 포함)": float(r)}
                  for s, r in zip(reward_responses, original_rewards)], selection=None)
-    return trainer_source, reward_responses, original_rewards
+    return
+
+
+@app.cell
+def _(mo):
+    mo.md(r"""
+    ## 3-1. 추론(reasoning) 모델: think 형식과 두 종류의 보상
+
+    SFT 노트북 5-1절에서 본 것처럼 MiniMind의 assistant 응답은 `<think>추론</think>` 뒤에 최종 답을 씁니다.
+    SFT는 사람이 쓴 추론 문장을 **따라 쓰게** 하고, GRPO는 모델이 **스스로 쓴** 추론과 답을 보상으로 평가합니다.
+
+    **프롬프트:** `RLAIFDataset`은 `thinking_ratio` 확률로 `open_thinking=True`를 template에 넘깁니다
+    (원본 GRPO 기본 0.9). 그러면 프롬프트가 `<think>\n`에서 끝나 모델은 추론부터 이어 씁니다.
+    False이면 빈 블록 `<think>\n\n</think>\n\n`까지 넣어 바로 답하게 합니다.
+
+    | 보상 경로 | 무엇을 점수로 주는가 | think에 대한 처리 |
+    | --- | --- | --- |
+    | `calculate_rewards` (기본, 보상 모델) | 전체 길이 + think 길이·태그 형식 + 반복 패널티 + 보상 모델 점수 | think 20~300자 +1.0, 아니면 −0.5; `</think>` 정확히 1개 +0.25, 아니면 −0.25 |
+    | `score_gsm8k_response` (`--reward_type gsm8k`) | 마지막 줄 `#### 숫자`가 정답과 같으면 1, 아니면 0 | 닫힌 think 0~1개만 허용. **형식만으로는 점수 없음** |
+
+    **예측:** 추론 형식은 같고 최종 숫자만 틀린 응답은 두 보상에서 각각 어떤 점수를 받을까요?
+    아래 응답은 `open_thinking=True` 프롬프트 뒤에 생성된 completion이라고 가정합니다.
+    GSM8K 프롬프트는 빈 think를 제거해 `assistant\n`에서 끝나므로, 모델이 `<think>`부터 직접 씁니다.
+    그래서 GSM8K 채점에는 앞에 `<think>\n`을 붙인 같은 응답을 넣습니다.
+    """)
+    return
+
+
+@app.cell
+def _(ConstantRewardModel, RLAIFDataset, calculate_rewards, chat_tokenizer, data_path, random, score_gsm8k_response):
+    random.seed(42)
+    thinking_prompt = RLAIFDataset(str(data_path), chat_tokenizer, thinking_ratio=1.0)[0]["prompt"]
+    direct_prompt = RLAIFDataset(str(data_path), chat_tokenizer, thinking_ratio=0.0)[0]["prompt"]
+    assert thinking_prompt.endswith("<think>\n")
+    assert direct_prompt.endswith("<think>\n\n</think>\n\n")
+    _reasoning = "2와 2를 더하면 4가 됩니다. 계산을 한 번 더 확인했습니다."
+    reasoning_cases = [
+        ("올바른 추론 + 정답", _reasoning + "\n</think>\n\n#### 4"),
+        ("너무 짧은 추론 + 정답", "4\n</think>\n\n#### 4"),
+        ("형식은 같고 숫자만 오답", _reasoning.replace("4가", "5가") + "\n</think>\n\n#### 5"),
+        ("</think> 두 번", _reasoning + "\n</think>\n</think>\n\n#### 4"),
+        ("추론 없이 답만", "</think>\n\n#### 4"),
+        ("정답 표기(####) 없음", _reasoning + "\n</think>\n\n답은 4입니다."),
+    ]
+    _format_rewards = calculate_rewards([thinking_prompt] * 2, [r for _, r in reasoning_cases], ConstantRewardModel())
+    reasoning_rows = []
+    for (_name, _response), _format in zip(reasoning_cases, _format_rewards):
+        _score, _reason = score_gsm8k_response("<think>\n" + _response, "2 + 2 = 4\n#### 4")
+        reasoning_rows.append({"응답 종류": _name, "completion": repr(_response),
+                               "calculate_rewards (stub 0.2 포함)": round(float(_format), 3),
+                               "GSM8K 점수": _score, "GSM8K 판정": _reason})
+    _by_name = {r["응답 종류"]: r for r in reasoning_rows}
+    # 형식 보상은 숫자의 정오를 보지 않고, GSM8K 보상은 think 길이를 보지 않습니다.
+    assert _by_name["올바른 추론 + 정답"]["calculate_rewards (stub 0.2 포함)"] == _by_name["형식은 같고 숫자만 오답"]["calculate_rewards (stub 0.2 포함)"]
+    assert _by_name["올바른 추론 + 정답"]["GSM8K 점수"] == 1 and _by_name["형식은 같고 숫자만 오답"]["GSM8K 점수"] == 0
+    assert _by_name["너무 짧은 추론 + 정답"]["GSM8K 점수"] == 1
+    assert _by_name["올바른 추론 + 정답"]["calculate_rewards (stub 0.2 포함)"] > _by_name["너무 짧은 추론 + 정답"]["calculate_rewards (stub 0.2 포함)"]
+    assert _by_name["</think> 두 번"]["GSM8K 판정"] == "format_error"
+    return (direct_prompt, reasoning_cases, reasoning_rows, thinking_prompt,)
+
+
+@app.cell(hide_code=True)
+def _(direct_prompt, mo, reasoning_rows, thinking_prompt):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
+    mo.vstack([
+        mo.md(f"`thinking_ratio=1` 프롬프트 끝: `{thinking_prompt[-30:]!r}`\n\n"
+              f"`thinking_ratio=0` 프롬프트 끝: `{direct_prompt[-30:]!r}`"),
+        mo.ui.table(reasoning_rows, selection=None),
+        mo.md("**해설:** 기본 보상은 **추론의 모양**(길이·태그 수)에 점수를 주므로 숫자가 틀려도 같은 점수를 받습니다. "
+              "실제로는 보상 모델 점수가 내용을 평가하지만, 형식 항만 높이는 우회 행동(reward hacking)이 생길 수 있습니다. "
+              "GSM8K 보상은 **최종 답의 정오**만 보므로 짧은 추론도 정답이면 1점입니다. "
+              "추론 모델의 GRPO는 이런 보상을 같은 질문의 여러 응답 사이에서 비교해, 더 나은 추론·답을 쓴 응답의 확률을 높입니다. "
+              "여기서는 보상 계산만 확인합니다. 아래 7절의 학습은 한 토큰 산술 과제로 축소합니다."),
+    ])
+    return
 
 
 @app.cell
@@ -251,7 +356,7 @@ def _(mo):
 
 
 @app.cell
-def _(torch, mo):
+def _(torch):
     def response_logps(model, output_ids, attention_mask, prompt_lens, response_width):
         logits = model(output_ids, attention_mask=attention_mask).logits[:, :-1, :]
         next_logps = logits.log_softmax(-1).gather(2, output_ids[:, 1:, None]).squeeze(-1)
@@ -269,10 +374,16 @@ def _(torch, mo):
     mask_valid = torch.tensor([[1, 1, 1, 1], [1, 1, 1, 0], [1, 1, 1, 1]])
     mask_demo = response_mask(mask_ids, mask_valid, 2)
     assert mask_demo.tolist() == [[1, 1, 0, 0], [1, 1, 1, 0], [1, 0, 0, 0]]
+    return (mask_demo, mask_ids, mask_valid, response_logps, response_mask,)
+
+
+@app.cell(hide_code=True)
+def _(mask_demo, mask_ids, mask_valid, mo):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.ui.table([{"행": i, "응답 ID": str(ids.tolist()), "유효 길이": str(v.tolist()),
                   "최종 마스크": str(m.tolist())}
                  for i, (ids, v, m) in enumerate(zip(mask_ids, mask_valid, mask_demo))], selection=None)
-    return response_logps, response_mask, mask_demo
+    return
 
 
 @app.cell
@@ -289,8 +400,9 @@ def _(mo):
 
     `old`와 `reference` logps는 detach/no_grad로 고정하고 **현재 logps만 미분**합니다.
     양의 advantage는 선택 응답 확률을 높이는 방향, 음의 값은 낮추는 방향입니다.
-    clip은 유리한 방향의 과도한 ratio 보상을 제한하며 모든 업데이트 크기를 직접 제한하지는 않습니다.
-    $k$는 샘플 토큰에서 계산한 비음수 KL 페널티 추정 항입니다.
+    clip과 $k$(reference KL 추정)는 PPO 노트북 6~7절과 같은 식입니다. 부호별 clip gradient 표는 그곳에서 확인하세요.
+    **PPO와의 차이는 advantage의 출처뿐**입니다. PPO는 Critic·GAE로 토큰별 advantage를 만들고,
+    GRPO는 같은 질문 응답들의 보상 평균·표준편차로 응답별 advantage 하나를 만들어 모든 토큰에 공유합니다.
     원본 로그의 `KL_ref`는 단순 `ref_logp - logp` 평균이므로 이 항과 다르고 음수일 수도 있습니다.
 
     원본은 응답마다 유효 토큰 평균을 낸 뒤 응답 평균을 냅니다. 긴 응답이 토큰 수만큼
@@ -303,7 +415,7 @@ def _(mo):
 
 
 @app.cell
-def _(torch, mo):
+def _(torch):
     def policy_objective(logps, old_logps, ref_logps, advantages, mask,
                          beta=0.1, epsilon=0.2, loss_type="grpo", epsilon_high=5.0):
         delta = ref_logps - logps
@@ -319,41 +431,20 @@ def _(torch, mo):
         return loss, ratio, token_kl
 
     # ratio=1이고 손실 값이 0이어도 gradient가 0인 것은 아닙니다.
-    _probe = torch.tensor([[-1.], [-1.]], requires_grad=True)
-    _probe_loss, _, _ = policy_objective(_probe, _probe.detach(), _probe.detach(),
+    probe = torch.tensor([[-1.], [-1.]], requires_grad=True)
+    probe_loss, _, _ = policy_objective(probe, probe.detach(), probe.detach(),
                                          torch.tensor([1., -1.]), torch.ones(2, 1))
-    _probe_loss.backward()
-    assert _probe.grad[0] < 0 and _probe.grad[1] > 0
-    mo.md(f"ratio=1, advantage=[+1, -1] 확인: loss={_probe_loss.item():.3f}, "
-          f"logp의 gradient={_probe.grad.flatten().tolist()}. 경사 하강은 gradient가 음수인 logp를 높입니다.")
-    return policy_objective
+    probe_loss.backward()
+    assert probe.grad[0] < 0 and probe.grad[1] > 0
+    return (policy_objective, probe, probe_loss,)
 
 
-@app.cell
-def _(mo):
-    mo.md(r"""
-    ### 클리핑을 숫자로 관찰하기
-
-    **예측:** advantage=+1일 때 ratio 1.5는 1.2로 제한됩니다.
-    advantage=-1일 때 ratio 0.5는 왜 clipped surrogate 쪽이 선택될까요?
-    아래 표의 surrogate를 직접 계산해 보세요. 이 표는 KL을 제외한 보상 항입니다.
-    """)
+@app.cell(hide_code=True)
+def _(mo, probe, probe_loss):
+    # ▸ 결과 설명 — 실행하면 계산 값이 들어간 설명이 나타납니다 (marimo 표시 코드)
+    mo.md(f"ratio=1, advantage=[+1, -1] 확인: loss={probe_loss.item():.3f}, "
+          f"logp의 gradient={probe.grad.flatten().tolist()}. 경사 하강은 gradient가 음수인 logp를 높입니다.")
     return
-
-
-@app.cell
-def _(torch, mo):
-    clip_rows = []
-    for _a in [-1., 1.]:
-        for _r in [0.5, 1., 1.5]:
-            _rho = torch.tensor(_r)
-            _raw = _rho * _a
-            _clipped = _rho.clamp(0.8, 1.2) * _a
-            clip_rows.append({"advantage": _a, "ratio": _r,
-                              "raw": float(_raw), "clipped": float(_clipped),
-                              "min": float(torch.minimum(_raw, _clipped))})
-    mo.ui.table(clip_rows, selection=None)
-    return clip_rows
 
 
 @app.cell
@@ -374,7 +465,7 @@ def _(mo):
 
 
 @app.cell
-def _(MiniMindConfig, MiniMindForCausalLM, torch, copy, mo):
+def _(MiniMindConfig, MiniMindForCausalLM, torch):
     toy_vocab = ["<pad>", "<bos>", "<eos>", "+", "=", "2", "3", "4", "5"]
     toy_prompts = torch.tensor([[1, 5, 3, 5, 4], [1, 5, 3, 6, 4]])
     toy_targets = torch.tensor([7, 8])
@@ -396,11 +487,17 @@ def _(MiniMindConfig, MiniMindForCausalLM, torch, copy, mo):
     sft_policy.eval()
     with torch.no_grad():
         initial_probs = sft_policy(toy_prompts).logits[:, -1].softmax(-1)
+    return (initial_probs, sft_policy, toy_config, toy_prompts, toy_targets, toy_vocab,)
+
+
+@app.cell(hide_code=True)
+def _(initial_probs, mo, toy_prompts, toy_targets, toy_vocab):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.ui.table([{"질문": " ".join(toy_vocab[i] for i in ids[1:]),
                   "P(4)": float(probs[7]), "P(5)": float(probs[8]),
                   "정답 확률": float(probs[target])}
                  for ids, probs, target in zip(toy_prompts, initial_probs, toy_targets)], selection=None)
-    return toy_vocab, toy_prompts, toy_targets, toy_config, sft_policy, initial_probs
+    return
 
 
 @app.cell
@@ -417,7 +514,7 @@ def _(mo):
     재계산합니다. 여기서는 그 차이를 제거해 손실의 의미를 먼저 관찰합니다.
 
     매 rollout당 optimizer를 한 번 갱신하므로 갱신 전 ratio는 항상 약 1입니다.
-    **clip 효과는 앞의 고정 숫자 예제로 확인**합니다. 동일 rollout을 여러 번 재사용하거나
+    **clip 효과는 PPO 노트북 6절의 숫자 예제로 확인**합니다. 동일 rollout을 여러 번 재사용하거나
     생성 정책이 뒤처지면 ratio가 1에서 멀어질 수 있습니다.
     이 실습은 Dense·FP32·누적 1이며 MoE aux, AMP, DDP, scheduler와 원격 rollout은 생략합니다.
     """)
@@ -425,7 +522,7 @@ def _(mo):
 
 
 @app.cell
-def _(copy, sft_policy, toy_prompts, toy_targets, torch, response_logps, response_mask, group_advantages, policy_objective, mo):
+def _(copy, group_advantages, policy_objective, response_logps, response_mask, sft_policy, torch, toy_prompts, toy_targets):
     policy = copy.deepcopy(sft_policy).train()
     reference = copy.deepcopy(sft_policy).eval().requires_grad_(False)
     _ref_before = {k: v.clone() for k, v in reference.state_dict().items()}
@@ -469,14 +566,21 @@ def _(copy, sft_policy, toy_prompts, toy_targets, torch, response_logps, respons
                              for i, (c, r, a) in enumerate(zip(_completion[:, 0], _rewards, _advantages))]
     assert all(torch.equal(v, _ref_before[k]) for k, v in reference.state_dict().items())
     assert all(p.grad is None for p in reference.parameters())
+    return (first_rollout, policy, reference, train_G, train_beta, train_steps, training_history,)
+
+
+@app.cell(hide_code=True)
+def _(first_rollout, mo, training_history):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([mo.md("**첫 rollout: 같은 질문 안에서 reward와 advantage를 비교하세요.**"),
                mo.ui.table(first_rollout, selection=None),
                mo.ui.table(training_history[::5] + training_history[-1:], selection=None)])
-    return policy, reference, train_G, train_beta, train_steps, training_history, first_rollout
+    return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(training_history, plt, mo, run_dir):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     _fig, _ax = plt.subplots(figsize=(8, 3))
     _ax.plot([r["step"] for r in training_history], [r["sample_reward"] for r in training_history],
              alpha=0.6, label="sample reward (16 responses)")
@@ -507,7 +611,7 @@ def _(mo):
 
 
 @app.cell
-def _(policy, toy_prompts, toy_targets, toy_vocab, initial_probs, training_history, first_rollout, run_dir, json, torch, train_G, train_beta, train_steps, trainer_source, mo):
+def _(first_rollout, initial_probs, json, policy, run_dir, torch, toy_prompts, toy_targets, toy_vocab, train_G, train_beta, train_steps, trainer_source, training_history):
     with torch.no_grad():
         final_probs = policy(toy_prompts).logits[:, -1].softmax(-1)
     comparison = [{"질문": " ".join(toy_vocab[i] for i in ids[1:]),
@@ -522,8 +626,14 @@ def _(policy, toy_prompts, toy_targets, toy_vocab, initial_probs, training_histo
                "scope": "CPU toy one-token GRPO; not external reward model or full trainer"}
     (run_dir / "metrics.json").write_text(json.dumps(metrics, ensure_ascii=False, indent=2), encoding="utf-8")
     (run_dir / "train_grpo_source.py.txt").write_text(trainer_source, encoding="utf-8")
+    return (comparison, metrics,)
+
+
+@app.cell(hide_code=True)
+def _(comparison, mo, run_dir):
+    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([mo.ui.table(comparison, selection=None), mo.md(f"실행 결과 저장 경로: `{run_dir}`")])
-    return comparison, metrics
+    return
 
 
 @app.cell
@@ -571,8 +681,14 @@ def _(mo):
     기대 보상·KL 곡선과 설명을 기록하세요. 실행 결과는 `outputs/notebooks/<실행 ID>/`,
     보고서는 `reports/notebooks/<실행 ID>.md`에 저장합니다.
 
-    원본 구현과 라이선스는 `minimind/trainer/train_grpo.py`, `minimind/dataset/lm_dataset.py`,
-    `minimind/model/model_minimind.py`, `minimind/LICENSE`를 확인하세요.
+    7. **추론 보상 표(3-1절)에 응답을 추가하세요.** think는 길지만 의미 없는 반복 문장과 정답을 쓰면
+       두 보상은 각각 몇 점일까요? 형식 보상만으로 학습할 때의 위험을 설명하세요.
+
+    원본 구현과 라이선스는 `minimind/trainer/train_grpo.py`, `minimind/trainer/gsm8k_reward.py`,
+    `minimind/dataset/lm_dataset.py`, `minimind/model/model_minimind.py`, `minimind/LICENSE`를 확인하세요.
+
+    **다음 파트:** 텍스트 LLM의 구조·학습·정렬·추론을 마쳤습니다. 멀티모달은 `minimind_vlm.py`(이미지 입력 구조)
+    → `minimind_v_finetuning.py`(VLM 2단계 학습) → `minimind_omni.py`(음성 입출력)로 이어집니다.
     """)
     return
 
