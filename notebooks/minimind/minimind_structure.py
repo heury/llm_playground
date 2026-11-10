@@ -160,37 +160,6 @@ def _(MiniMindConfig, MiniMindForCausalLM, mo, torch, vocabulary):
 
 @app.cell
 def _(mo):
-    mo.md("""
-    ### 2-1. ID 하나가 벡터 하나를 선택한다
-
-    **예측:** 같은 토큰 ID를 두 번 넣으면 같은 벡터가 나올까요?
-    Embedding은 `[V,D]` 모양의 학습 가능한 표입니다. ID는 수의 크기로 해석하지 않고
-    표의 행 번호로 사용합니다. `고양이` 행의 32개 숫자가 그 토큰의 초기 표현입니다.
-    Attention 이후에는 주변 문맥이 반영되어 위치별 표현이 달라질 수 있습니다.
-    """)
-    return
-
-
-@app.cell
-def _(initial_model, mo, token_to_id, torch):
-    with torch.no_grad():
-        _id = token_to_id["고양이"]
-        _looked_up = initial_model.model.embed_tokens(torch.tensor([_id]))[0]
-        _row = initial_model.model.embed_tokens.weight[_id].detach()
-        torch.testing.assert_close(_looked_up, _row)
-    mo.vstack([
-        mo.md(f"`고양이` → ID `{_id}` → 표의 `{_id}`번 행. 전체 표 shape: `{tuple(initial_model.model.embed_tokens.weight.shape)}`"),
-        mo.ui.table([
-            {"벡터 차원": i, "Embedding 호출": float(_looked_up[i]), "직접 고른 행": float(_row[i])}
-            for i in range(8)
-        ], selection=None),
-        mo.md("**관찰·해설:** 앞 8개 값을 비교했습니다. 같은 ID는 같은 행을 선택합니다. 이 표도 전체 학습에서 갱신됩니다."),
-    ])
-    return
-
-
-@app.cell
-def _(mo):
     mo.md(r"""
     ## 3. 먼저 한 head로 Attention 계산하기
 
