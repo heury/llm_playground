@@ -1,6 +1,7 @@
 datas/
 models/
 outputs/
+/reports/
 /projects/minimind/outputs/
 
 .env
