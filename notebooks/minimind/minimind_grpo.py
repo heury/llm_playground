@@ -16,6 +16,7 @@ def _():
     from pathlib import Path
     from types import SimpleNamespace
     from uuid import uuid4
+    from zoneinfo import ZoneInfo
 
     import datasets
     import marimo as mo
@@ -31,7 +32,7 @@ def _():
 
     torch.set_num_threads(2)
     run_dir = repo_root / "outputs" / "notebooks" / (
-        datetime.now().astimezone().strftime("%Y%m%d-%H%M%S") + "-" + uuid4().hex[:8] + "-grpo"
+        datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y%m%d-%H%M%S") + "-" + uuid4().hex[:8] + "-grpo"
     )
     run_dir.mkdir(parents=True, exist_ok=True)
     datasets.config.HF_DATASETS_CACHE = run_dir / "dataset-cache"
@@ -50,7 +51,7 @@ def _(mo):
 
     질문 → 여러 응답 → 보상 → 그룹 내 advantage → 토큰 log prob → 손실 → 갱신.
 
-    또 `<think>`를 쓰는 **추론 모델에 어떤 보상을 주는지** 원본 함수로 확인합니다.
+    원본 함수로 **추론 모델의 보상**도 확인합니다.
 
     **순서:** SFT → DPO → PPO 다음입니다. ratio·clip·reference KL은 다시 설명하지 않습니다.
 
@@ -230,7 +231,7 @@ def _(mo):
     - 답변의 반복 패널티(`rep_penalty`: 정규식으로 나눈 n-gram 반복)
     - 보상 모델 점수 `reward_model.get_score(messages, answer)`
 
-    태그만 맞다고 추론이 옳은 건 아닙니다. 보상만 올리는 우회 행동도 살펴야 합니다.
+    태그가 맞아도 추론은 틀릴 수 있습니다. 내용보다 점수만 높이는 행동도 살펴보세요.
 
     다음 셀은 **원본 두 함수만 AST로 읽어 실행**합니다(trainer 전체 import는 피함).
     보상 모델 점수는 항상 0.2로 대신합니다(stub). 보상 모델 품질 검증이 아닙니다.
@@ -343,11 +344,7 @@ def _(direct_prompt, mo, reasoning_rows, thinking_prompt):
         mo.md(f"`thinking_ratio=1` 프롬프트 끝: `{thinking_prompt[-30:]!r}`\n\n"
               f"`thinking_ratio=0` 프롬프트 끝: `{direct_prompt[-30:]!r}`"),
         mo.ui.table(reasoning_rows, selection=None),
-        mo.md("**해설:** 기본 보상은 **추론의 모양**(길이·태그)에 점수를 줍니다. 그래서 숫자가 틀려도 점수가 같습니다. "
-              "실제로는 보상 모델이 내용을 평가합니다. 하지만 형식 점수만 올리는 우회(reward hacking)가 생길 수 있습니다. "
-              "GSM8K 보상은 **최종 답이 맞는지**만 봅니다. 추론이 짧아도 맞으면 1점입니다. "
-              "GRPO는 같은 질문의 여러 응답끼리 이 보상을 비교해, 더 나은 응답의 확률을 올립니다. "
-              "여기서는 보상 계산만 봅니다. 7절 학습은 한 토큰 산술 과제로 줄였습니다."),
+        mo.md('**해설:** 기본 보상은 **길이·태그 형식**도 평가합니다. 이 예제는 보상 모델 점수를 고정했으므로 숫자가 틀려도 점수가 같습니다. 실제 보상 모델은 내용을 평가하지만, 형식 점수만 높이는 행동(reward hacking)이 생길 수 있습니다.\n\nGSM8K는 **최종 정답**만 봅니다. 추론이 짧아도 맞으면 1점입니다. GRPO는 같은 질문의 응답끼리 보상을 비교합니다.\n\n여기서는 보상만 계산합니다. 7절에서는 한 토큰 산술 과제로 학습합니다.'),
     ])
     return
 
@@ -543,6 +540,8 @@ def _(mo):
     rollout을 재사용하거나 생성 정책이 뒤처지면 ratio가 1에서 멀어집니다.
 
     **생략한 것:** MoE aux, AMP, DDP, scheduler, 원격 rollout. (Dense·FP32·누적 1)
+    이 실습은 `weight_decay=0`으로 두고 보상·KL의 효과를 확인합니다.
+    AdamW의 기본 weight decay는 gradient가 0이어도 가중치를 바꿀 수 있습니다.
     """)
     return
 
@@ -552,7 +551,8 @@ def _(copy, group_advantages, policy_objective, response_logps, response_mask, s
     policy = copy.deepcopy(sft_policy).train()
     reference = copy.deepcopy(sft_policy).eval().requires_grad_(False)
     _ref_before = {k: v.clone() for k, v in reference.state_dict().items()}
-    _grpo_optimizer = torch.optim.AdamW(policy.parameters(), lr=0.0003)
+    # G=1 과제에서 보상 gradient가 없는 경우와 weight decay를 분리합니다.
+    _grpo_optimizer = torch.optim.AdamW(policy.parameters(), lr=0.0003, weight_decay=0.0)
     train_G, train_beta, train_steps = 8, 0.01, 60
     _expanded = toy_prompts.repeat_interleave(train_G, 0)
     _gold = toy_targets.repeat_interleave(train_G)
@@ -627,7 +627,7 @@ def _(mo):
 
     **관찰할 값:**
 
-    - 샘플 보상은 16개 응답의 우연에 따라 흔들립니다.
+    - 샘플 보상은 뽑힌 16개 응답에 따라 달라집니다.
     - 정확한 기대 보상 = 두 질문의 정답 확률 평균.
     - 학습 손실은 SFT처럼 꾸준히 줄지 않습니다. advantage·ratio·KL에 따라 움직입니다.
 
@@ -699,7 +699,9 @@ def _(mo):
 
     ## 10. 수강생 과제와 확인 기준
 
-    1. **G를 8→1로 바꾸기 전에 예측하세요.** 정책 = reference이고 advantage가 모두 0이면 업데이트가 없습니다.
+    1. **G를 8→1로 바꾸기 전에 예측하세요.** 새 optimizer에서 정책 = reference,
+       advantage = 0이고 이 실습처럼 `weight_decay=0`이면 업데이트가 없습니다.
+       이미 쌓인 optimizer 상태를 재사용하는 경우와는 구분하세요.
        G, beta, 전후 확률을 적으세요.
     2. **보상을 `[0,0,0]`, `[1,1,1]`로 바꾸세요.** 둘 다 advantage가 0입니다.
        reward 평균과 mixed group 비율을 적으세요.

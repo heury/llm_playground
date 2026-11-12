@@ -109,7 +109,7 @@ def _(activated_gate, gate_values, gated_features, manual_ffn, mo, sample_x, up_
              "up 값": float(up_values[0, 0, i]), "곱한 값": float(gated_features[0, 0, i])}
             for i in range(8)
         ], selection=None),
-        mo.md("**관찰:** 첫 토큰의 중간 특징 8개입니다. 한 칸의 곱을 손으로 계산해 보세요. down_proj가 이를 다시 4차원으로 합칩니다."),
+        mo.md("**관찰:** 첫 토큰의 중간 특징 8개입니다. 한 칸의 곱을 계산해 보세요. `down_proj`는 8개 특징을 4차원으로 합칩니다."),
     ])
     return
 
@@ -222,7 +222,7 @@ def _(block_hidden, context_change_rows, mo):
         mo.md(f"직접 조립한 블록과 원본 출력이 같습니다. h·FFN·잔차 출력 shape는 모두 `{tuple(block_hidden.shape)}`입니다. 잔차 연결은 FeedForward 밖에서 합니다."),
         mo.md("**예측:** 배치 0의 위치 1을 바꾸면 위치 2도 바뀔까요? 두 경로를 비교하세요."),
         mo.ui.table(context_change_rows, selection=None),
-        mo.md("**해설:** FFN만 쓰면 위치 1만 바뀝니다. 전체 블록에서는 Attention 때문에 위치 2도 바뀝니다. 위치 0은 미래를 못 보므로 그대로입니다. 'FFN은 위치를 섞지 않는다'가 '문맥을 안 쓴다'는 뜻은 아닙니다."),
+        mo.md("**해설:** FFN만 쓰면 위치 1만 바뀝니다. 전체 블록에서는 Attention 때문에 위치 2도 바뀝니다. 위치 0은 미래를 못 보므로 그대로입니다. FFN도 Attention이 전달한 문맥을 사용합니다."),
     ])
     return
 
@@ -351,7 +351,7 @@ def _(mo):
     | SwiGLU | down(SiLU(gate(x)) * up(x)) | 3DM |
 
     - 아래 세 구조의 up/down은 같은 초기값에서 시작합니다.
-    - 매개변수 수가 달라서 공정한 용량 비교는 아닙니다.
+    - 매개변수 수가 달라 용량이 같은 조건은 아닙니다.
     - 이 작은 과제의 결과만 관찰합니다.
     """)
     return
@@ -408,7 +408,7 @@ def _(comparison_fig, ffn_comparison_rows, mo):
     # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([
         comparison_fig, mo.ui.table(ffn_comparison_rows, selection=None),
-        mo.md("**관찰:** 선형 모델도 일부는 맞힙니다. 하지만 곱셈·비선형 특징은 잘 못 표현합니다. MSE와 매개변수 수를 함께 보세요. seed 하나로 우열을 단정하지 마세요."),
+        mo.md("**관찰:** 선형 모델은 일부를 맞혀도 곱셈·비선형 특징을 표현하는 데 한계가 있습니다. MSE와 매개변수 수를 함께 보세요. seed 하나의 결과로 우열을 정하지 마세요."),
     ])
     return
 

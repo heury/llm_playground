@@ -75,7 +75,7 @@ def _(mo):
     - DPO: chosen과 rejected의 **로그 확률 차이**를 키웁니다. 고정된 참조 모델과 비교합니다.
     - 보상 모델도, 온라인 응답 수집도 없습니다.
 
-    LoRA(무엇을 바꾸나)와 DPO(무엇을 학습하나)는 함께 쓸 수 있습니다.
+    LoRA는 학습할 매개변수, DPO는 학습 목적을 정합니다. 둘은 함께 쓸 수 있습니다.
     이 실습은 전체 매개변수를 학습합니다.
 
     **선수 실습:** `minimind_sft.py`. 마스크 규칙은 SFT와 같습니다.
@@ -240,7 +240,7 @@ def _(mo, truncation_rows):
     # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([
         mo.ui.table(truncation_rows, selection=None),
-        mo.md("**관찰:** 너무 짧게 자르면 응답이 사라지거나 EOS 없이 잘립니다. 원본은 mask가 전부 0인 쌍도 그대로 씁니다. 이때 손실은 log(2)지만 gradient는 없습니다. 이런 쌍은 빼거나 길이를 늘리세요. attention_mask는 넘기지 않습니다. 오른쪽 패딩 + causal Attention이라 실제 토큰은 뒤 PAD를 못 봅니다."),
+        mo.md("**관찰:** 너무 짧게 자르면 응답이나 EOS가 사라집니다. 원본은 mask가 모두 0인 쌍도 사용합니다. 이때 손실은 log(2)이지만 gradient는 없습니다. 이런 쌍은 빼거나 길이를 늘리세요.\n\nattention_mask는 넘기지 않습니다. 오른쪽 패딩과 causal Attention을 쓰므로 실제 토큰은 뒤의 PAD를 못 봅니다."),
     ])
     return
 
@@ -522,7 +522,7 @@ def _(after_metrics, before_metrics, dpo_history, plt, preference_train, prefere
 def _(dpo_curve_fig, mo, pair_rows):
     # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([dpo_curve_fig, mo.ui.table(pair_rows, selection=None), mo.md(
-        "**관찰:** Δ>0은 참조보다 선호 격차가 커졌다는 뜻입니다. chosen 확률이 rejected보다 높다(raw gap>0)와는 다릅니다. 처음 Δ=0은 승리로 세지 않습니다. 검증은 두 쌍뿐이라 일반적인 선호 성능을 보여 주지 않습니다. 곡선 마지막 점은 갱신 전, After 값은 갱신 후입니다."
+        "**관찰:** Δ>0은 참조보다 선호 격차가 커졌다는 뜻입니다. chosen 확률이 더 높다는 뜻(raw gap>0)은 아닙니다. 처음 Δ=0은 승리로 세지 않습니다. 검증은 두 쌍뿐입니다. 일반적인 선호 성능은 알 수 없습니다. 곡선 마지막 점은 갱신 전, After 값은 갱신 후입니다."
     )])
     return
 
@@ -558,7 +558,7 @@ def _(policy, preference_validation, reference, tokenizer, torch):
 def _(generated_examples, mo):
     # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([mo.ui.table(generated_examples, selection=None),
-               mo.md("**예측·관찰:** Δ가 커지면 greedy 결과도 꼭 바뀔까요? 점수 차이는 응답 전체 확률을 비교합니다. greedy는 위치마다 최대 토큰을 고릅니다. loss, 후보 순위, 실제 생성, 일반화는 따로 확인하세요. 두 후보 밖의 응답을 막는다는 보장도 없습니다.")])
+               mo.md("**예측·관찰:** Δ가 커지면 greedy 결과도 꼭 바뀔까요? 점수 차이는 응답 전체 확률을 비교합니다. greedy는 위치마다 최대 토큰을 고릅니다. 손실, 후보 순위, 생성, 일반화는 각각 확인하세요. 두 후보 밖의 답변도 나올 수 있습니다.")])
     return
 
 

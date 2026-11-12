@@ -63,11 +63,11 @@ def _(mo):
     - 모델은 무작위 가중치에서 시작합니다.
     - SFT와 다른 점: SFT는 대화에서 assistant 응답만 학습합니다.
 
-    **학습 파이프라인의 첫 노트북**입니다.
+    **학습 과정의 첫 노트북**입니다.
     정답 이동, 패딩 마스크, 기울기 누적, 학습률, 체크포인트를 여기서 정리합니다.
     뒤 노트북(SFT·LoRA·증류·DPO)은 이를 다시 설명하지 않습니다.
 
-    원본 trainer 전체를 돌리지 않습니다. 원래 모델·데이터 파일도 덮어쓰지 않습니다.
+    원본 trainer의 핵심만 실행합니다. 원래 모델·데이터 파일은 유지합니다.
 
     산출물 저장 위치: `outputs/notebooks/<실행 ID>/`
     """)
@@ -295,7 +295,7 @@ def _(mo):
     - **microbatch:** forward/backward 한 번의 묶음.
     - **optimizer step:** 가중치를 실제로 바꾸는 순간.
 
-    두 microbatch의 loss를 각각 2로 나눠 backward하면, gradient가 더해집니다. 그 뒤 한 번 갱신합니다.
+    각 microbatch의 loss를 2로 나눠 backward합니다. 두 gradient를 더한 뒤 한 번 갱신합니다.
 
     **예측:** 유효 정답 수가 같고 dropout=0이면, 큰 배치와 gradient가 같을까요?
 
@@ -340,7 +340,7 @@ def _(copy, initial_model, torch, train_dataset):
 @app.cell(hide_code=True)
 def _(accumulation_max_error, mo):
     # ▸ 결과 설명 — 실행하면 계산 값이 들어간 설명이 나타납니다 (marimo 표시 코드)
-    mo.md(f"같은 길이의 큰 배치와 누적 gradient 최대 오차: `{accumulation_max_error:.2e}`. **해설:** A=3인데 마지막에 microbatch 하나만 남으면, gradient는 그 배치의 1/3입니다. 아래 학습은 원본 동작 그대로 두고 그룹 크기를 기록합니다. 토큰 수 기준 평균을 원하면 유효 정답 수로 loss를 가중하세요.")
+    mo.md(f"같은 길이의 큰 배치와 누적 gradient 최대 오차: `{accumulation_max_error:.2e}`. **해설:** A=3인데 마지막에 microbatch 하나만 남으면, gradient는 그 배치의 1/3입니다. 아래 학습은 원본처럼 실행하고 그룹 크기를 기록합니다. 전체 토큰의 평균을 구하려면 각 loss에 유효 정답 수를 반영해야 합니다.")
     return
 
 
@@ -583,8 +583,8 @@ def _(checkpoint_rows, mo, resume_max_error, training_dir):
     # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([
         mo.ui.table(checkpoint_rows, selection=None),
-        mo.md(f"동일한 추가 optimizer step 후 최대 가중치 오차: `{resume_max_error:.2e}`. 저장 위치: `{training_dir}`. 원래 학습 모델은 복사본을 썼으므로 그대로입니다."),
-        mo.md("**해설:** 가중치뿐 아니라 optimizer 상태도 필요합니다. 실제 중간 재개에는 셔플 순서, 건너뛸 배치, 난수 상태, 누적 중인 gradient도 필요합니다. 여기서는 단순한 조건(dropout=0, 고정 배치, step 경계 저장)만 봅니다."),
+        mo.md(f"동일한 추가 optimizer step 후 최대 가중치 오차: `{resume_max_error:.2e}`. 저장 위치: `{training_dir}`. 복사본으로 실험했으므로 원래 모델은 그대로입니다."),
+        mo.md("**해설:** 가중치뿐 아니라 optimizer 상태도 필요합니다. 학습 중간부터 재개하려면 셔플 순서, 배치 위치, 난수 상태, 누적 gradient도 필요합니다. 여기서는 dropout=0, 고정 배치, step 경계 저장만 확인합니다."),
     ])
     return
 

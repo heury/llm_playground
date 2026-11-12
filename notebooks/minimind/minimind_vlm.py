@@ -57,7 +57,7 @@ def _(mo):
     **학습 목표:** 이미지가 언어 모델 입력이 되는 전체 과정을 따라갑니다.
     `minimind-v/model/model_vlm.py`의 실제 클래스를 사용합니다.
 
-    - 이미지 전처리 → 패치 특징 → 차원 투영
+    - 이미지 전처리 → 패치 특징 → 차원 변환
     - 임베딩 교체 → 답변 학습 → 생성
 
     **사전 지식:** Python, 텐서 shape, 다음 토큰 예측.
@@ -89,6 +89,16 @@ def _(mo):
 
     텍스트 LLM 부분(Attention·생성·SFT 마스크)은 앞 노트북과 같습니다.
 
+    **수업에서 완료할 범위**
+
+    - **필수:** 1~6절에서 이미지 경로와 답변 손실·gradient를 따라가고,
+      7~9절에서 다중 이미지의 marker 규칙·캐시·실제 데이터 연결을 확인합니다.
+    - **최소 확인 과제:** 10절의 1·3·4번에 답하고, 이미지의 출력 영향과 인식 성능,
+      label 마스크와 Attention, 답변이 볼 수 있는 위치를 구분하세요.
+    - **선택 심화:** 7절의 전체 `forward` 실패 경로·계산량 설명, 10절의 2·5번 과제.
+
+    필수·선택은 수업 범위의 구분입니다. 앱은 셀의 의존성에 따라 실행됩니다.
+
     **실행 환경:** 작은 SigLIP과 LLM을 무작위로 초기화합니다.
     GPU, 모델 다운로드, API 키가 필요 없습니다.
     그래서 생성 결과는 인식 성능과 무관합니다.
@@ -110,8 +120,8 @@ def _(mo):
     **기호:** `B` 배치, `N` 이미지 수, `P` 패치 수, `Dv` 비전 차원, `D` 언어 차원, `T` 시퀀스 길이.
 
     아래 점선이 패치 경계입니다.
-    단, SigLIP 내부의 self-attention이 패치끼리 정보를 섞습니다.
-    그래서 최종 특징 하나가 자기 사각형의 픽셀만 담지는 않습니다.
+    SigLIP의 self-attention은 패치끼리 정보를 섞습니다.
+    최종 특징에는 다른 패치의 정보도 들어 있습니다.
     """)
     return
 
@@ -150,7 +160,7 @@ def _(mo):
     그다음 `MiniMindVLM`의 실제 `get_vision_model`로 읽습니다.
     학습된 가중치는 내려받지 않습니다.
 
-    **세 숫자가 같아야 합니다:** `image_token_len`, 인코더 패치 수, 연속 이미지 marker 수. 여기서는 모두 4입니다.
+    **세 값이 같아야 합니다.** `image_token_len`, 인코더 패치 수, 이미지당 연속 marker 수입니다. 여기서는 모두 4입니다.
 
     경로가 없으면 원본 로더는 `(None, None)`을 반환합니다. 그래서 로딩 성공을 assert로 확인합니다.
 
@@ -220,7 +230,7 @@ def _(mo):
 
     SigLIP에는 CLS 토큰이 없습니다. 그래서 **모든 패치 특징 `[B,P,Dv]`**를 그대로 씁니다.
 
-    **Projector의 진짜 역할:** 차원만 바꾸는 게 아닙니다.
+    **Projector의 역할:** 차원만 바꾸는 게 아닙니다.
     SigLIP과 LLM은 따로 학습되어 특징 공간이 다릅니다.
     Projector는 시각 특징을 **LLM이 읽을 수 있는 임베딩으로 맞춥니다.**
     그래서 실제 학습 첫 단계에서는 Projector만 학습합니다(`minimind_v_finetuning.py`).
@@ -269,7 +279,7 @@ def _(mo):
     **예측:** 교체 후 시퀀스 길이는 8일까요, 12일까요?
 
     `count_vision_proj`는 연속된 IMAGE 구간을 찾습니다.
-    그 자리의 벡터를 이미지 벡터로 **교체**합니다. 끼워 넣지 않습니다.
+    그 자리의 벡터를 이미지 벡터로 **교체**하므로 길이는 같습니다.
     marker 수와 패치 수가 다르면 어떻게 될까요? 7절에서 봅니다.
     """)
     return
@@ -460,6 +470,13 @@ def _(mo):
 
     **예측:** marker 8개를 붙여 쓰면 두 장으로 구분될까요?
     아래 두 번째 실험이 답입니다. 원본 함수는 marker 수가 맞는지 검사하지 않습니다.
+
+    **선택 심화 — 이미지 수와 계산 부담:** 시각 marker를 제외한 나머지 토큰 수를
+    `T_text`라고 하면, 정상 입력은 이미지마다 `P`칸을 예약하므로 `T = T_text + N×P`입니다.
+    아래 예는 `T_text=3`, `N=2`, `P=4`여서 `T=11`입니다. 같은 텍스트에 이미지가 한 장이면 `T=7`입니다.
+    모델 차원을 고정하면 dense prefill의 Attention 점수 배열은 head마다 `T×T`이므로
+    이 예에서 49칸 → 121칸으로 커집니다. KV cache의 저장 길이는 `T`에 비례합니다.
+    이미지를 교체하는 순간 길이를 늘리는 것이 아니라, **입력에 예약할 칸 수가 늘어나는 것**입니다.
     """)
     return
 
@@ -480,14 +497,22 @@ def _(base_vlm, blue_pixels, red_pixels, torch):
         _bad_merged = base_vlm.count_vision_proj(
             _bad_ids, base_vlm.model.embed_tokens(_bad_ids), _pair_vectors, seqlen=_bad_ids.shape[1],
         )
+        # helper 반환만으로 전체 모델의 성공을 판단할 수 없습니다.
+        try:
+            base_vlm(_bad_ids, pixel_values=pair_pixels)
+        except RuntimeError as _error:
+            bad_forward_error = str(_error)
+            assert "6" in bad_forward_error and "10" in bad_forward_error
+        else:
+            raise AssertionError("현재 원본에서는 hidden 길이 6과 RoPE 길이 10이 맞지 않아야 합니다.")
     assert pair_output.logits.shape == (1, 11, 64)
     bad_merge_lengths = (_bad_ids.shape[1], _bad_merged.shape[1])
     assert bad_merge_lengths == (10, 6)
-    return (bad_merge_lengths, pair_output, pair_pixels,)
+    return (bad_forward_error, bad_merge_lengths, pair_output, pair_pixels,)
 
 
 @app.cell(hide_code=True)
-def _(bad_merge_lengths, mo, pair_output, pair_pixels):
+def _(bad_forward_error, bad_merge_lengths, mo, pair_output, pair_pixels):
     # ▸ 결과 설명 — 실행하면 계산 값이 들어간 설명이 나타납니다 (marimo 표시 코드)
     mo.md(f"""
     **올바른 예:** 이미지 입력 `{tuple(pair_pixels['pixel_values'].shape)}` → logits `{tuple(pair_output.logits.shape)}`.
@@ -497,8 +522,17 @@ def _(bad_merge_lengths, mo, pair_output, pair_pixels):
 
     - 8칸 전체가 이미지 A의 벡터 4개로 바뀝니다.
     - **시퀀스가 4칸 줄고, 이미지 B는 버려집니다.**
-    - 오류가 나지 않습니다. labels·RoPE 위치가 어긋난 채 학습될 수 있습니다.
+    - **교체 함수만 호출하면** 오류 없이 길이가 바뀝니다. 전체 모델도 성공한다는 뜻은 아닙니다.
+    - 전체 `forward`에서는 hidden 길이 6과 RoPE 길이 10이 맞지 않아 실패합니다. RoPE는 원래 입력 길이로 만들기 때문입니다.
+      위 셀은 이 실패도 별도로 확인합니다. 아래는 그때 받은 메시지입니다.
     - marker가 패치 수보다 적으면 남는 패치를 조용히 버립니다.
+
+    ```text
+    {bad_forward_error}
+    ```
+
+    모델 호출 전에 확인하세요. **이미지마다 길이 `P`인 연속 marker 구간이 하나씩 있어야 합니다.**
+    구간 수는 이미지 수 `N`과 같아야 합니다. 두 이미지의 구간은 나눠 두세요.
     """)
     return
 
@@ -669,6 +703,17 @@ def _(mo):
        - 학습에 없던 위치·크기의 이미지를 검증용으로 두세요.
        - 같은 질문으로 비교하세요: 올바른 이미지 / 바꾼 이미지 / 이미지 없음.
        - 샘플 암기와 시각 일반화를 구분하세요.
+
+    **2번 선택 과제의 실행 준비:** 3절을 실행한 뒤 새 코드 셀에서 아래 import와 코드를 사용하세요.
+    실행 전에 출력 shape를 예측하고 결과와 비교하세요.
+
+    ```python
+    from model.model_vlm import MMVisionProjector
+
+    exercise_projector = MMVisionProjector(16, 32, target_tokens=2)
+    exercise_output = exercise_projector(vision_features)
+    print(tuple(exercise_output.shape))
+    ```
 
     **실제 모델로 확장할 때 볼 파일:**
 

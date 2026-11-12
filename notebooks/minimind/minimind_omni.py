@@ -50,7 +50,7 @@ def _(mo):
     mo.md(r"""
     # MiniMind-O: 보고 듣고 생각하고 말하는 모델
 
-    **학습 목표:** `minimind-o/model/model_omni.py`의 실제 연산을 따라가며 설명합니다.
+    **학습 목표:** `projects/minimind-o/model/model_omni.py`의 실제 연산을 따라가며 설명합니다.
 
     1. 서로 다른 입력을 같은 은닉 차원으로 잇는 법
     2. Thinker와 Talker의 역할
@@ -58,8 +58,8 @@ def _(mo):
 
     **멀티모달 파트의 마지막 노트북**입니다(예상 60~90분).
     먼저 `minimind_vlm.py`와 `minimind_v_finetuning.py`를 읽으세요.
-    이미지 경로는 같아서 짧게 봅니다. 새로운 것에 집중합니다:
-    **음성 입력, Thinker→Talker 연결, 음향 코드북 8개 출력.**
+    이미지 경로는 앞 실습과 같습니다.
+    여기서는 **음성 입력, Thinker→Talker 연결, 코드북 8개 출력**을 봅니다.
 
     <img src="public/diagrams/omni.png" alt="MiniMind-O: Thinker와 Talker 연결 흐름" width="480">
 
@@ -71,7 +71,7 @@ def _(mo):
     **실행 환경:** CPU, 작은 무작위 모델, 합성 텐서만 씁니다.
 
     - 다운로드, 녹음, 실제 인식·합성, 대규모 학습은 하지 않습니다.
-    - 원본 클래스를 쓰되 외부 인코더 로딩만 뺍니다. 대신 가짜 인코더를 붙입니다.
+    - 원본 클래스에 합성 특징을 내는 가짜 인코더를 연결합니다.
     - 의미 있는 답이나 들을 수 있는 음성은 나오지 않습니다.
     """)
     return
@@ -128,7 +128,7 @@ def _(mo):
     - `[B,T]`를 넣으면: `forward`가 음향 8행을 모두 PAD로 채웁니다.
     - `[B,9,T]`를 넣으면: 앞 8행은 음향 코드북 0~7, 마지막 행은 텍스트입니다.
 
-    **코드북:** 음성 프레임을 표현하는 이산 코드 사전입니다.
+    **코드북:** 음성 프레임을 숫자 ID로 나타내는 사전입니다.
     프레임마다 코드북 8개의 ID를 씁니다. 8개가 서로 다른 시점이라는 뜻은 아닙니다.
 
     | 값 | 텍스트 행에서 | 음향 행에서 |
@@ -349,10 +349,7 @@ def _(audio_diff, mo, text_diff, traces):
     mo.vstack([
         mo.ui.table([{"지점": _k, "shape": str(tuple(_v.shape)), "L2 norm": float(_v.norm())}
                      for _k, _v in traces.items()], selection=None),
-        mo.md(f"기본 배율 3 대비 최대 차이: 텍스트 **{text_diff:.6f}**, 코드북 0 **{audio_diff:.6f}**.\n\n"
-              "Talker 입력 = `embed_proj(bridge) × text_scale + codec_proj(audio_embedding) × audio_scale`. "
-              "배율은 학습되는 Parameter입니다. 0으로 해도 codec 경로와 bias 등은 남습니다. "
-              "연결 방향만 확인하는 실험입니다. 생성 품질 비교가 아닙니다."),
+        mo.md(f'기본 배율 3 대비 최대 차이: 텍스트 **{text_diff:.6f}**, 코드북 0 **{audio_diff:.6f}**.\n\nTalker 입력 = `embed_proj(bridge) × text_scale + codec_proj(audio_embedding) × audio_scale`.\n\n배율도 학습되는 Parameter입니다. text_scale을 0으로 해도 codec 경로와 bias는 남습니다. 이 실험은 연결 방향만 확인하며 생성 품질은 비교하지 않습니다.'),
     ])
     return
 
@@ -459,7 +456,7 @@ def _(audio_targets, delay_rows, mo, text_targets, training_ids):
         mo.ui.table(delay_rows, selection=None),
         mo.md(f"모델 입력 `{tuple(training_ids.shape)}`, 텍스트 정답 `{tuple(text_targets.shape)}`, "
               f"음향 정답 `{tuple(audio_targets.shape)}`. `·`는 손실 제외(-100)입니다. "
-              "입력과 정답이 이미 한 칸 밀려 있어서 모델 안에서 또 옮기지 않습니다."),
+              "입력과 정답은 이미 한 칸 옮겨져 있습니다. 모델 안에서 다시 옮기지 않습니다."),
     ])
     return
 
@@ -551,9 +548,7 @@ def _(final_losses, gradient_rows, initial_losses, mo):
             {"시점": "학습 전", "텍스트 CE": initial_losses[0], "음향 CE": initial_losses[1]},
             {"시점": "5 step 후", "텍스트 CE": final_losses[0], "음향 CE": final_losses[1]},
         ], selection=None),
-        mo.md("음향 손실은 bridge 이전 Thinker까지만 갑니다. bridge 이후 블록에는 경로가 없습니다. "
-              "뒤쪽 Thinker는 텍스트 CE가 학습시킵니다. "
-              "5 step 결과는 같은 합성 배치의 손실 감소일 뿐입니다. 일반화·음질 지표가 아닙니다."),
+        mo.md('음향 손실의 gradient는 bridge 이전 Thinker까지만 갑니다. 뒤쪽 블록은 텍스트 CE로 학습합니다.\n\n5 step의 결과는 같은 합성 배치에서 잰 손실입니다. 일반화나 음질은 측정하지 않습니다.'),
     ])
     return
 
@@ -694,16 +689,17 @@ def _(mo, stream_schedule_rows):
 
 @app.cell
 def _(initial_model, torch):
+    stream_token_budget = 10  # 과제에서는 8과 비교합니다.
     with torch.random.fork_rng(devices=[]), torch.no_grad():
         torch.manual_seed(123)
         stream_steps = list(initial_model.generate(
-            torch.tensor([[1, 7, 8]]), eos_token_id=-1, max_new_tokens=10,
+            torch.tensor([[1, 7, 8]]), eos_token_id=-1, max_new_tokens=stream_token_budget,
             stream=True, return_audio_codes=True, temperature=0.7,
         ))
-    assert len(stream_steps) == 10
+    assert len(stream_steps) == stream_token_budget
     assert all(_text is not None and _text.shape == (1, _i + 1) for _i, (_text, _frame) in enumerate(stream_steps))
     assert all(_frame is None for _text, _frame in stream_steps[:8])
-    return (stream_steps,)
+    return (stream_steps, stream_token_budget,)
 
 
 @app.cell(hide_code=True)
@@ -835,7 +831,7 @@ def _(mo):
     | config의 bridge_layer를 0→1로 변경 | 음향 CE gradient가 어느 블록까지 흐를까? | 6절에서 두 블록 norm; 기존 두 번째=0 assert도 새 가설에 맞게 수정 |
     | raw_audio를 2프레임으로 줄이기 | 음성 자리 3개 중 남는 위치는? | 2절의 교체 slice·assert와 modal_inputs 길이를 함께 수정 |
     | 5절 STOP을 제외해 보기 | 음향 CE가 얼마나 달라질까? | 토큰별 CE·유효 정답 수; 종료 학습에 미칠 영향 |
-    | 생성 max_new_tokens를 8→10 비교 | 프레임을 반환할 기회가 있는가? | None/8코드 프레임 개수; 특수 코드가 먼저 나오면 프레임이 없을 수도 있음 |
+    | 8절의 stream_token_budget을 8과 10으로 비교 | 프레임을 반환할 기회가 있는가? | None/8코드 프레임 개수; 길이 assert도 같은 예산을 사용. 특수 코드가 먼저 나오면 프레임이 없을 수도 있음 |
 
     **스스로 설명하기**
 
@@ -857,13 +853,13 @@ def _(mo):
 
     저장소 루트 기준 경로입니다.
 
-    - `minimind-o/model/model_omni.py`: 이 노트북의 구성 요소, forward, 스트리밍, VAD.
-    - `minimind-o/dataset/omni_dataset.py`: 대화 template, 마지막 assistant 마스크,
+    - `projects/minimind-o/model/model_omni.py`: 이 노트북의 구성 요소, forward, 스트리밍, VAD.
+    - `projects/minimind-o/dataset/omni_dataset.py`: 대화 template, 마지막 assistant 마스크,
       8행 코드 전개, `assistant_start + layer_idx + 1`, labels의 `[1:]`.
-    - `minimind-o/trainer/train_sft_omni.py`: 두 CE, STOP 가중치, projector 모드, collate.
-    - `minimind-o/eval_omni.py`: 실제 tokenizer·인코더·가중치·Mimi 로딩 및 파형 저장.
-    - `minimind-o/webui/web_demo.py`: 실시간 오디오와 끼어들기 제어.
-    - `minimind-o/README_ko.md` 및 `minimind-o/LICENSE`: 리소스 준비, 실행 방법, 라이선스.
+    - `projects/minimind-o/trainer/train_sft_omni.py`: 두 CE, STOP 가중치, projector 모드, collate.
+    - `projects/minimind-o/eval_omni.py`: 실제 tokenizer·인코더·가중치·Mimi 로딩 및 파형 저장.
+    - `projects/minimind-o/webui/web_demo.py`: 실시간 오디오와 끼어들기 제어.
+    - `projects/minimind-o/README_ko.md` 및 `projects/minimind-o/LICENSE`: 리소스 준비, 실행 방법, 라이선스.
 
     **실제 가중치로 확장할 때:** config 차원, special ID, 코드북 수, placeholder 길이를 확인하세요.
     프로젝트 전용 환경에서 실행하세요.
@@ -897,7 +893,7 @@ def _(ZoneInfo, cache_audio_error, cache_text_error, datetime, final_losses, gra
 def _(artifact_dir, mo, repo_root):
     # ▸ 결과 설명 — 실행하면 계산 값이 들어간 설명이 나타납니다 (marimo 표시 코드)
     mo.md(f"이번 실행의 수치 기록: `{artifact_dir.relative_to(repo_root)}/metrics.json`. "
-          "UI를 바꾸면 관련 셀과 저장이 다시 실행됩니다. 이전 결과는 다른 폴더에 남습니다.")
+          "UI를 바꾸면 관련 셀과 저장이 다시 실행됩니다. 이전 결과도 별도 폴더에 보관됩니다.")
     return
 
 

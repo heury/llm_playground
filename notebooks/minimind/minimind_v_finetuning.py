@@ -61,7 +61,7 @@ def _(mo):
     mo.md(r"""
     # Vision LLM 미세 조정: 이미지가 답변의 근거가 되기까지
 
-    VLM은 **이미 언어를 아는 LLM**에 눈을 붙이는 작업입니다. 원본 MiniMind-V의 학습 순서:
+    VLM은 **학습된 LLM**에 이미지 입력을 연결합니다. MiniMind-V의 학습 순서는 다음과 같습니다.
 
     ```text
     ① 텍스트 LLM (MiniMind의 llm_768.pth, 이미지를 본 적 없음)
@@ -71,7 +71,7 @@ def _(mo):
     ③ 시각 지시 SFT    train_sft_vlm.py        sft_i2t.parquet
     ```
 
-    이 노트북은 세 단계를 CPU에서 작게 재현합니다. 핵심은 **각 단계가 무엇을 바꾸나**입니다.
+    세 단계를 CPU에서 작게 실행하며 **각 단계의 학습 대상**을 확인합니다.
 
     | 단계 | 이 실습에서 배우는 것 | 확인 방법 |
     | --- | --- | --- |
@@ -232,7 +232,7 @@ def _(config, mo, vocabulary):
     mo.md(f"""
     - `<image>` 하나 → `<|image_pad|>` **4개** (32×32 / 패치 16 = 4패치. 원본은 64).
     - marker ID는 이 tokenizer에 맞춘 `{config.image_ids[0]}`입니다(원본 기본값 12 아님).
-    - LLM은 3층입니다. `freeze_llm=1`에서 첫·마지막 층과 가운데 층을 구분하려고요.
+    - LLM은 3층입니다. `freeze_llm=1`에서 첫·마지막 층을 학습하고 가운데 층은 고정합니다.
     - 사전 크기 {len(vocabulary)}, 언어 차원 32, 시각 차원 16.
     """)
     return
@@ -387,8 +387,7 @@ def _(mo):
     | batch_size / max_seq_len | 16 / 450 | 4 / 768 |
     | epochs | 2 | 2 |
 
-    - **정렬에서 LLM을 동결하는 이유:** LLM의 단어 공간을 기준점으로 고정합니다.
-      Projector가 그 공간에 맞춰 옵니다. LLM도 움직이면 기준점이 흔들립니다.
+    - **정렬에서 LLM을 동결하는 이유:** LLM의 단어 공간을 고정하고 Projector를 그 공간에 맞춥니다.
     - **학습률이 80배 다른 이유:** 정렬은 무작위 Projector를 크게 움직여야 합니다.
       SFT는 학습된 LLM을 건드리므로, 언어 능력을 잃지 않게 작게 바꿉니다.
     - **`freeze_llm=1`이 첫·마지막 층만 푸는 이유:**
@@ -454,24 +453,27 @@ def _(mo):
     # ▸ 실습 설정 위젯 — 실행하면 슬라이더·선택 상자가 나타납니다 (marimo 표시 코드)
     alignment_steps = mo.ui.slider(20, 160, value=80, step=20, label="② 정렬 optimizer step")
     sft_steps = mo.ui.slider(20, 160, value=80, step=20, label="③ SFT optimizer step")
+    baseline_checks = mo.ui.checkbox(value=True, label="기본 실험의 초기 가중치·성능 검사 (변형 과제에서는 해제)")
     mo.vstack([
         mo.md("""
         ## 6. ② 정렬 → ③ SFT 학습 실행
 
-        설정을 바꾸면 4절 텍스트 LLM부터 다시 학습합니다.
+        step 설정을 바꾸면 6절 이후가 다시 실행됩니다.
+        4절 텍스트 LLM은 재사용합니다. ②·③은 각 시작 체크포인트에서 다시 학습합니다.
+        변형 과제에서는 **기본 실험 검사**를 해제하세요. 로딩·shape·동결·저장/복원 검사는 유지합니다.
 
         - 원본 루프를 CPU float32, 단일 프로세스로 줄였습니다.
         - 모델·데이터셋·초기화·collate·학습률 함수는 원본을 씁니다.
         - 원본 `train_epoch`은 전역 args에 의존해서 직접 호출하지 않습니다.
 
-        한 optimizer step = microbatch 4개 × 누적 2회 = 8샘플.
+        한 optimizer step = microbatch당 4샘플 × microbatch 2회 누적 = 8샘플.
         흐름: `zero_grad → forward → (CE+aux)/누적수 → backward → clip → step`.
 
         작은 모델이라 학습률을 키웠습니다(정렬 2e-2, SFT 3e-3). "정렬 > SFT" 방향만 원본과 같습니다.
         """),
-        alignment_steps, sft_steps,
+        alignment_steps, sft_steps, baseline_checks,
     ])
-    return alignment_steps, sft_steps
+    return alignment_steps, baseline_checks, sft_steps
 
 
 @app.cell
@@ -508,7 +510,7 @@ def _(DataLoader, get_lr, torch, vlm_collate_fn):
 
 
 @app.cell
-def _(alignment_steps, config, fit_stage, json, llm_weight_path, load_vlm, setup_seed, sft_steps, torch, training_dir, vlm_datasets):
+def _(alignment_steps, baseline_checks, config, fit_stage, json, llm_weight_path, load_vlm, setup_seed, sft_steps, torch, training_dir, vlm_datasets):
     def save_weights(model, prefix):
         # 원본처럼 encoder를 제외합니다. CPU 수치 비교를 위해 float32를 유지합니다.
         path = training_dir / f"{prefix}_{config.hidden_size}.pth"
@@ -519,20 +521,23 @@ def _(alignment_steps, config, fit_stage, json, llm_weight_path, load_vlm, setup
     # ② 텍스트 LLM에서 시작, Projector만 학습
     aligned_model = load_vlm("llm", freeze=2, weight_dir=training_dir)
     _llm_weights = torch.load(llm_weight_path, weights_only=True)
-    for _name, _value in _llm_weights.items():
-        torch.testing.assert_close(aligned_model.state_dict()[_name], _value, rtol=0, atol=0)
+    if baseline_checks.value:
+        for _name, _value in _llm_weights.items():
+            torch.testing.assert_close(aligned_model.state_dict()[_name], _value, rtol=0, atol=0)
     alignment_history, alignment_changes = fit_stage(aligned_model, vlm_datasets["alignment"], alignment_steps.value, 2e-2)
     alignment_weight_path = save_weights(aligned_model, "pretrain_vlm")
 
     # ③ 정렬 가중치에서 시작, Projector + LLM 첫·마지막 층 학습
     sft_model = load_vlm("pretrain_vlm", freeze=1, weight_dir=training_dir)
-    for _name, _value in aligned_model.state_dict().items():
-        torch.testing.assert_close(sft_model.state_dict()[_name], _value, rtol=0, atol=0)
+    if baseline_checks.value:
+        for _name, _value in aligned_model.state_dict().items():
+            torch.testing.assert_close(sft_model.state_dict()[_name], _value, rtol=0, atol=0)
     sft_history, sft_changes = fit_stage(sft_model, vlm_datasets["sft"], sft_steps.value, 3e-3)
     sft_weight_path = save_weights(sft_model, "sft_vlm")
 
     stage_metrics = {
         "seed": 42, "alignment_steps": alignment_steps.value, "sft_steps": sft_steps.value,
+        "baseline_checks": baseline_checks.value,
         "text_llm_lr": 3e-3, "text_llm_steps": 200, "alignment_lr": 2e-2, "sft_lr": 3e-3,
         "microbatch_size": 4, "accumulation_steps": 2, "grad_clip": 1.0, "dtype": "float32", "device": "cpu",
         "alignment_history": alignment_history, "sft_history": sft_history,
@@ -577,12 +582,13 @@ def _(mo):
     mo.md("""
     ## 8. 각 단계는 이미지를 사용하는가?
 
-    답변 전체 CE는 `색`, `은`, EOS처럼 이미지와 무관한 토큰도 포함합니다. 그래서 이미지 효과가 묻힙니다.
+    답변 전체 CE에는 `색`, `은`, EOS도 포함됩니다. 이 토큰들 때문에 이미지의 효과가 잘 드러나지 않을 수 있습니다.
     여기서는 **색 단어 위치의 정답 확률**만 봅니다(앞 토큰은 teacher forcing).
 
     - **정상 이미지:** 정답 색 확률이 높아야 합니다.
     - **바꾼 이미지:** 반대 색 이미지, 정답은 그대로. 이미지를 쓴다면 확률이 **낮아져야** 합니다.
-      두 값이 비슷하면 이미지를 무시하는 것입니다(무작위면 약 0.5).
+      두 값이 비슷하면 이 검사에서는 이미지 교체 효과가 드러나지 않습니다.
+      확률은 전체 어휘의 softmax 값입니다. 색이 두 개여도 무작위 기준은 0.5가 아닐 수 있습니다.
     - **greedy:** 헤더까지만 넣고 모델이 이어 쓴 결과입니다. CE와는 다른 지표입니다.
 
     **예측:**
@@ -594,7 +600,7 @@ def _(mo):
 
 
 @app.cell
-def _(aligned_model, color_ids, json, load_vlm, setup_seed, sft_model, tokenizer, torch, training_dir, vlm_datasets):
+def _(aligned_model, baseline_checks, color_ids, json, load_vlm, setup_seed, sft_model, tokenizer, torch, training_dir, vlm_datasets):
     def _batch(pv):
         return {k: v[None] for k, v in pv.items()}
 
@@ -639,20 +645,21 @@ def _(aligned_model, color_ids, json, load_vlm, setup_seed, sft_model, tokenizer
 
     _blind, _aligned, _sft = probe_rows
     # ① 이미지를 구분하지 못함 → ② Projector만으로 이미지 사용 → ③ 지시 형식까지
-    assert abs(_blind["짧은 질문 정상 이미지"] - _blind["짧은 질문 바꾼 이미지"]) < 0.1
-    assert _aligned["짧은 질문 정상 이미지"] > 0.8 and _aligned["짧은 질문 바꾼 이미지"] < 0.2
-    assert _sft["지시 질문 greedy 정확 일치"] == "4/4" and _sft["지시 질문 바꾼 이미지"] < 0.2
+    if baseline_checks.value:
+        assert abs(_blind["짧은 질문 정상 이미지"] - _blind["짧은 질문 바꾼 이미지"]) < 0.1
+        assert _aligned["짧은 질문 정상 이미지"] > 0.8 and _aligned["짧은 질문 바꾼 이미지"] < 0.2
+        assert _sft["지시 질문 greedy 정확 일치"] == "4/4" and _sft["지시 질문 바꾼 이미지"] < 0.2
     (training_dir / "image-use-probe.json").write_text(json.dumps(probe_rows, ensure_ascii=False, indent=2), encoding="utf-8")
     return (probe_rows,)
 
 
 @app.cell(hide_code=True)
-def _(mo, probe_rows):
+def _(baseline_checks, mo, probe_rows):
     # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([
         mo.ui.table(probe_rows, selection=None),
         mo.md("""
-        **읽는 법.**
+        **기본 실험의 읽는 법.**
 
         - ① 텍스트 LLM: 정상과 바꾼 이미지의 확률이 거의 같습니다. 이미지를 못 읽습니다.
         - ② 정렬 뒤: **LLM은 그대로인데** 정상은 높고 바꾼 쪽은 낮습니다.
@@ -666,6 +673,10 @@ def _(mo, probe_rows):
         원본 SFT 학습률이 매우 작은(5e-6) 이유입니다.
 
         두 색 사각형 과제의 결과일 뿐, 범용 이미지 이해 정확도가 아닙니다.
+        """ if baseline_checks.value else """
+        **변형 과제 모드:** 기본 실험의 확률 임계값·4/4 일치를 요구하지 않습니다.
+        표의 정상/교환 이미지 확률과 greedy를 비교해 실제 결과를 설명하세요.
+        가중치 로딩과 동결·복원 등 구조 검사는 그대로 수행합니다.
         """),
     ])
     return
@@ -729,10 +740,13 @@ def _(mo):
     - 입력 가중치는 `../out/`, resume은 `../checkpoints/`에서 읽습니다.
     - `strict=False`는 빠진 키를 허용합니다. 가중치가 실제로 들어갔는지 확인하세요(6절 assert 참고).
 
-    **과제 — 예측을 적고, 하나만 바꾼 뒤, 8절 표로 설명하세요.**
+    **과제 — 먼저 6절의 기본 실험 검사를 해제하고, 예측을 적은 뒤 하나만 바꾸세요.**
+    기본 가중치와의 동일성·고정된 성공 임계값만 건너뜁니다.
+    8절 표에서 성능이 낮아져도 관찰 결과로 기록하세요. 과제 뒤에는 코드와 검사 옵션을 기본값으로 되돌리세요.
 
     1. **텍스트 LLM 없이:** 정렬을 `load_vlm("none", freeze=2)`에서 시작하세요.
-       무작위 LLM을 동결하면 Projector가 맞출 기준이 없습니다. 8절 ② 행은 어떻게 될까요?
+       이미 학습된 언어 표현이 없는 고정 LLM에서도 작은 과제를 맞출 수 있을까요?
+       성능을 단정하지 말고 8절 ② 행과 기본 실험을 비교하세요.
     2. **정렬 생략:** 정렬은 선택 단계입니다. SFT를 `"llm"`에서 바로 시작하세요.
        바꾼 이미지의 확률을 비교하세요.
     3. **SFT 동결 정책:** `freeze=2`와 `freeze=0`으로 바꿔 greedy 일치와 바뀐 텐서 수를 적으세요.

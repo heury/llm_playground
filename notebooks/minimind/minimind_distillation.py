@@ -81,7 +81,7 @@ def _(mo):
     - **hard label:** 정답 `야옹` 하나만 줍니다.
     - **soft target:** 교사가 `야옹 0.7, 멍멍 0.2, 음메 0.1`을 줍니다.
 
-    soft target으로 학생은 다른 후보에 대한 교사의 선호도 배웁니다.
+    학생은 soft target에서 다른 후보의 상대 확률도 배웁니다.
     숫자는 설명용입니다. 교사의 실수도 함께 전달될 수 있습니다.
 
     | 방식 | 학생이 받는 신호 | 대응 손실 |
@@ -300,11 +300,7 @@ def _(SFTDataset, data_path, tokenizer, truncation_ui):
 @app.cell(hide_code=True)
 def _(mo, short_ids, short_labels, tokenizer, truncation_ui):
     # ▸ 결과 설명 — 실행하면 계산 값이 들어간 설명이 나타납니다 (marimo 표시 코드)
-    mo.md(f"길이={truncation_ui.value}, 유효 정답={int((short_labels[1:] != -100).sum())}개. "
-          f"토큰: `{tokenizer.convert_ids_to_tokens(short_ids.tolist())}`\n\n"
-          "SFTDataset은 자른 뒤 EOS를 다시 붙이지 않습니다. 응답이 다 잘리면 정답이 0개입니다. "
-          "빈 텐서로 KL을 계산하면 NaN이 될 수 있어서, 아래 함수는 이런 배치를 거부합니다. "
-          "길이 8/24/64를 비교하세요.")
+    mo.md(f'길이={truncation_ui.value}, 유효 정답={int((short_labels[1:] != -100).sum())}개. 토큰: `{tokenizer.convert_ids_to_tokens(short_ids.tolist())}`\n\nSFTDataset은 자른 뒤 EOS를 다시 붙이지 않습니다. 응답이 모두 잘리면 정답이 0개입니다. 이때 KL이 NaN이 될 수 있습니다. 아래 함수는 이런 배치를 거부합니다. 길이 8/24/64를 비교하세요.')
     return
 
 
@@ -365,8 +361,12 @@ def _(MiniMindConfig, MiniMindForCausalLM, input_ids, labels, torch, vocabulary)
     student_initial = new_model(24, 1, 7)
     _optimizer = torch.optim.AdamW(teacher.parameters(), lr=0.005, weight_decay=0.0)
     teacher_history = []
+    teacher_steps = 160  # 과제 5에서는 1로 바꿉니다.
+    assert teacher_steps >= 1
     teacher.train()
-    for _step in range(160):
+    with torch.no_grad():
+        teacher_initial_ce = teacher(input_ids, labels=labels).loss.item()
+    for _step in range(teacher_steps):
         _optimizer.zero_grad(set_to_none=True)
         _loss = teacher(input_ids, labels=labels).loss
         assert torch.isfinite(_loss)
@@ -378,19 +378,22 @@ def _(MiniMindConfig, MiniMindForCausalLM, input_ids, labels, torch, vocabulary)
     teacher.eval().requires_grad_(False)
     with torch.no_grad():
         teacher_logits = teacher(input_ids).logits.detach()
-    assert teacher_history[-1] < teacher_history[0]
-    return (new_model, student_initial, teacher, teacher_history, teacher_logits,)
+        teacher_final_ce = teacher(input_ids, labels=labels).loss.item()
+    assert torch.isfinite(torch.tensor(teacher_final_ce))
+    # history는 갱신 전 손실입니다. 한 step이어도 갱신 전후를 별도로 비교합니다.
+    assert teacher_final_ce < teacher_initial_ce
+    return (new_model, student_initial, teacher, teacher_final_ce, teacher_history, teacher_initial_ce, teacher_logits, teacher_steps,)
 
 
 @app.cell(hide_code=True)
-def _(mo, student_initial, teacher):
+def _(mo, student_initial, teacher, teacher_final_ce, teacher_initial_ce, teacher_steps):
     # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
-    mo.ui.table([
+    mo.vstack([mo.md(f"교사 {teacher_steps} step, 갱신 전후 CE: `{teacher_initial_ce:.4f} → {teacher_final_ce:.4f}`. 손실 감소가 좋은 교사를 보장하지는 않습니다."), mo.ui.table([
         {"역할": role, "은닉": model.config.hidden_size, "층": model.config.num_hidden_layers,
          "고유 매개변수 수": sum(p.numel() for p in model.parameters()),
          "학습 가능 수": sum(p.numel() for p in model.parameters() if p.requires_grad)}
         for role, model in [("동결된 교사", teacher), ("초기 학생", student_initial)]
-    ], selection=None)
+    ], selection=None)])
     return
 
 
@@ -476,10 +479,7 @@ def _(evaluation, metrics, mo, student_curve_fig):
     # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([
         mo.ui.table([{"model": name, **metrics} for name, metrics in evaluation.items()], selection=None), student_curve_fig,
-        mo.md("**해설:** 정답률은 다음 토큰을 맞힌 비율입니다. 교사 1등 일치율은 교사와 argmax가 같은 비율입니다. "
-              "둘 다 학습한 4개 대화로 잽니다. EOS·줄바꿈도 포함하니 다음 절의 생성 결과도 보세요. "
-              "CE·KL이 좋아져도 새 질문에 강해진다는 뜻은 아닙니다. 곡선은 갱신 전, 표는 마지막 갱신 후 손실입니다. "
-              "교사가 안 바뀌고 gradient가 없다는 것은 assert로 확인했습니다."),
+        mo.md('**해설:** 정답률은 다음 토큰을 맞힌 비율입니다. 교사 1등 일치율은 교사와 argmax가 같은 비율입니다.\n\n둘 다 학습한 4개 대화에서 측정하며 EOS·줄바꿈을 포함합니다. 다음 절의 생성 결과도 확인하세요. 새 질문에 대한 성능은 측정하지 않습니다.\n\n곡선은 갱신 전, 표는 마지막 갱신 후 손실입니다. 교사의 가중치 불변과 gradient 부재도 assert로 확인했습니다.'),
     ])
     return
 
@@ -525,13 +525,13 @@ def _(generation_rows, mo, probability_rows):
 
 
 @app.cell
-def _(alpha_ui, evaluation, generation_rows, hashlib, histories, json, output_dir, probability_rows, repo_root, temperature_ui, uuid4):
+def _(alpha_ui, evaluation, generation_rows, hashlib, histories, json, output_dir, probability_rows, repo_root, teacher_steps, temperature_ui, uuid4):
     experiment_dir = output_dir / f"students-{uuid4().hex[:6]}"
     experiment_dir.mkdir()
     _sources = ["projects/minimind/trainer/train_distillation.py", "projects/minimind/dataset/lm_dataset.py", "projects/minimind/model/model_minimind.py", "notebooks/minimind/minimind_distillation.py"]
     metrics = {
         "alpha": alpha_ui.value, "temperature": temperature_ui.value,
-        "teacher_steps": 160, "student_steps": 80, "teacher_seed": 42, "student_seed": 7,
+        "teacher_steps": teacher_steps, "student_steps": 80, "teacher_seed": 42, "student_seed": 7,
         "evaluation_split": "training dialogues only", "evaluation": evaluation,
         "generation": generation_rows, "probabilities": probability_rows, "histories": histories,
         "source_sha256": {p: hashlib.sha256((repo_root / p).read_bytes()).hexdigest() for p in _sources},
@@ -577,7 +577,7 @@ def _(experiment_dir, mo):
        `τ² KL`만 보지 말고 공통 `KL(τ=1)`도 보세요.
     4. 관찰 길이를 8로 바꾸세요. 왜 정답이 0개일까요?
        실제 학습에서는 이런 배치를 거르거나 길이를 늘려야 합니다.
-    5. 교사 준비를 1 step으로 줄이세요. 틀린 교사는 학생에게 무엇을 가르칠까요?
+    5. 5절의 `teacher_steps`를 1로 줄이세요. 틀린 교사는 학생에게 무엇을 가르칠까요?
        **힌트:** 교사 CE와 첫 소리 정답 수부터 보세요.
 
     **완료 기준:**
@@ -590,8 +590,7 @@ def _(experiment_dir, mo):
     지표·곡선·생성·소스 해시: `{experiment_dir / 'metrics.json'}`
 
     **다음 실습:** `minimind_dpo.py`.
-    지금까지는 "정답(또는 교사)을 따라 하기"였습니다.
-    다음은 **두 응답 중 어느 쪽이 나은가**라는 선호 신호로 학습합니다.
+    다음은 **두 응답 중 어느 쪽이 나은가**를 학습합니다.
     """)
     return
 

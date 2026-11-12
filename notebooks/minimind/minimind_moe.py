@@ -195,7 +195,7 @@ def _(mo):
     ### 2-1. 같은 입력을 Dense와 MoE에 넣기
 
     Dense 기준은 expert 0과 같은 FFN입니다.
-    MoE는 shape는 그대로 두고, 계산 경로와 가중치 보유량을 바꿉니다.
+    MoE는 입출력 shape를 유지합니다. 계산 경로와 전체 매개변수 수는 달라집니다.
     아래 전문가별 출력을 위의 선택·가중합 표와 맞춰 보세요.
     """)
     return
@@ -285,7 +285,7 @@ def _(manual_aux_loss, mo, moe_parameter_summary, routing_fig):
         routing_fig,
         mo.md(f"직접 계산한 보조 손실: `{float(manual_aux_loss):.6f}`. 원본과 같습니다. eval 모드에서 원본은 0을 씁니다."),
         mo.ui.table([moe_parameter_summary], selection=None),
-        mo.md("**해설:** 일부만 선택해도 모든 전문가의 가중치는 메모리에 있습니다. 선택 경로 수는 속도 측정이 아닙니다. 이 구현은 반복문 등 추가 비용이 있습니다. Dense보다 빠르다고 단정하지 마세요."),
+        mo.md("**해설:** 모든 전문가의 가중치는 메모리에 남습니다. 일부만 실행해도 반복문 등의 비용이 듭니다. 실제 속도는 측정하지 않았습니다."),
     ])
     return
 
@@ -321,7 +321,7 @@ def _(balance_examples, mo):
     # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([
         mo.ui.table(balance_examples, selection=None),
-        mo.md("**해설:** 몰린 쪽의 손실이 더 큽니다. 하지만 실제 학습에서는 선택이 불연속적으로 바뀌고 주 손실도 함께 줄입니다. 그래서 균등 사용이 보장되지는 않습니다. 5절에서 계수 0과 0.01을 비교합니다."),
+        mo.md("**해설:** 편중된 표의 손실이 더 큽니다. 실제 학습에서는 선택이 갑자기 바뀌고 주 손실도 영향을 줍니다. 균등 사용을 보장하지는 않습니다. 5절에서 계수 0과 0.01을 비교합니다."),
     ])
     return
 
@@ -444,7 +444,7 @@ def _(mo, moe_gradient_rows, probe_selected_experts):
     mo.vstack([
         mo.md(f"두 토큰의 선택 전문가: `{probe_selected_experts}`. 검증은 실제 선택 결과를 기준으로 합니다."),
         mo.ui.table(moe_gradient_rows, selection=None),
-        mo.md("**관찰:** 출력은 선택된 전문가의 출력과 같습니다. 선택된 전문가와 router에 gradient가 있는지 보세요. 선택되지 않은 전문가는 0입니다. 선택된 쪽도 상황에 따라 0일 수 있습니다. 실제 가중치 변화는 optimizer 설정에 따라 또 다릅니다."),
+        mo.md("**관찰:** 출력은 선택된 전문가의 출력과 같습니다. 전문가와 router의 gradient를 확인하세요. 미선택 전문가는 0이고, 선택된 전문가도 0일 수 있습니다. 가중치 변화는 optimizer 설정에도 영향을 받습니다."),
     ])
     return
 
@@ -614,7 +614,7 @@ def _(aux_comparison_rows, lm_loss_fig, mo, moe_training_history, routing_snapsh
         lm_loss_fig, mo.ui.table(aux_comparison_rows, selection=None), usage_fig,
         mo.ui.table(routing_snapshot_rows, selection=None),
         mo.ui.table(moe_training_history[:3], selection=None),
-        mo.md("**관찰:** 보조 손실 계수만 다르고 나머지는 같습니다(80 step). 계수 0에서 aux=0은 균형을 뜻하지 않습니다. 균형 항, 사용량, 주 손실을 함께 보세요. 어느 쪽이 꼭 더 낫다고 가정하지 마세요. 선택 합은 8*k입니다. BOS 다음 정답이 두 개라 손실이 0이 안 돼도 됩니다."),
+        mo.md("**관찰:** 보조 손실 계수만 다르고 나머지는 같습니다(80 step). 계수 0에서 aux=0은 균형을 뜻하지 않습니다. 균형 항, 사용량, 주 손실을 함께 보세요. 총 선택 횟수는 8*k입니다. BOS 다음 정답이 두 개라 손실은 0이 아닐 수 있습니다."),
     ])
     return
 

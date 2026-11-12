@@ -1,10 +1,3 @@
-# /// script
-# requires-python = ">=3.13"
-# dependencies = [
-#     "marimo>=0.25.2",
-# ]
-# ///
-
 import marimo
 
 __generated_with = "0.25.2"
@@ -91,7 +84,7 @@ def _(mo):
 
     **이 노트북의 흐름:** 대화 JSONL → chat template → 정답 마스킹 → 손실 →
     실제 템플릿과 추론 데이터 → 학습 → 평가·생성·저장.
-    정답 이동·기울기 누적·학습률은 사전 학습 노트북과 같아서 짧게만 봅니다.
+    정답 이동·기울기 누적·학습률은 사전 학습 노트북과 같습니다.
 
     **실행 환경:** GPU와 다운로드 없이 CPU로 실행합니다.
     기준 모델도 이 노트북 안에서 만듭니다.
@@ -106,7 +99,7 @@ def _(mo):
     mo.md("""
     ## 1. 원본 형식의 대화 JSONL
 
-    한 줄에 `conversations` 배열 하나. `role`은 화자, `content`는 발화입니다.
+    한 줄에 `conversations` 배열을 하나 넣습니다. `role`은 화자, `content`는 발화입니다.
 
     - 학습 질문 8개
     - 검증 질문 4개: 단어는 같고 조합만 다릅니다. 평가에만 씁니다.
@@ -315,7 +308,7 @@ def _(mo):
 
     **예측:** `야옹`을 예측하는 logits는 `야옹` 입력 위치일까요, 그 앞 위치일까요?
     한 칸 이동(`logits[:, :-1]` ↔ `labels[:, 1:]`)은 사전 학습과 같습니다.
-    새로 볼 것은 하나입니다. **assistant 헤더의 마지막 토큰이 첫 응답을 예측합니다.**
+    **assistant 헤더의 마지막 토큰이 첫 응답을 예측합니다.**
     """)
     return
 
@@ -441,7 +434,8 @@ def _(mo):
 
     **예측:** think 블록 안의 추론도 손실에 들어갈까요?
 
-    **들어갑니다.** `<|im_start|>assistant\n`부터 `<|im_end|>\n`까지 전부 정답입니다.
+    **들어갑니다.** `<|im_start|>assistant\n` **헤더 다음부터** `<|im_end|>\n`까지 정답입니다.
+    헤더는 문맥이며 `label=-100`입니다. 뒤의 think 블록·최종 답·종료 경계만 손실에 들어갑니다.
     그래서 **추론 과정과 최종 답을 함께 배웁니다.** SFT로 추론 모델을 만드는 방법입니다.
 
     **추론이 없을 때:** 빈 블록 `<think>\n\n</think>\n\n`이 들어갑니다.
@@ -522,9 +516,7 @@ def _(
             {"추론 없는 대화": "template 원문", "assistant 부분": repr(empty_think_prompt.split("assistant\n")[-1])},
             {"추론 없는 대화": "빈 think 제거(80%)", "assistant 부분": repr(post_processing_chat(empty_think_prompt, remove_empty_think=True).split("assistant\n")[-1])},
         ], selection=None),
-        mo.md("**관찰:** think 블록, 최종 답, 종료 토큰이 한 정답 구간입니다. "
-              "추론을 배운다고 그 추론이 옳은 건 아닙니다. 데이터 품질이 그대로 학습됩니다. "
-              "실제 tokenizer에서 `assistant\\n` 경계는 5토큰, 종료 경계(`<|im_end|>`+줄바꿈)는 2토큰입니다."),
+        mo.md('**관찰:** think 블록부터 종료 토큰까지가 정답 구간입니다. 잘못된 추론도 그대로 배울 수 있습니다. 실제 tokenizer에서 `assistant\\n` 경계는 5토큰, 종료 경계(`<|im_end|>`+줄바꿈)는 2토큰입니다.'),
     ])
     return
 
@@ -815,7 +807,7 @@ def _(generation_rows, generation_summary, mo):
         mo.md("""
         - 생성에는 `conversations[:-1]`만 넘겼습니다. **정답이 입력에 없는지** 확인하세요.
         - greedy로 최대 5토큰을 만들고 EOS에서 멈춥니다. special token도 표에 남깁니다.
-        - 검증 4개는 아는 동물·소리의 새 조합입니다. 새 동물이나 자유 대화 능력은 알 수 없습니다.
+        - 검증 4개는 아는 동물·소리의 새 조합입니다. 새 동물이나 자유 대화 능력은 평가하지 않습니다.
         """),
         mo.ui.table(generation_summary, selection=None),
         mo.ui.table(generation_rows, selection=None),
@@ -854,7 +846,8 @@ def _(checkpoint_path, mo, restore_difference, training_settings):
     # ▸ 결과 설명 — 실행하면 계산 값이 들어간 설명이 나타납니다 (marimo 표시 코드)
     mo.md(f"""
     저장 파일: `{checkpoint_path}`. 같은 설정으로 복원한 logits의 최대 차이: `{restore_difference}`.
-    설정, 학습 기록, 생성 결과, tokenizer도 같은 폴더에 저장했습니다.
+    설정·학습 기록·생성 결과는 가중치와 같은 `training-<고유 ID>/` 폴더에 저장했습니다.
+    tokenizer는 그 상위 실행 폴더의 `tokenizer/`에 있습니다.
     설정: `{training_settings}`.
 
     여기서 저장한 것은 추론용 state_dict입니다.
@@ -913,7 +906,6 @@ def _(mo):
 
     **출처:** `minimind/trainer/train_full_sft.py`, `minimind/dataset/lm_dataset.py`,
     `minimind/model/model_minimind.py`, `minimind/trainer/trainer_utils.py`.
-    원본을 가져다 쓰기만 하고 수정하지 않습니다.
     저작권·라이선스는 `minimind/LICENSE`를 보세요.
     """)
     return
