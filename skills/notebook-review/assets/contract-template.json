@@ -1,0 +1,597 @@
+{
+  "template_only": true,
+  "contract_id": null,
+  "contract_version": 1,
+  "rubric_version": "2.0",
+  "project": null,
+  "run_id": null,
+  "target_files": [],
+  "reference_implementations": [],
+  "projects_comparison": {
+    "applicable": null,
+    "reason": null
+  },
+  "learner": null,
+  "objectives": [],
+  "prerequisites": [],
+  "required_theory": [],
+  "optional_theory": [],
+  "class_minutes": null,
+  "environment": null,
+  "assumptions": [],
+  "units": [],
+  "checkpoints": [
+    {
+      "id": "S1.1",
+      "role": "student",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "S1.2",
+      "role": "student",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "S1.3",
+      "role": "student",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "S1.4",
+      "role": "student",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "S2.1",
+      "role": "student",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "S2.2",
+      "role": "student",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "S2.3",
+      "role": "student",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "S2.4",
+      "role": "student",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "S3.1",
+      "role": "student",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "S3.2",
+      "role": "student",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "S3.3",
+      "role": "student",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "S3.4",
+      "role": "student",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "S4.1",
+      "role": "student",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "S4.2",
+      "role": "student",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "S4.3",
+      "role": "student",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "S4.4",
+      "role": "student",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "S5.1",
+      "role": "student",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "S5.2",
+      "role": "student",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "S5.3",
+      "role": "student",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "S5.4",
+      "role": "student",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "T1.1",
+      "role": "teacher",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "T1.2",
+      "role": "teacher",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "T1.3",
+      "role": "teacher",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "T1.4",
+      "role": "teacher",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "T2.1",
+      "role": "teacher",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "T2.2",
+      "role": "teacher",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "T2.3",
+      "role": "teacher",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "T2.4",
+      "role": "teacher",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "T3.1",
+      "role": "teacher",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "T3.2",
+      "role": "teacher",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "T3.3",
+      "role": "teacher",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "T3.4",
+      "role": "teacher",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "T4.1",
+      "role": "teacher",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "T4.2",
+      "role": "teacher",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "T4.3",
+      "role": "teacher",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "T4.4",
+      "role": "teacher",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "T5.1",
+      "role": "teacher",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "T5.2",
+      "role": "teacher",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "T5.3",
+      "role": "teacher",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "T5.4",
+      "role": "teacher",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "E1.1",
+      "role": "author",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "E1.2",
+      "role": "author",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "E1.3",
+      "role": "author",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "E1.4",
+      "role": "author",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "E2.1",
+      "role": "author",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "E2.2",
+      "role": "author",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "E2.3",
+      "role": "author",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "E2.4",
+      "role": "author",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "E3.1",
+      "role": "author",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "E3.2",
+      "role": "author",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "E3.3",
+      "role": "author",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "E3.4",
+      "role": "author",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "E4.1",
+      "role": "author",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "E4.2",
+      "role": "author",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "E4.3",
+      "role": "author",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "E4.4",
+      "role": "author",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "E5.1",
+      "role": "author",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "E5.2",
+      "role": "author",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "E5.3",
+      "role": "author",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "E5.4",
+      "role": "author",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "R1.1",
+      "role": "researcher",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "R1.2",
+      "role": "researcher",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "R1.3",
+      "role": "researcher",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "R1.4",
+      "role": "researcher",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "R2.1",
+      "role": "researcher",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "R2.2",
+      "role": "researcher",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "R2.3",
+      "role": "researcher",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "R2.4",
+      "role": "researcher",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "R3.1",
+      "role": "researcher",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "R3.2",
+      "role": "researcher",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "R3.3",
+      "role": "researcher",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "R3.4",
+      "role": "researcher",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "R4.1",
+      "role": "researcher",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "R4.2",
+      "role": "researcher",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "R4.3",
+      "role": "researcher",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "R4.4",
+      "role": "researcher",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "R5.1",
+      "role": "researcher",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "R5.2",
+      "role": "researcher",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "R5.3",
+      "role": "researcher",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    },
+    {
+      "id": "R5.4",
+      "role": "researcher",
+      "units": [],
+      "excluded_reason": null,
+      "critical": false
+    }
+  ],
+  "execution_scope": {
+    "source_edits": false,
+    "syntax_checks": false,
+    "marimo_checks": false,
+    "small_cpu_execution": false,
+    "ui_execution": false,
+    "full_training": false,
+    "downloads": false,
+    "package_installation": false,
+    "cloud_resources": false
+  },
+  "required_validations": []
+}
