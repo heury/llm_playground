@@ -1,0 +1,31 @@
+[project]
+name = "vlm-from-scratch"
+version = "0.1.0"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "marimo>=0.25.2,<0.26",
+    "torch>=2.12,<2.13",
+    "torchvision>=0.21,<1",
+    "transformers>=4.57.6,<5",
+    "accelerate",
+    "datasets",
+    "pillow",
+    "matplotlib",
+    "numpy",
+    "pandas",
+    "tqdm",
+    "requests",
+    "einops",
+    "timm",
+    "supervision",
+    "pycocotools",
+    "scikit-image",
+    "diffusers",
+    "sentencepiece",
+]
+
+[project.optional-dependencies]
+ocr = ["pytesseract"]
+
+[tool.uv]
+package = false

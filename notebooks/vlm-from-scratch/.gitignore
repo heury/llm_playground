@@ -1,0 +1,37 @@
+# Quarto
+/_site/
+/.quarto/
+_freeze/
+
+# Python
+__marimo__/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# Model checkpoints & data
+*.pth
+*.pt
+*.bin
+*.safetensors
+mini-vlm-*/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo

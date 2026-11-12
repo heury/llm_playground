@@ -10,6 +10,7 @@ LLM의 구조, 미세 조정, 선호·강화 학습과 추론(reasoning), 멀티
 
 ```text
 1부 구조         structure ─┬─ feedforward → moe            (구조 심화, 선택)
+                            ├─ sampling                     (생성 심화, 선택)
                             │
 2부 학습         pretraining → sft → lora → distillation
                                     │
@@ -20,9 +21,10 @@ LLM의 구조, 미세 조정, 선호·강화 학습과 추론(reasoning), 멀티
 
 | 단계 | 노트북 | 핵심 질문 | 사용하는 원본 |
 | --- | --- | --- | --- |
-| 1-1 | [모델 구조와 학습](minimind_structure.py) | 토큰 ID가 Embedding·Attention(RoPE·GQA)·MLP를 지나 다음 토큰 확률이 되는 과정, 생성과 KV cache | `minimind/model/model_minimind.py` |
+| 1-1 | [모델 구조와 학습](minimind_structure.py) | 토큰 ID가 Embedding·Attention(RoPE 주파수·GQA·패딩 마스크)·MLP를 지나 다음 토큰 확률이 되는 과정, 생성과 KV cache(RoPE 위치) | `minimind/model/model_minimind.py` |
 | 1-2 | [FeedForward](minimind_feedforward.py) | SwiGLU는 무엇을 계산하고, 왜 위치를 섞지 않는가 | `FeedForward`, `MiniMindBlock` |
 | 1-3 | [MoE](minimind_moe.py) | router·top-k·가중합, 보조 손실, top-1 straight-through | `MOEFeedForward` |
+| 1-4 | [생성과 샘플링](minimind_sampling.py) | greedy vs sampling, temperature·top-k·top-p·repetition penalty, 원본 `generate` 재현, 배치 종료 처리 | `MiniMindForCausalLM.generate` |
 | 2-1 | [사전 학습](minimind_pretraining.py) | 원문 → PretrainDataset → 정답 이동·패딩 → 누적·clip·학습률 → 체크포인트 | `train_pretrain.py`, `lm_dataset.py`, `trainer_utils.py` |
 | 2-2 | [SFT](minimind_sft.py) | 대화 template, assistant 정답 마스크, **실제 template의 `<think>` 추론 데이터** | `train_full_sft.py`, `SFTDataset` |
 | 2-3 | [LoRA](minimind_lora.py) | 같은 목표에서 저랭크 A/B만 학습, 저장·복원·병합 | `model_lora.py` |

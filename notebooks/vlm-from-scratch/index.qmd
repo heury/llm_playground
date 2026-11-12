@@ -1,0 +1,273 @@
+---
+pagetitle: "VLM from Scratch"
+toc: false
+format:
+  html:
+    page-layout: custom
+    css: styles.css
+    include-in-header:
+      text: |
+        <link rel="preconnect" href="https://fonts.googleapis.com">
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+---
+
+::: {.hero}
+::: {.hero-content}
+# VLM from Scratch
+
+Build Vision-Language Models from the ground up.
+
+::: {.hero-subtitle}
+A 12-part journey from a simple image captioner to advanced multi-modal AI systems. No magic, no black boxes — just pure understanding.
+:::
+
+::: {.hero-cta}
+[Start Learning](#the-journey){.btn-primary}
+[View on GitHub](https://github.com/nipunbatra/vlm-from-scratch){.btn-secondary}
+:::
+
+:::
+:::
+
+::: {.section-dark}
+::: {.container}
+## What You'll Build
+
+::: {.stats-grid}
+::: {.stat-card}
+### 12
+Hands-on notebooks
+:::
+
+::: {.stat-card}
+### 8+
+Vision tasks mastered
+:::
+
+::: {.stat-card}
+### ~700M
+Parameters trained
+:::
+
+::: {.stat-card}
+### 0
+Black boxes
+:::
+:::
+
+:::
+:::
+
+
+::: {.section-light}
+::: {.container}
+## The Journey {#the-journey}
+
+::: {.journey-grid}
+
+::: {.journey-card .foundation}
+::: {.part-number}
+01
+:::
+### Minimal VLM
+Connect a Vision Transformer to a Language Model. Train on Flickr8k. Generate your first captions.
+
+[Start here →](notebooks/part-01-minimal-vlm.py)
+:::
+
+::: {.journey-card .instruction}
+::: {.part-number}
+02
+:::
+### Object Detection
+Instruction-tune for detection. Output structured JSON. Predict bounding boxes.
+
+[Continue →](notebooks/part-02-object-detection.py)
+:::
+
+::: {.journey-card .instruction}
+::: {.part-number}
+03
+:::
+### Visual QA
+Answer questions about images. Train on A-OKVQA. Build visual understanding.
+
+[Continue →](notebooks/part-03-visual-qa.py)
+:::
+
+::: {.journey-card .advanced}
+::: {.part-number}
+04
+:::
+### Multi-Task
+One model, three tasks. Unified architecture for captioning, detection, and VQA.
+
+[Continue →](notebooks/part-04-multi-task.py)
+:::
+
+::: {.journey-card .advanced}
+::: {.part-number}
+05
+:::
+### Multi-Image
+Process image sequences. Temporal reasoning. Inspired by TEOChat.
+
+[Continue →](notebooks/part-05-multi-image.py)
+:::
+
+::: {.journey-card .advanced}
+::: {.part-number}
+06
+:::
+### Task Routing
+Auto-detect task from prompt. Intelligent routing. Seamless UX.
+
+[Continue →](notebooks/part-06-task-routing.py)
+:::
+
+::: {.journey-card .reasoning}
+::: {.part-number}
+07
+:::
+### Chain of Thought
+Step-by-step visual reasoning. Think before answering. Improved accuracy.
+
+[Continue →](notebooks/part-07-chain-of-thought.py)
+:::
+
+::: {.journey-card .reasoning}
+::: {.part-number}
+08
+:::
+### Referring Segmentation
+"The dog on the left" → polygon mask. Visual grounding meets segmentation.
+
+[Continue →](notebooks/part-08-referring-segmentation.py)
+:::
+
+::: {.journey-card .application}
+::: {.part-number}
+09
+:::
+### Image Editing
+Natural language edits. "Make it brighter" → transformed image. VLM + PIL.
+
+[Continue →](notebooks/part-09-image-editing.py)
+:::
+
+::: {.journey-card .application}
+::: {.part-number}
+10
+:::
+### Compression
+Quantization, pruning, distillation. 8x smaller. Production-ready.
+
+[Continue →](notebooks/part-10-compression.py)
+:::
+
+::: {.journey-card .application}
+::: {.part-number}
+11
+:::
+### Image Generation
+VLM meets Stable Diffusion. Understand to create. Full circle.
+
+[Continue →](notebooks/part-11-image-generation.py)
+:::
+
+::: {.journey-card .application}
+::: {.part-number}
+12
+:::
+### OCR to LaTeX
+Math equations in images → LaTeX code. TrOCR architecture.
+
+[Continue →](notebooks/part-12-ocr-latex.py)
+:::
+
+:::
+:::
+:::
+
+
+::: {.section-dark}
+::: {.container}
+## The Architecture
+
+::: {.architecture-visual}
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                                                                     │
+│    Image         Vision           Projection        Language        │
+│    Input    →    Encoder     →    Layer       →     Model     →    Output
+│                  (ViT)            (Linear)          (SmolLM)        │
+│                                                                     │
+│   224×224       768-dim           2048-dim          Text            │
+│   patches       features          aligned           tokens          │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+```
+:::
+
+::: {.tech-stack}
+**Vision Encoder**: ViT-Base/Large (86M-304M params)
+**Language Model**: SmolLM-135M/360M
+**Training**: PyTorch, HuggingFace Transformers
+**Datasets**: Flickr8k, A-OKVQA, RefCOCO, COCO
+:::
+
+:::
+:::
+
+
+::: {.section-light}
+::: {.container}
+## Prerequisites
+
+::: {.prereq-grid}
+::: {.prereq-card}
+### Python
+Comfortable with classes, functions, list comprehensions
+:::
+
+::: {.prereq-card}
+### PyTorch
+Tensors, autograd, nn.Module basics
+:::
+
+::: {.prereq-card}
+### Deep Learning
+Loss functions, backprop, training loops
+:::
+
+::: {.prereq-card}
+### ~4GB VRAM
+GPU recommended (Colab works great)
+:::
+:::
+
+:::
+:::
+
+
+::: {.section-cta}
+::: {.container}
+
+## Ready to see how VLMs really work?
+
+::: {.final-cta}
+[Begin with Part 1 →](notebooks/part-01-minimal-vlm.py){.btn-primary-large}
+:::
+
+:::
+:::
+
+
+::: {.footer}
+::: {.container}
+Built with curiosity. Every line explained.
+
+[GitHub](https://github.com/nipunbatra/vlm-from-scratch) · [LLM from Scratch](https://github.com/nipunbatra/llm-from-scratch) · Made by [Nipun Batra](https://nipunbatra.github.io)
+:::
+:::

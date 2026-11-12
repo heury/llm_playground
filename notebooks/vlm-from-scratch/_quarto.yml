@@ -1,0 +1,56 @@
+project:
+  type: website
+  output-dir: _site
+  resources:
+    - "notebooks/*.py"
+
+website:
+  title: "VLM from Scratch"
+  description: "A 12-part journey building Vision-Language Models from the ground up"
+  navbar:
+    left:
+      - text: "Home"
+        href: index.qmd
+      - text: "Parts"
+        menu:
+          - text: "01. Minimal VLM"
+            href: notebooks/part-01-minimal-vlm.py
+          - text: "02. Object Detection"
+            href: notebooks/part-02-object-detection.py
+          - text: "03. Visual QA"
+            href: notebooks/part-03-visual-qa.py
+          - text: "04. Multi-Task"
+            href: notebooks/part-04-multi-task.py
+          - text: "05. Multi-Image"
+            href: notebooks/part-05-multi-image.py
+          - text: "06. Task Routing"
+            href: notebooks/part-06-task-routing.py
+          - text: "07. Chain of Thought"
+            href: notebooks/part-07-chain-of-thought.py
+          - text: "08. Referring Segmentation"
+            href: notebooks/part-08-referring-segmentation.py
+          - text: "09. Image Editing"
+            href: notebooks/part-09-image-editing.py
+          - text: "10. Compression"
+            href: notebooks/part-10-compression.py
+          - text: "11. Image Generation"
+            href: notebooks/part-11-image-generation.py
+          - text: "12. OCR to LaTeX"
+            href: notebooks/part-12-ocr-latex.py
+    right:
+      - icon: github
+        href: https://github.com/nipunbatra/vlm-from-scratch
+
+format:
+  html:
+    theme: cosmo
+    css: styles.css
+    toc: true
+    toc-depth: 3
+    code-fold: false
+    code-tools: true
+    code-copy: true
+    highlight-style: github
+
+execute:
+  freeze: auto

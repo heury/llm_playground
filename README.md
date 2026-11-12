@@ -7,6 +7,7 @@
 | [notebooks/gpt/](notebooks/gpt/README.md) | GPT 챕터별 실습과 Attention·모델 구조 실험 |
 | [notebooks/minimind/](notebooks/minimind/README.md) | MiniMind 구조·학습·멀티모달 marimo 실습 |
 | [notebooks/unsloth/](notebooks/unsloth/README.md) | Unsloth 기반 Qwen 학습·배포 실습 |
+| [notebooks/vlm-from-scratch/](notebooks/vlm-from-scratch/README.md) | VLM 구성·학습·멀티모달 응용 12부 marimo 실습 |
 | `projects/minimind*/` | MiniMind 계열의 독립 모델 구현·학습·추론 프로젝트 |
 | `references/slides/` | 교재와 슬라이드 |
 | `test_scenarios/<프로젝트>/` | 재사용할 테스트 입력·절차·판정 기준 |
