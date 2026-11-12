@@ -74,23 +74,28 @@ def _(mo):
     mo.md(r"""
     # MiniMind SFT: 대화에서 무엇을 정답으로 삼을까
 
-    **지도 미세 조정(Supervised Fine-Tuning)**은 질문과 모범 응답으로 모델의 응답 방식을 학습합니다.
-    이 실습에서는 **대화 전체를 입력하고 assistant 응답 위치만 손실에 포함**합니다.
-    사전 학습과 같은 다음 토큰 예측을 사용하지만, 데이터 형식과 정답 위치가 달라집니다.
+    **SFT(지도 미세 조정):** 질문과 모범 응답으로 응답 방식을 가르칩니다.
 
-    `minimind/trainer/train_full_sft.py`의 학습 순서와
-    `minimind/dataset/lm_dataset.py`의 **실제 SFTDataset**을 연결합니다.
-    모델 구조 → 사전 학습 → **SFT** → LoRA 순서로 읽으면 좋습니다.
-    SFT는 학습 목적이고 Full/LoRA는 업데이트할 매개변수를 정하는 방법입니다.
-    여기서는 모델 전체를 학습하는 Full SFT를 사용합니다.
+    - 입력: 대화 전체
+    - 손실: **assistant 응답 위치만**
+    - 다음 토큰 예측은 사전 학습과 같습니다. 데이터 형식과 정답 위치만 다릅니다.
 
-    **순서:** 대화 JSONL → chat template → 정답 마스킹 → 다음 토큰 손실 →
-    실제 MiniMind 템플릿과 추론(reasoning) 데이터 → 학습 → 평가·생성·저장.
-    정답 이동·기울기 누적·학습률은 `minimind_pretraining.py`와 같으므로 짧게 확인만 합니다.
+    **사용하는 원본:**
 
-    GPU나 다운로드 없이 작은 CPU 모델을 직접 준비합니다. 기준 모델 준비도 이 노트북 안에서
-    실행하므로 다른 노트북의 가중치가 필요 없습니다. 작은 합성 과제의 결과를 관찰하는 실습이며
-    한국어 범용 모델의 성능을 평가하는 실험은 아닙니다.
+    - `minimind/trainer/train_full_sft.py`: 학습 순서
+    - `minimind/dataset/lm_dataset.py`: **실제 SFTDataset**
+
+    **읽는 순서:** 모델 구조 → 사전 학습 → **SFT** → LoRA.
+    SFT는 "무엇을 학습하나", Full/LoRA는 "어떤 매개변수를 바꾸나"입니다.
+    여기서는 전체를 학습하는 Full SFT를 씁니다.
+
+    **이 노트북의 흐름:** 대화 JSONL → chat template → 정답 마스킹 → 손실 →
+    실제 템플릿과 추론 데이터 → 학습 → 평가·생성·저장.
+    정답 이동·기울기 누적·학습률은 사전 학습 노트북과 같아서 짧게만 봅니다.
+
+    **실행 환경:** GPU와 다운로드 없이 CPU로 실행합니다.
+    기준 모델도 이 노트북 안에서 만듭니다.
+    작은 합성 과제이며, 한국어 모델 성능 평가가 아닙니다.
     산출물: `outputs/notebooks/<실행 ID>/`
     """)
     return
@@ -101,11 +106,15 @@ def _(mo):
     mo.md("""
     ## 1. 원본 형식의 대화 JSONL
 
-    한 줄에 `conversations` 배열을 둡니다. `role`은 화자, `content`는 발화입니다.
-    학습 질문 8개와 **단어는 같고 순서 조합이 다른 검증 질문 4개**를 분리합니다.
-    검증 정답은 평가에만 씁니다. 여러 턴 예제는 마스킹 관찰용이며 학습에는 넣지 않습니다.
-    실제 데이터에서 `reasoning_content`, `tools`, `tool_calls`도 지원하지만 여기서는 일반 대화에 집중합니다.
-    **예측:** 두 번 답하는 대화에서 마지막 응답만 정답으로 남을까요?
+    한 줄에 `conversations` 배열 하나. `role`은 화자, `content`는 발화입니다.
+
+    - 학습 질문 8개
+    - 검증 질문 4개: 단어는 같고 조합만 다릅니다. 평가에만 씁니다.
+    - 여러 턴 예제: 마스킹 관찰용입니다. 학습에는 안 씁니다.
+
+    원본은 `reasoning_content`, `tools`, `tool_calls`도 지원합니다. 여기서는 일반 대화만 봅니다.
+
+    **예측:** 두 번 답하는 대화에서 마지막 응답만 정답일까요?
     """)
     return
 
@@ -172,15 +181,20 @@ def _(mo):
     mo.md(r"""
     ## 2. chat template: 화자와 발화 경계 표시
 
-    읽기 쉬운 **공백 단위 작은 토크나이저**를 학습 데이터 단어만으로 만듭니다.
-    `[BOS]user\n질문[EOS]\n[BOS]assistant\n응답[EOS]\n` 형식입니다.
-    학습에서는 완성된 대화 전체를 넣고 `add_generation_prompt=False`를 사용합니다.
-    생성에서는 정답 응답을 빼고 `add_generation_prompt=True`로 assistant 헤더까지 만듭니다.
+    학습 데이터 단어로 **공백 단위 작은 토크나이저**를 만듭니다.
+    형식: `[BOS]user\n질문[EOS]\n[BOS]assistant\n응답[EOS]\n`.
 
-    원본 SFTDataset은 `BOS + assistant\n`을 찾아 응답 시작을,
-    `EOS + \n`을 찾아 종료를 판단합니다. **토크나이저와 template의 경계 표현이 일치해야 합니다.**
-    이 실습 사전에서는 공백·줄바꿈이 토큰으로 남지 않아 종료 패턴은 `[EOS]` 한 토큰입니다.
-    실제 MiniMind 서브워드 사전의 ID·길이와는 다릅니다.
+    - 학습: 대화 전체를 넣습니다. `add_generation_prompt=False`.
+    - 생성: 정답을 빼고 assistant 헤더까지 만듭니다. `add_generation_prompt=True`.
+
+    **경계 찾기:** SFTDataset은 두 패턴을 찾습니다.
+
+    - 응답 시작: `BOS + assistant\n`
+    - 응답 끝: `EOS + \n`
+
+    **토크나이저와 template의 경계 표현이 맞아야 합니다.**
+    이 작은 사전에서는 줄바꿈이 토큰이 아니라서, 끝 패턴은 `[EOS]` 하나입니다.
+    실제 MiniMind 사전과는 ID·길이가 다릅니다.
     """)
     return
 
@@ -219,8 +233,14 @@ def _(mo):
     ## 3. 실제 SFTDataset의 정답 마스킹
 
     `pre_processing_chat → create_chat_prompt → post_processing_chat → tokenize → 절단·패딩 → generate_labels`
-    순서입니다. 원본은 system이 없을 때 20% 확률로 system을 넣고, 빈 think 태그도 확률적으로 제거합니다.
-    이 예제는 명시적 system과 think 없는 발화를 써서 결과가 일정합니다.
+    순서로 처리합니다.
+
+    원본에는 무작위 처리가 있습니다.
+
+    - system이 없으면 20% 확률로 넣습니다.
+    - 빈 think 태그도 확률적으로 지웁니다.
+
+    이 예제는 system을 직접 넣고 think를 안 써서 결과가 항상 같습니다.
     """)
     return
 
@@ -267,11 +287,14 @@ def _(
     # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([
         mo.md(f"""
-        **해설:** 두 assistant 응답과 각 종료 토큰은 모두 정답으로 남습니다.
-        system·user·assistant 헤더·정상 종료 뒤 PAD는 `-100`입니다.
-        `-100`은 토큰 ID가 아니라 **손실 계산에서 무시하라는 표시**입니다.
-        입력에는 질문도 응답도 그대로 있습니다. 질문은 응답을 예측하는 문맥입니다.
-        배치 shape는 `{tuple(input_ids.shape)}` = [B,T], dtype은 `{input_ids.dtype}`입니다.
+        **해설:**
+
+        - 두 assistant 응답과 각 종료 토큰이 모두 정답입니다.
+        - system, user, assistant 헤더, 뒤쪽 PAD는 `-100`입니다.
+        - `-100`은 토큰 ID가 아닙니다. **"손실에서 빼라"는 표시**입니다.
+        - 입력에는 질문과 응답이 모두 있습니다. 질문은 응답을 위한 문맥입니다.
+
+        배치 shape `{tuple(input_ids.shape)}` = [B,T], dtype `{input_ids.dtype}`.
         여러 턴 예제의 template:
         """),
         # 여러 줄 template은 들여쓰기 없이 따로 감싸야 마크다운 들여쓰기 제거가 깨지지 않습니다.
@@ -291,8 +314,8 @@ def _(mo):
     ## 4. 정답 이동은 사전 학습과 같다 — 달라진 것은 정답 위치뿐
 
     **예측:** `야옹`을 예측하는 logits는 `야옹` 입력 위치일까요, 그 앞 위치일까요?
-    모델 내부의 한 칸 이동(`logits[:, :-1]` ↔ `labels[:, 1:]`)은 사전 학습 노트북 4절과 같습니다.
-    SFT에서는 **assistant 헤더의 마지막 토큰 출력이 첫 응답을** 예측한다는 점만 새로 확인합니다.
+    한 칸 이동(`logits[:, :-1]` ↔ `labels[:, 1:]`)은 사전 학습과 같습니다.
+    새로 볼 것은 하나입니다. **assistant 헤더의 마지막 토큰이 첫 응답을 예측합니다.**
     """)
     return
 
@@ -330,10 +353,10 @@ def _(initial_result, input_ids, labels, manual_loss, mo, tokenizer):
     # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([
         mo.md(f"""
-        원본 손실 `{initial_result.loss.item():.6f}`와 직접 계산 `{manual_loss.item():.6f}`가 일치합니다.
+        원본 손실 `{initial_result.loss.item():.6f}`와 직접 계산 `{manual_loss.item():.6f}`가 같습니다.
 
-        마스킹한 질문 위치의 **직접 손실**은 없지만, 응답이 질문 문맥을 참조하므로
-        질문 임베딩과 Attention 매개변수에도 gradient가 흐를 수 있습니다.
+        질문 위치에는 손실이 없습니다. 하지만 응답이 질문을 참고합니다.
+        그래서 질문 임베딩에도 gradient가 갈 수 있습니다.
         """),
         mo.ui.table([
             {"logits 위치": t - 1, "여기까지 읽음(마지막 토큰)": tokenizer.convert_ids_to_tokens(int(input_ids[0, t - 1])),
@@ -349,15 +372,17 @@ def _(mo):
     mo.md("""
     ## 5. 길이를 줄이면 어떤 정답을 잃을까?
 
-    원본은 **template을 만든 다음 앞에서 max_length까지 자릅니다.**
-    응답 시작 전까지 잘리면 유효 정답이 0개이고, 전부 무시된 배치의 평균 CE는 NaN이 될 수 있습니다.
-    응답 중간에서 잘리면 일부 응답은 학습하지만 종료 토큰은 학습하지 못합니다.
-    학습 전 `labels[:, 1:] != -100`인 토큰 수를 확인하세요.
+    원본은 **template을 만든 뒤 max_length로 자릅니다.**
 
-    원본 `generate_labels`는 응답의 종료 패턴을 못 찾으면 배열 끝까지 정답으로 남깁니다.
-    **완성되지 않은 assistant 발화 뒤에 PAD가 붙은 경우 PAD도 정답으로 포함될 수 있습니다.**
-    정상 template의 완성 대화와 중간에서 절단된 대화, 원래부터 잘못된 대화를 구분해야 합니다.
-    아래는 원본 동작을 관찰하는 예제로, 학습에는 사용하지 않습니다.
+    - 응답 전에서 잘리면: 정답이 0개입니다. 손실이 NaN이 될 수 있습니다.
+    - 응답 중간에서 잘리면: 일부는 학습하지만 종료 토큰은 못 배웁니다.
+
+    학습 전에 `labels[:, 1:] != -100`인 토큰 수를 확인하세요.
+
+    **주의:** 종료 패턴을 못 찾으면 `generate_labels`는 끝까지 정답으로 둡니다.
+    **그래서 끝나지 않은 응답 뒤의 PAD도 정답이 될 수 있습니다.**
+    완성된 대화, 잘린 대화, 원래 잘못된 대화를 구분하세요.
+    아래는 관찰용 예제입니다. 학습에는 안 씁니다.
     """)
     return
 
@@ -403,25 +428,29 @@ def _(mo):
     mo.md(r"""
     ## 5-1. 실제 MiniMind 템플릿과 추론(reasoning) 데이터
 
-    지금까지는 읽기 쉬운 교육용 template(`[BOS]role\n…[EOS]`)을 썼습니다. 실제 MiniMind tokenizer는
-    `<|im_start|>role\n…<|im_end|>` 형식이고, **모든 assistant 응답 앞에 `<think>…</think>` 블록**을 둡니다.
-    대화 JSONL의 assistant 발화에 `reasoning_content`가 있으면 그 내용이 think 블록에 들어갑니다.
+    지금까지는 교육용 template(`[BOS]role\n…[EOS]`)을 썼습니다.
+    실제 MiniMind는 다릅니다.
+
+    - 형식: `<|im_start|>role\n…<|im_end|>`
+    - **모든 assistant 응답 앞에 `<think>…</think>` 블록**이 붙습니다.
+    - `reasoning_content`가 있으면 그 내용이 think 블록에 들어갑니다.
 
     ```text
     <|im_start|>assistant\n<think>\n{reasoning_content}\n</think>\n\n{content}<|im_end|>\n
     ```
 
-    **예측:** think 블록 안의 추론 문장도 손실에 포함될까요?
-    `generate_labels`는 `<|im_start|>assistant\n` 뒤부터 `<|im_end|>\n`까지 전부 정답으로 남기므로
-    **추론 과정과 최종 답을 함께 학습**합니다. 추론 모델을 SFT로 만드는 방법이 바로 이것입니다.
+    **예측:** think 블록 안의 추론도 손실에 들어갈까요?
 
-    `reasoning_content`가 없으면 template은 빈 블록 `<think>\n\n</think>\n\n`을 넣습니다.
-    원본 `post_processing_chat`은 이 빈 블록을 **80% 확률로 제거**합니다. 그래서 같은 데이터에서도
-    "think 없이 바로 답하기"와 "빈 think 뒤에 답하기"가 섞여 학습됩니다.
-    추론 형식에 보상을 주는 강화 학습은 `minimind_grpo.py`의 추론 절에서 이어집니다.
+    **들어갑니다.** `<|im_start|>assistant\n`부터 `<|im_end|>\n`까지 전부 정답입니다.
+    그래서 **추론 과정과 최종 답을 함께 배웁니다.** SFT로 추론 모델을 만드는 방법입니다.
 
-    아래는 저장소의 실제 tokenizer(6400 어휘, byte-level BPE)로 데이터 경로만 관찰합니다.
-    앞의 작은 사전·모델과 ID 체계가 다르므로 이 데이터로 아래 모델을 학습하지는 않습니다.
+    **추론이 없을 때:** 빈 블록 `<think>\n\n</think>\n\n`이 들어갑니다.
+    `post_processing_chat`은 이 빈 블록을 **80% 확률로 지웁니다.**
+    그래서 "바로 답하기"와 "빈 think 뒤 답하기"가 섞여 학습됩니다.
+    추론 형식에 보상을 주는 방법은 `minimind_grpo.py`에서 다룹니다.
+
+    아래는 실제 tokenizer(6400 어휘, byte-level BPE)로 데이터만 관찰합니다.
+    작은 모델과 ID 체계가 달라서 학습에는 쓰지 않습니다.
     """)
     return
 
@@ -493,9 +522,9 @@ def _(
             {"추론 없는 대화": "template 원문", "assistant 부분": repr(empty_think_prompt.split("assistant\n")[-1])},
             {"추론 없는 대화": "빈 think 제거(80%)", "assistant 부분": repr(post_processing_chat(empty_think_prompt, remove_empty_think=True).split("assistant\n")[-1])},
         ], selection=None),
-        mo.md("**관찰·해설:** think 블록 전체와 최종 답, 종료 토큰이 하나의 정답 구간입니다. "
-              "추론 문장을 학습한다고 그 추론이 옳다는 보장은 없습니다. 데이터의 추론 품질이 그대로 학습됩니다. "
-              "실제 tokenizer에서 `assistant\\n` 경계는 5토큰, 종료 경계는 `<|im_end|>`+줄바꿈 2토큰입니다."),
+        mo.md("**관찰:** think 블록, 최종 답, 종료 토큰이 한 정답 구간입니다. "
+              "추론을 배운다고 그 추론이 옳은 건 아닙니다. 데이터 품질이 그대로 학습됩니다. "
+              "실제 tokenizer에서 `assistant\\n` 경계는 5토큰, 종료 경계(`<|im_end|>`+줄바꿈)는 2토큰입니다."),
     ])
     return
 
@@ -545,14 +574,15 @@ def _(
 def _(mo, preparation_losses):
     # ▸ 결과 설명 — 실행하면 계산 값이 들어간 설명이 나타납니다 (marimo 표시 코드)
     mo.md(f"""
-    원본 trainer의 기본값 `--from_weight pretrain`은 사전 학습된 가중치를 읽습니다.
-    여기서는 동물 소리 일반 문장 4개로 작은 모델을 100 step 준비하고 저장합니다.
+    원본 trainer는 기본으로 사전 학습 가중치에서 시작합니다(`--from_weight pretrain`).
+    여기서는 동물 소리 문장 4개로 작은 모델을 100 step 학습해 준비합니다.
     준비 손실: `{preparation_losses[0]:.4f} → {preparation_losses[-1]:.4f}`.
-    이 모델을 복사한 뒤 **새 optimizer**로 대화 SFT를 시작합니다.
-    사전 학습에서 이어받는 것은 가중치이며, optimizer 상태까지 이어가는 학습 재개와는 구분합니다.
 
-    실제 규모의 사전 학습을 재현한 것은 아닙니다. 동일 동물·소리 대응을 준비 단계에서도 봅니다.
-    검증에서 측정할 것은 이미 아는 단어의 **새 질문 조합에 대한 응답**입니다.
+    - 이 모델을 복사해 **새 optimizer**로 SFT를 시작합니다.
+    - 이어받는 것은 가중치뿐입니다. optimizer 상태는 새로 만듭니다.
+
+    실제 규모의 사전 학습은 아닙니다. 동물·소리 짝은 준비 단계에서도 봅니다.
+    검증에서는 **아는 단어로 된 새 질문 조합**에 답하는지 봅니다.
     """)
     return
 
@@ -593,9 +623,13 @@ def _(DataLoader, tokenizer, torch):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md("""
-    **평가 기준:** teacher forcing 응답 토큰 평균 CE와 실제 greedy 생성의 응답 일치율을 따로 봅니다.
-    CE가 낮아져도 생성에서 앞선 오류가 누적될 수 있습니다. 여기서는 EOS 종료 여부도 함께 기록합니다.
-    검증 손실은 유효 토큰 수로 가중 평균하고, optimizer 갱신이나 설정 선택에 사용하지 않습니다.
+    **평가 기준:** 두 가지를 따로 봅니다.
+
+    - teacher forcing으로 잰 응답 토큰 평균 CE
+    - 실제 greedy 생성의 응답 일치율, EOS 종료 여부
+
+    CE가 낮아도 생성에서는 오류가 쌓일 수 있습니다.
+    검증 손실은 유효 토큰 수로 가중 평균합니다. 학습이나 설정 선택에는 쓰지 않습니다.
     """)
     return
 
@@ -610,10 +644,12 @@ def _(mo):
         ## 7. 원본 trainer의 핵심 학습 루프
 
         **예측:** microbatch 4개에서 누적 수가 2라면 optimizer는 몇 번 갱신할까요?
-        루프 구조(`(loss + aux)/누적 수 → backward → clip → step`, microstep마다 `get_lr`)는
-        사전 학습 노트북 5~6절과 같습니다. Full SFT에서는 모든 매개변수에 `requires_grad=True`를 유지합니다.
-        작은 모델에 맞춰 초기 LR=0.003을 쓰며 원본 기본 LR=1e-5와 다릅니다.
-        UI를 바꾸면 항상 같은 기준 모델의 새 복사본에서 학습을 시작합니다.
+        루프는 사전 학습 노트북 5~6절과 같습니다:
+        `(loss + aux)/누적 수 → backward → clip → step`. 학습률은 microstep마다 `get_lr`.
+
+        - Full SFT라서 모든 매개변수를 학습합니다.
+        - 작은 모델이라 LR=0.003을 씁니다. 원본 기본값은 1e-5입니다.
+        - UI를 바꾸면 기준 모델의 새 복사본에서 다시 시작합니다.
         """),
         mo.hstack([sft_epochs, sft_accumulation]),
     ])
@@ -711,7 +747,7 @@ def _(
         1 epoch에 microbatch `{len(train_loader)}`개, 총 optimizer 갱신 `{optimizer_updates}`회입니다.
         학습 대상 `{sum(p.numel() for p in sft_model.parameters()):,}`개,
         값이 바뀐 매개변수 텐서는 `{changed_tensors}`개입니다.
-        불완전한 마지막 누적 그룹의 평균 방식은 사전 학습 노트북 5절을 참고하세요.
+        덜 찬 마지막 누적 그룹은 사전 학습 노트북 5절을 보세요.
         """),
         mo.ui.table(step_history[:len(train_loader)], selection=None),
         mo.ui.table([{"시점": k, **v} for k, v in [("SFT 전", before_metrics), ("SFT 후", after_metrics)]], selection=None),
@@ -724,7 +760,7 @@ def _(mo):
     mo.md(r"""
     ## 8. 손실과 실제 생성은 함께 확인하기
 
-    **관찰:** 학습·검증 손실은 같은 방향으로 움직이나요? 다음 표에서도 같은 경향인가요?
+    **관찰:** 학습·검증 손실이 같이 줄어드나요? 생성 결과 표도 같은 경향인가요?
     """)
     return
 
@@ -777,9 +813,9 @@ def _(generation_rows, generation_summary, mo):
     # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([
         mo.md("""
-        생성 함수에는 `conversations[:-1]`만 넘겼습니다. **정답 응답이 입력에 섞이지 않았는지** 확인하세요.
-        greedy로 최대 5토큰을 생성하고 EOS에서 멈춥니다. 표에는 special token도 보존합니다.
-        검증 4개는 같은 동물·소리의 새 표현 조합입니다. 이 결과로 미지의 동물이나 자유 대화 능력을 판단하지 않습니다.
+        - 생성에는 `conversations[:-1]`만 넘겼습니다. **정답이 입력에 없는지** 확인하세요.
+        - greedy로 최대 5토큰을 만들고 EOS에서 멈춥니다. special token도 표에 남깁니다.
+        - 검증 4개는 아는 동물·소리의 새 조합입니다. 새 동물이나 자유 대화 능력은 알 수 없습니다.
         """),
         mo.ui.table(generation_summary, selection=None),
         mo.ui.table(generation_rows, selection=None),
@@ -818,10 +854,12 @@ def _(checkpoint_path, mo, restore_difference, training_settings):
     # ▸ 결과 설명 — 실행하면 계산 값이 들어간 설명이 나타납니다 (marimo 표시 코드)
     mo.md(f"""
     저장 파일: `{checkpoint_path}`. 같은 설정으로 복원한 logits의 최대 차이: `{restore_difference}`.
-    설정·학습 기록·생성 결과·tokenizer도 이번 실행 폴더에 보관했습니다.
+    설정, 학습 기록, 생성 결과, tokenizer도 같은 폴더에 저장했습니다.
     설정: `{training_settings}`.
-    여기서 저장한 것은 추론용 state_dict입니다. 학습 중간 재개에는 optimizer·scaler·epoch·step 등도 필요합니다.
-    원본 trainer는 half 배포 가중치와 `lm_checkpoint` 재개 파일을 따로 저장합니다.
+
+    여기서 저장한 것은 추론용 state_dict입니다.
+    학습 재개에는 optimizer·scaler·epoch·step도 필요합니다.
+    원본 trainer는 half 가중치와 `lm_checkpoint` 재개 파일을 따로 저장합니다.
 
     | 원본 파일·코드 | 이 실습에서 확인한 의미 |
     | --- | --- |
@@ -832,10 +870,12 @@ def _(checkpoint_path, mo, restore_difference, training_settings):
     | `loss + aux_loss`, backward, clip, step | 전체 매개변수의 gradient와 갱신 |
     | `--from_resume 1` | 모델뿐 아니라 학습 상태까지 복원 |
 
-    실제 trainer는 `minimind/trainer/`에서 실행하는 상대 경로를 사용합니다.
-    기본 설정은 768차원·8층·max_seq_len 768·batch 16·LR 1e-5·2 epoch입니다.
-    실행 전 사전 학습 가중치의 차원·층 수·토크나이저와 JSONL 데이터 경로를 확인해야 합니다.
-    이 노트북의 32차원 가중치는 기본 768차원 모델에 불러올 수 없습니다.
+    **실제 trainer로 갈 때:**
+
+    - `minimind/trainer/`에서 실행합니다(상대 경로 사용).
+    - 기본값: 768차원, 8층, max_seq_len 768, batch 16, LR 1e-5, 2 epoch.
+    - 사전 학습 가중치의 차원·층 수·토크나이저, 데이터 경로를 먼저 확인하세요.
+    - 이 노트북의 32차원 가중치는 768차원 모델에 못 씁니다.
     """)
     return
 
@@ -845,31 +885,36 @@ def _(mo):
     mo.md("""
     ## 10. 직접 설명하고 바꿔 보기
 
-    1. **마스킹:** user가 입력에 있는데 왜 그 위치의 label은 -100일까요?
-       여러 턴 표에서 두 응답과 두 EOS가 모두 정답인지 확인하고 위치를 적으세요.
-    2. **shift:** 첫 응답을 예측하는 입력 위치를 찾으세요. Dataset에서 정답을 한 칸 이동하면
-       어떤 잘못된 쌍이 생길지 4절 표에 표시하세요.
-    3. **길이:** 학습용 max_length를 32에서 8로 줄이기 전에 유효 응답 정답 수를 예상하세요.
-       마스킹 관찰 셀에서 먼저 확인하고, 유효 정답이 없는 배치를 학습시키지 마세요.
-    4. **학습 비교:** epoch 20/60/100에서 학습·검증 CE와 정확한 응답 수, EOS 종료 수를 기록하세요.
-       더 오래 학습한 결과가 새 질문의 응답도 개선하는지 확인하세요.
-    5. **누적:** 누적 수 2/3에서 첫 epoch의 optimizer 갱신 횟수와 마지막 그룹의 gradient 크기를 비교하세요.
-       microstep 수가 같아도 optimizer 갱신 횟수는 다를 수 있습니다.
-    6. **데이터 품질:** 학습 데이터에서 고양이 응답 한 개만 `멍멍`으로 바꿔 재학습하세요.
-       깨끗한 검증 정답은 유지하고, 손실과 실제 답변이 어떻게 달라지는지 기록하세요.
+    1. **마스킹:** user가 입력에 있는데 왜 label은 -100일까요?
+       여러 턴 표에서 두 응답과 두 EOS가 정답인지 확인하세요.
+    2. **shift:** 첫 응답을 예측하는 입력 위치는 어디일까요?
+       Dataset에서 정답을 미리 옮기면 어떤 잘못된 짝이 생길까요?
+    3. **길이:** max_length를 32→8로 줄이면 유효 정답은 몇 개일까요?
+       마스킹 셀에서 먼저 확인하세요. 정답이 없는 배치는 학습하지 마세요.
+    4. **학습 비교:** epoch 20/60/100에서 CE, 맞힌 응답 수, EOS 종료 수를 적으세요.
+       오래 학습하면 새 질문 응답도 좋아질까요?
+    5. **누적:** 누적 수 2/3에서 갱신 횟수와 마지막 그룹의 gradient 크기를 비교하세요.
+    6. **데이터 품질:** 고양이 응답 하나만 `멍멍`으로 바꿔 다시 학습하세요.
+       검증 정답은 그대로 두고, 손실과 답변이 어떻게 바뀌는지 적으세요.
 
-    **힌트·해설:** user/system은 예측 조건이고 assistant 응답이 지도 신호입니다.
-    EOS도 포함해야 멈추는 행동을 학습합니다. SFT는 모범 응답의 확률을 높이므로 잘못된 정답도 배울 수 있습니다.
-    낮은 학습 손실은 좋은 데이터나 일반화 성능의 보장이 아닙니다.
+    **힌트·해설:**
 
-    **다음 실습:** `minimind_lora.py`(같은 목표, 갱신 대상만 축소) → `minimind_distillation.py`
-    (정답 대신 교사 분포) → `minimind_dpo.py`(정답 하나 대신 선호 쌍)로 이어집니다.
-    5-1절의 추론 형식은 `minimind_grpo.py`에서 보상으로 다시 다룹니다.
+    - user/system은 조건이고, assistant 응답이 정답 신호입니다.
+    - EOS도 학습해야 멈추는 법을 배웁니다.
+    - SFT는 주어진 응답을 따라 합니다. 틀린 정답도 배웁니다.
+    - 학습 손실이 낮다고 데이터가 좋거나 일반화가 되는 건 아닙니다.
 
-    출처: `minimind/trainer/train_full_sft.py`, `minimind/dataset/lm_dataset.py`,
+    **다음 실습:**
+
+    - `minimind_lora.py`: 같은 목표, 바꾸는 매개변수만 줄임
+    - `minimind_distillation.py`: 정답 대신 교사 분포
+    - `minimind_dpo.py`: 정답 하나 대신 선호 쌍
+    - 5-1절의 추론 형식은 `minimind_grpo.py`에서 보상으로 다룹니다.
+
+    **출처:** `minimind/trainer/train_full_sft.py`, `minimind/dataset/lm_dataset.py`,
     `minimind/model/model_minimind.py`, `minimind/trainer/trainer_utils.py`.
-    원본 클래스·함수를 직접 가져오며 원본 파일은 수정하지 않습니다.
-    저작권·라이선스는 `minimind/LICENSE`를 확인하세요.
+    원본을 가져다 쓰기만 하고 수정하지 않습니다.
+    저작권·라이선스는 `minimind/LICENSE`를 보세요.
     """)
     return
 

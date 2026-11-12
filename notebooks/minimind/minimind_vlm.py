@@ -54,15 +54,23 @@ def _(mo):
     mo.md(r"""
     # MiniMind-V: 이미지가 언어 모델의 입력이 되는 과정
 
-    **학습 목표:** `minimind-v/model/model_vlm.py`의 실제 클래스로 이미지 전처리,
-    패치 특징, 차원 투영, 임베딩 교체, 답변 학습과 생성까지 연결합니다.
-    Python·텐서 shape·다음 토큰 예측을 알고 시작하세요. 모델 구조/SFT 노트북을 먼저 읽으면 좋습니다.
+    **학습 목표:** 이미지가 언어 모델 입력이 되는 전체 과정을 따라갑니다.
+    `minimind-v/model/model_vlm.py`의 실제 클래스를 사용합니다.
+
+    - 이미지 전처리 → 패치 특징 → 차원 투영
+    - 임베딩 교체 → 답변 학습 → 생성
+
+    **사전 지식:** Python, 텐서 shape, 다음 토큰 예측.
+    모델 구조·SFT 노트북을 먼저 보면 좋습니다.
 
     <img src="public/diagrams/vlm.png" alt="MiniMind-V: 이미지 경로와 텍스트 경로가 자리 교체로 합쳐지는 흐름" width="320">
 
-    이 구현은 **이미지 특징을 입력 시퀀스에 넣고 causal self-attention으로 읽습니다.**
-    별도 cross-attention 층은 추가하지 않습니다. 질문 뒤의 답변 위치는 앞선 이미지·질문을 볼 수 있습니다.
-    이미지를 어휘 사전의 단어 ID로 변환하는 방식도 아닙니다.
+    **핵심 아이디어:** 이미지 특징을 입력 시퀀스에 넣습니다.
+    LLM은 이것을 일반 causal self-attention으로 읽습니다.
+
+    - cross-attention 층은 따로 없습니다.
+    - 답변 위치는 앞의 이미지와 질문을 볼 수 있습니다.
+    - 이미지를 단어 ID로 바꾸지 않습니다.
 
     | 절 | 원본 소스 (`projects/minimind-v/`) |
     | --- | --- |
@@ -73,13 +81,18 @@ def _(mo):
     | 8 | `generate` (KV cache) |
     | 9 | `dataset/lm_dataset.py` — `VLMDataset` |
 
-    **멀티모달 파트의 첫 노트북**입니다. 여기서 **구조**(이미지가 어떻게 토큰 자리에 들어가는가)를 보고,
-    `minimind_v_finetuning.py`에서 **학습**(Projector 정렬 → 시각 지시 SFT)을, `minimind_omni.py`에서
-    음성 입출력을 다룹니다. 텍스트 LLM 부분(Attention·생성·SFT 마스크)은 앞 노트북과 같습니다.
+    **멀티모달 파트의 첫 노트북**입니다.
 
-    작은 SigLIP과 LLM을 무작위 초기화하므로 GPU·모델 다운로드·API 키 없이 실행합니다.
-    생성되는 토큰은 인식 성능이 아닙니다. 실제 프로젝트는 학습된 인코더와 언어 백본을 사용합니다.
-    실습 파일은 `outputs/notebooks/<실행 ID>/`에 저장되며 기존 체크포인트는 수정하지 않습니다.
+    - 이 노트북: **구조**. 이미지가 토큰 자리에 들어가는 방법.
+    - `minimind_v_finetuning.py`: **학습**. Projector 정렬 → 시각 지시 SFT.
+    - `minimind_omni.py`: 음성 입출력.
+
+    텍스트 LLM 부분(Attention·생성·SFT 마스크)은 앞 노트북과 같습니다.
+
+    **실행 환경:** 작은 SigLIP과 LLM을 무작위로 초기화합니다.
+    GPU, 모델 다운로드, API 키가 필요 없습니다.
+    그래서 생성 결과는 인식 성능과 무관합니다.
+    실습 파일은 `outputs/notebooks/<실행 ID>/`에 저장합니다. 기존 체크포인트는 건드리지 않습니다.
     """)
     return
 
@@ -90,10 +103,15 @@ def _(mo):
     ## 1. 이미지와 패치: 몇 개의 시각 토큰이 생길까?
 
     **예측:** 32×32 이미지를 16×16 패치로 나누면 패치는 몇 개일까요?
-    원본 기본 설정은 256×256 / 32×32 = 8×8 = 64개입니다. 실습에서는 2×2 = 4개로 축소합니다.
-    `B`: 배치, `N`: 이미지 수, `P`: 패치 수, `Dv`: 비전 차원, `D`: 언어 차원, `T`: 시퀀스 길이.
-    아래 점선은 패치 경계입니다. SigLIP의 patch embedding 이후 비전 self-attention이 패치 간 문맥을 섞으므로,
-    최종 특징 하나가 해당 사각형의 픽셀만 담는다고 해석하지 마세요.
+
+    - 원본: 256 / 32 = 8 → 8×8 = **64개**
+    - 실습: 32 / 16 = 2 → 2×2 = **4개**
+
+    **기호:** `B` 배치, `N` 이미지 수, `P` 패치 수, `Dv` 비전 차원, `D` 언어 차원, `T` 시퀀스 길이.
+
+    아래 점선이 패치 경계입니다.
+    단, SigLIP 내부의 self-attention이 패치끼리 정보를 섞습니다.
+    그래서 최종 특징 하나가 자기 사각형의 픽셀만 담지는 않습니다.
     """)
     return
 
@@ -119,7 +137,7 @@ def _(Image, ImageDraw, plt):
 @app.cell(hide_code=True)
 def _(mo, sample_image_fig):
     # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
-    mo.vstack([sample_image_fig, mo.md("**관찰:** 이미지마다 4개 패치입니다. A/B는 색과 모양이 함께 달라지므로 두 속성의 효과를 분리하는 데이터는 아닙니다.")])
+    mo.vstack([sample_image_fig, mo.md("**관찰:** 이미지마다 패치가 4개입니다. A와 B는 색과 모양이 모두 다릅니다. 그래서 두 속성의 효과를 따로 볼 수는 없습니다.")])
     return
 
 
@@ -128,10 +146,13 @@ def _(mo):
     mo.md("""
     ## 2. 실제 클래스의 축소 모델을 만들기
 
-    `SiglipVisionModel`을 로컬에 저장한 뒤 `MiniMindVLM`의 실제 `get_vision_model`로 읽습니다.
-    학습된 가중치를 내려받는 단계는 없습니다. 비전 차원 16 → 언어 차원 32로 연결합니다.
-    `image_token_len=4`, 인코더 패치 수 4, 연속 이미지 marker 수 4가 모두 맞아야 합니다.
-    경로가 없으면 원본 로더는 `(None, None)`을 반환하므로 이미지 실습에서는 로딩 성공을 확인합니다.
+    작은 `SiglipVisionModel`을 로컬에 저장합니다.
+    그다음 `MiniMindVLM`의 실제 `get_vision_model`로 읽습니다.
+    학습된 가중치는 내려받지 않습니다.
+
+    **세 숫자가 같아야 합니다:** `image_token_len`, 인코더 패치 수, 연속 이미지 marker 수. 여기서는 모두 4입니다.
+
+    경로가 없으면 원본 로더는 `(None, None)`을 반환합니다. 그래서 로딩 성공을 assert로 확인합니다.
 
     | 항목 | 이 실습 | 원본 기본값 |
     | --- | --- | --- |
@@ -179,7 +200,7 @@ def _(base_vlm, mo):
                                     ("언어 backbone (Embedding 포함)", base_vlm.model),
                                     ("LM head (= Embedding과 같은 텐서)", base_vlm.lm_head)]
         ], selection=None),
-        mo.md("`tie_word_embeddings=True`라서 LM head와 Embedding은 같은 가중치입니다. 전체 수를 셀 때 LM head 행은 다시 더하지 마세요."),
+        mo.md("LM head와 Embedding은 같은 가중치입니다(`tie_word_embeddings=True`). 전체 수를 셀 때 LM head는 빼세요."),
     ])
     return
 
@@ -190,14 +211,19 @@ def _(mo):
     ## 3. 픽셀 → 시각 특징 → 언어 차원
 
     **예측:** Projector를 거치면 패치 수와 마지막 차원 중 무엇이 바뀔까요?
-    `image2tensor`는 resize·정규화한 processor 딕셔너리를 반환합니다.
-    `get_image_embeddings`는 `torch.no_grad()` 안에서 SigLIP의 `last_hidden_state`를 읽습니다.
-    SigLIP에는 CLS 토큰이 없으므로 pooled 벡터 하나가 아니라 **모든 패치 특징 `[B,P,Dv]`**를 사용합니다.
 
-    Projector는 `LayerNorm(16) → Linear(16,32) → GELU → Linear(32,32)`이며 모든 패치에 같은 MLP를 적용합니다.
-    역할은 차원 변환만이 아닙니다. SigLIP 특징 공간과 LLM의 단어 임베딩 공간은 따로 학습되었으므로,
-    Projector가 **시각 특징을 LLM이 읽을 수 있는 임베딩 분포로 정렬**해야 합니다.
-    그래서 실제 학습의 첫 단계는 Projector만 학습합니다(`minimind_v_finetuning.py`).
+    | 함수 | 하는 일 |
+    | --- | --- |
+    | `image2tensor` | resize·정규화 후 processor 딕셔너리 반환 |
+    | `get_image_embeddings` | `no_grad()`로 SigLIP의 `last_hidden_state`를 읽음 |
+    | `vision_proj` | 패치마다 같은 MLP 적용: `LayerNorm → Linear(16,32) → GELU → Linear(32,32)` |
+
+    SigLIP에는 CLS 토큰이 없습니다. 그래서 **모든 패치 특징 `[B,P,Dv]`**를 그대로 씁니다.
+
+    **Projector의 진짜 역할:** 차원만 바꾸는 게 아닙니다.
+    SigLIP과 LLM은 따로 학습되어 특징 공간이 다릅니다.
+    Projector는 시각 특징을 **LLM이 읽을 수 있는 임베딩으로 맞춥니다.**
+    그래서 실제 학습 첫 단계에서는 Projector만 학습합니다(`minimind_v_finetuning.py`).
     """)
     return
 
@@ -230,9 +256,9 @@ def _(mo):
     mo.md(r"""
     ## 4. IMAGE 자리를 이미지 벡터로 교체하기
 
-    여기부터 8절까지는 연산을 읽기 위한 **가상 ID 사전**입니다.
-    `1=BOS`, `12=IMAGE`, `20=질문`, `21=답변`, `2=EOS`이며 실제 한국어 토크나이저 결과가 아닙니다.
-    실제 tokenizer와 `VLMDataset`은 9절에서 연결합니다.
+    4~8절은 **가상 ID**를 씁니다. 실제 토크나이저 결과가 아닙니다.
+    `1=BOS`, `12=IMAGE`, `20=질문`, `21=답변`, `2=EOS`.
+    실제 tokenizer는 9절에서 연결합니다.
 
     ```text
     input_ids: [ BOS, IMAGE, IMAGE, IMAGE, IMAGE, 질문, 답변, EOS ]
@@ -240,9 +266,11 @@ def _(mo):
     교체 후:   [  e0,    v0,    v1,    v2,    v3,   e5,   e6,  e7 ]
     ```
 
-    **예측:** 교체한 뒤 시퀀스 길이는 8일까요, 12일까요?
-    `count_vision_proj`는 IMAGE가 연속된 구간을 찾아 같은 자리의 벡터를 **교체**합니다.
-    marker 수와 패치 수가 다를 때 어떻게 되는지는 7절에서 확인합니다.
+    **예측:** 교체 후 시퀀스 길이는 8일까요, 12일까요?
+
+    `count_vision_proj`는 연속된 IMAGE 구간을 찾습니다.
+    그 자리의 벡터를 이미지 벡터로 **교체**합니다. 끼워 넣지 않습니다.
+    marker 수와 패치 수가 다르면 어떻게 될까요? 7절에서 봅니다.
     """)
     return
 
@@ -271,7 +299,7 @@ def _(base_vlm, plt, projected_features, torch):
 @app.cell(hide_code=True)
 def _(merged_fig, mo):
     # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
-    mo.vstack([merged_fig, mo.md("**확인:** 길이 8을 유지하며 이미지 위치 4개만 교체했습니다. 색은 임베딩 성분 값이며 Attention 가중치가 아닙니다.")])
+    mo.vstack([merged_fig, mo.md("**확인:** 길이는 8 그대로입니다. 이미지 위치 4개만 바뀌었습니다. 색은 임베딩 값입니다(Attention 가중치 아님).")])
     return
 
 
@@ -280,17 +308,20 @@ def _(mo):
     mo.md("""
     ## 5. Decoder는 이미지 정보를 어디에서 읽을까?
 
-    위에서 합친 임베딩을 RoPE·causal Attention·MLP·마지막 정규화·LM head가 처리합니다.
-    `forward`는 이미지 위치를 특별 취급하지 않습니다. 이미지 벡터 4개도 **위치 1~4의 일반 1D RoPE**를 받습니다.
-    LLM 입장에서 패치는 "왼쪽 위 → 오른쪽 아래" 순서로 한 줄로 늘어선 토큰일 뿐이며,
-    2D 공간 정보는 SigLIP 내부의 위치 임베딩을 거쳐 패치 특징에 이미 녹아 있는 만큼만 전달됩니다.
+    합친 임베딩은 일반 Decoder를 그대로 지납니다(RoPE → Attention → MLP → LM head).
+    `forward`는 이미지 위치를 특별 취급하지 않습니다.
 
-    **예측:** 답변을 예측하는 질문 위치(5)는 앞의 이미지 위치(1~4)를 볼 수 있을까요?
-    아래 그림은 허용된 Attention 연결이며(주황 = 이미지 Key) 실제 학습된 Attention 확률은 아닙니다.
-    뒤의 정답 토큰은 앞 위치로 전달되지 않습니다. 답변까지 입력하는 teacher forcing이 가능한 이유입니다.
+    - 이미지 벡터도 **일반 1D RoPE**를 받습니다(위치 1~4).
+    - LLM에게 패치는 한 줄로 늘어선 토큰일 뿐입니다.
+    - 2D 위치 정보는 SigLIP이 패치 특징에 넣어 둔 만큼만 전달됩니다.
 
-    같은 질문에서 A/B 이미지만 교체하여 logits 차이도 확인합니다.
-    수치가 달라진다는 것은 이미지 조건이 출력에 전달된다는 뜻이며, 올바른 색상 인식을 뜻하지 않습니다.
+    **예측:** 질문 위치(5)는 앞의 이미지 위치(1~4)를 볼 수 있을까요?
+
+    아래 그림은 **허용된** Attention 연결입니다(주황 = 이미지 Key). 학습된 Attention 확률이 아닙니다.
+    뒤 토큰은 앞 위치에서 보이지 않습니다. 그래서 답변까지 한 번에 넣는 teacher forcing이 가능합니다.
+
+    A/B 이미지만 바꿔서 logits 차이도 확인합니다.
+    값이 달라지면 이미지가 출력에 영향을 준다는 뜻입니다. 색을 맞게 인식한다는 뜻은 아닙니다.
     """)
     return
 
@@ -325,7 +356,7 @@ def _(causal_fig, image_effect, mo, red_output):
     # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([causal_fig, mo.md(
         f"logits shape: `{tuple(red_output.logits.shape)}`. 질문 위치(5)의 A/B 최대 차이: `{image_effect:.6f}`\n\n"
-        "BOS 위치(0)의 logits는 A/B에서 완전히 같습니다. 이미지가 뒤에 있어 볼 수 없기 때문입니다."
+        "BOS 위치(0)의 logits는 A/B가 똑같습니다. 이미지가 뒤에 있어서 볼 수 없습니다."
     )])
     return
 
@@ -342,20 +373,21 @@ def _(mo):
     ```
 
     **예측:** 이미지 위치의 label을 `-100`으로 가려도 Projector를 학습할 수 있을까요?
-    답변 손실의 gradient가 Attention을 통해 이미지 임베딩까지 전달되므로 가능합니다.
-    label 마스킹은 손실 대상 선택이며 이미지 위치를 Attention에서 지우는 연산이 아닙니다.
-    원본 `forward`가 `logits[:-1]`과 `labels[1:]`을 한 번 shift하므로 직접 미리 shift하지 않습니다.
 
-    아래에서는 **Projector만 한 step 갱신**합니다. 모델을 복사하므로 앞 셀의 모델은 유지됩니다.
-    표를 두 개로 나누어 봅니다.
+    **가능합니다.** 답변 손실의 gradient가 Attention을 거쳐 이미지 임베딩까지 갑니다.
+    label 마스킹은 "어디서 손실을 계산할지"만 정합니다. Attention에서 이미지를 지우지 않습니다.
+    shift는 원본 `forward`가 합니다. labels를 미리 shift하지 마세요.
 
-    - **매개변수에 저장된 gradient (`.grad`):** 동결된 LLM·SigLIP은 `None`(0)입니다.
-    - **이미지 위치 벡터의 gradient:** Projector 출력 4개에 도착한 gradient입니다. 0이 아니라면
-      gradient가 **동결된 LLM을 통과해** 이미지 자리까지 왔다는 뜻입니다.
+    아래 셀은 **Projector만 한 step 갱신**합니다. 복사본을 쓰므로 원래 모델은 그대로입니다.
+    결과는 표 두 개로 봅니다.
 
-    즉 "LLM 동결"은 LLM 가중치를 바꾸지 않는다는 뜻이지 gradient를 막는다는 뜻이 아닙니다.
-    그래서 동결된 LLM 연산을 `no_grad()`로 감싸면 Projector를 학습할 수 없습니다.
-    어떤 층을 언제 학습하는지(`freeze_llm` 0/1/2)는 `minimind_v_finetuning.py` 6절에서 다룹니다.
+    - **매개변수의 `.grad`:** 동결된 LLM·SigLIP은 `None`입니다.
+    - **이미지 위치 벡터의 gradient:** Projector 출력에 도착한 값입니다.
+      0이 아니면 gradient가 **동결된 LLM을 통과했다**는 뜻입니다.
+
+    **정리:** "LLM 동결"은 가중치를 안 바꾼다는 뜻입니다. gradient를 막는다는 뜻이 아닙니다.
+    LLM을 `no_grad()`로 감싸면 Projector를 학습할 수 없습니다.
+    `freeze_llm` 0/1/2 설정은 `minimind_v_finetuning.py` 6절에서 다룹니다.
     """)
     return
 
@@ -409,7 +441,7 @@ def _(changed_parameters, gradient_rows, image_grad_rows, loss_value, mo):
         mo.ui.table(gradient_rows, selection=None),
         mo.md("**이미지 위치 벡터에 도착한 gradient** (동결된 LLM을 통과해 온 값)"),
         mo.ui.table(image_grad_rows, selection=None),
-        mo.md(f"답변/EOS 두 토큰 평균 loss: `{loss_value:.4f}`; 변경된 매개변수 텐서: `{len(changed_parameters)}`개(모두 `vision_proj.`).\n\n한 step은 gradient 경로 확인입니다. 이미지 개념을 학습했다는 결론은 내리지 않습니다."),
+        mo.md(f"답변·EOS 평균 loss: `{loss_value:.4f}`. 바뀐 매개변수 텐서: `{len(changed_parameters)}`개(모두 `vision_proj.`).\n\n이 한 step은 gradient 경로 확인용입니다. 이미지를 학습했다는 뜻은 아닙니다."),
     ])
     return
 
@@ -419,13 +451,15 @@ def _(mo):
     mo.md("""
     ## 7. 이미지를 두 장 넣는 경우
 
-    processor 딕셔너리의 단일 이미지 shape는 `[B,C,H,W]`, 다중 이미지는 `[B,N,C,H,W]`입니다.
-    `forward`가 `B×N`을 펼쳐 인코딩한 뒤 `[B,N,P,D]`로 복원합니다.
-    `count_vision_proj`는 샘플 안의 **연속 marker 구간**을 순서대로 이미지와 대응시킵니다.
-    원시 텐서 대신 processor 딕셔너리를 전달하세요.
+    - 이미지 한 장: `[B,C,H,W]`
+    - 이미지 여러 장: `[B,N,C,H,W]`
 
-    **예측:** 두 이미지 marker를 붙여 8개 연속으로 쓰면 두 장으로 구분할 수 있을까요?
-    아래 두 번째 실험이 답입니다. 원본 함수는 marker 수와 패치 수가 다른지 검사하지 않습니다.
+    `forward`는 `B×N`장을 한 번에 인코딩합니다. 그 뒤 `[B,N,P,D]`로 되돌립니다.
+    `count_vision_proj`는 **연속 marker 구간**을 순서대로 이미지와 짝짓습니다.
+    입력은 원시 텐서가 아니라 processor 딕셔너리로 넘기세요.
+
+    **예측:** marker 8개를 붙여 쓰면 두 장으로 구분될까요?
+    아래 두 번째 실험이 답입니다. 원본 함수는 marker 수가 맞는지 검사하지 않습니다.
     """)
     return
 
@@ -457,12 +491,14 @@ def _(bad_merge_lengths, mo, pair_output, pair_pixels):
     # ▸ 결과 설명 — 실행하면 계산 값이 들어간 설명이 나타납니다 (marimo 표시 코드)
     mo.md(f"""
     **올바른 예:** 이미지 입력 `{tuple(pair_pixels['pixel_values'].shape)}` → logits `{tuple(pair_output.logits.shape)}`.
-    위치 1~4는 A, 위치 6~9는 B, 위치 5는 두 구간을 분리하는 질문 ID입니다.
+    위치 1~4는 A, 6~9는 B입니다. 위치 5의 질문 ID가 두 구간을 나눕니다.
 
-    **잘못된 예 (marker 8개 연속):** 입력 길이 `{bad_merge_lengths[0]}` → 교체 후 길이 `{bad_merge_lengths[1]}`.
-    8칸 구간 전체를 이미지 A의 벡터 4개로 바꾸므로 **시퀀스가 4칸 짧아지고 이미지 B는 사용되지 않습니다.**
-    오류 없이 진행되므로 labels·RoPE 위치와 어긋난 채 학습될 수 있습니다.
-    반대로 marker가 패치 수보다 적으면 남는 패치를 조용히 버립니다.
+    **잘못된 예 (marker 8개 연속):** 입력 길이 `{bad_merge_lengths[0]}` → 교체 후 `{bad_merge_lengths[1]}`.
+
+    - 8칸 전체가 이미지 A의 벡터 4개로 바뀝니다.
+    - **시퀀스가 4칸 줄고, 이미지 B는 버려집니다.**
+    - 오류가 나지 않습니다. labels·RoPE 위치가 어긋난 채 학습될 수 있습니다.
+    - marker가 패치 수보다 적으면 남는 패치를 조용히 버립니다.
     """)
     return
 
@@ -472,11 +508,14 @@ def _(mo):
     mo.md("""
     ## 8. 생성과 KV cache
 
-    추론 입력에는 정답이 없습니다. `[BOS, IMAGE×4, 질문]`에서 다음 ID를 고르고 다시 입력합니다.
-    캐시를 사용하는 첫 호출(prefill)은 이미지를 인코딩합니다. 이후에는 앞 이미지 정보가 반영된
-    Key/Value를 재사용하므로 `start_pos > 0`인 forward에서 비전 인코더 실행을 생략합니다.
-    **예측:** 질문까지의 prefix와 다음 한 토큰을 캐시로 계산하면 전체 재계산과 logits가 같을까요?
-    아래 hook은 실제 비전 인코더 호출 횟수를 셉니다.
+    추론 입력에는 정답이 없습니다.
+    `[BOS, IMAGE×4, 질문]`에서 다음 ID를 고르고, 그 ID를 다시 입력합니다.
+
+    - 첫 호출(prefill): 이미지를 인코딩합니다.
+    - 이후 호출(`start_pos > 0`): 캐시된 Key/Value를 씁니다. 비전 인코더는 건너뜁니다.
+
+    **예측:** 캐시로 계산한 logits가 전체 재계산과 같을까요?
+    아래 hook은 비전 인코더 호출 횟수를 셉니다.
     """)
     return
 
@@ -506,7 +545,7 @@ def _(base_vlm, red_pixels, torch, toy_ids):
 @app.cell(hide_code=True)
 def _(cache_vision_calls, generated_ids, mo):
     # ▸ 결과 설명 — 실행하면 계산 값이 들어간 설명이 나타납니다 (marimo 표시 코드)
-    mo.md(f"캐시 두 번 호출에서 비전 인코더 실행: `{cache_vision_calls}`회. 전체 재계산과 logits 일치.\n\n생성한 새 ID: `{generated_ids[0, 6:].tolist()}`. 무작위 모델이므로 자연어 답변으로 해석하지 않습니다.")
+    mo.md(f"캐시 호출 두 번에서 비전 인코더 실행: `{cache_vision_calls}`회. logits는 전체 재계산과 같습니다.\n\n생성한 새 ID: `{generated_ids[0, 6:].tolist()}`. 무작위 모델이라 의미 있는 답변이 아닙니다.")
     return
 
 
@@ -515,16 +554,18 @@ def _(mo):
     mo.md(r"""
     ## 9. 실제 tokenizer·VLMDataset과 연결하기
 
-    이제 저장소의 tokenizer로 한국어 대화 한 건을 원본 `VLMDataset`에 통과시킵니다.
+    실제 tokenizer로 한국어 대화 한 건을 `VLMDataset`에 넣어 봅니다.
     확인할 것은 두 가지입니다.
 
-    1. `create_chat_prompt`가 `<image>` 하나를 `<|image_pad|>` × `image_token_len`개로 펼친다.
-    2. `generate_labels`가 assistant 응답과 종료 토큰만 손실 대상으로 남긴다.
+    1. `create_chat_prompt`: `<image>` 하나를 `<|image_pad|>` × `image_token_len`개로 펼친다.
+    2. `generate_labels`: assistant 응답과 종료 토큰만 손실 대상으로 남긴다.
 
-    시스템 프롬프트/빈 think 태그는 원본에서 확률적으로 추가·제거되므로 seed로 고정합니다.
-    토큰별 전체 label 표는 `minimind_v_finetuning.py` 3절에서 다룹니다.
-    이 절은 데이터 경로 관찰 전용입니다. 실제 어휘(6400)는 앞의 장난감 LLM(어휘 64)에 넣을 수 없고,
-    실습의 4개 marker와 공개 모델의 64개 marker 설정도 혼용하면 안 됩니다.
+    시스템 프롬프트와 빈 think 태그는 무작위로 붙습니다. 그래서 seed를 고정합니다.
+    토큰별 label 표는 `minimind_v_finetuning.py` 3절에 있습니다.
+
+    **주의:** 이 절은 데이터 관찰용입니다.
+    실제 어휘(6400)는 장난감 LLM(어휘 64)에 넣을 수 없습니다.
+    marker 수도 실습(4개)과 공개 모델(64개)이 다릅니다. 섞지 마세요.
     """)
     return
 
@@ -577,11 +618,11 @@ def _(AutoTokenizer, BytesIO, HFDataset, VLMDataset, artifact_dir, base_vlm, jso
 def _(actual_tokenizer, dataset_image, dataset_spans, mo):
     # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([
-        mo.md(f"실제 tokenizer 어휘 수: `{len(actual_tokenizer)}`; 샘플 이미지 shape: `{tuple(dataset_image['pixel_values'].shape)}` = [N,C,H,W]. "
-              "DataLoader가 배치 축을 쌓으면 `[B,N,C,H,W]`가 됩니다. 뒤쪽 PAD는 표에서 생략했습니다."),
+        mo.md(f"tokenizer 어휘 수: `{len(actual_tokenizer)}`. 샘플 이미지 shape: `{tuple(dataset_image['pixel_values'].shape)}` = [N,C,H,W]. "
+              "DataLoader를 거치면 `[B,N,C,H,W]`가 됩니다. 뒤쪽 PAD는 생략했습니다."),
         mo.ui.table(dataset_spans, selection=None),
-        mo.md("**관찰:** 이미지 자리와 질문은 응답 예측의 문맥일 뿐 손실 대상이 아닙니다. "
-              "이 seed에서는 빈 think 태그가 남아 assistant 구간에 포함됩니다."),
+        mo.md("**관찰:** 이미지 자리와 질문은 문맥일 뿐, 손실 대상이 아닙니다. "
+              "이 seed에서는 빈 think 태그가 assistant 구간에 들어갑니다."),
     ])
     return
 
@@ -615,25 +656,33 @@ def _(mo):
     mo.md(r"""
     ## 10. 직접 수정하고 설명하기
 
-    1. **이미지의 영향:** 1절에서 모양을 같게 두고 색만 바꾸세요. 5절의 logits 차이를 기록하세요.
-       차이가 있다는 결과만으로 색을 정확히 인식한다고 말할 수 없는 이유는 무엇인가요?
-    2. **Projector:** `MMVisionProjector(16, 32, target_tokens=2)`를 만들어도 패치 수가 4로 유지되는 이유를 소스에서 찾으세요.
-       힌트: `forward`가 호출하는 것은 MLP뿐입니다. 실제 토큰 축소에는 별도 pooling/재표본화가 필요합니다.
-    3. **손실:** 6절에서 질문 ID의 label도 켜면 어떤 `logits` 위치가 추가로 학습되나요?
+    1. **이미지의 영향:** 1절에서 모양은 같게, 색만 바꾸세요. 5절의 logits 차이를 기록하세요.
+       차이가 있어도 "색을 인식한다"고 말할 수 없는 이유는 무엇일까요?
+    2. **Projector:** `MMVisionProjector(16, 32, target_tokens=2)`로 만들어도 패치 수는 4입니다. 왜일까요?
+       힌트: `forward`는 MLP만 호출합니다. 토큰을 줄이려면 pooling 같은 단계가 따로 필요합니다.
+    3. **손실:** 6절에서 질문 ID의 label도 켜면 어느 `logits` 위치가 더 학습될까요?
        힌트: label 위치 5를 켜면 logits 위치 4가 질문을 예측합니다. labels를 직접 shift하지 마세요.
-    4. **순서:** 이미지가 답변보다 뒤에 있으면 앞의 답변 위치가 그 이미지를 읽을 수 있을까요?
-       힌트: 5절의 causal 연결 그림을 보세요.
-    5. **다음 실험 설계:** 실제 학습을 한다면 색과 모양을 독립적으로 조합하고, 학습에 없던 위치·크기의
-       이미지를 검증용으로 두세요. 같은 질문에서 올바른 이미지/바꾼 이미지/이미지 제거의 정답률을 비교하세요.
-       작은 두 샘플 암기와 시각 일반화는 구분해야 합니다.
+    4. **순서:** 이미지가 답변보다 뒤에 있으면, 답변 위치가 그 이미지를 볼 수 있을까요?
+       힌트: 5절의 causal 그림을 보세요.
+    5. **실험 설계:** 실제로 학습한다면 어떻게 검증할까요?
+       - 색과 모양을 따로따로 조합하세요.
+       - 학습에 없던 위치·크기의 이미지를 검증용으로 두세요.
+       - 같은 질문으로 비교하세요: 올바른 이미지 / 바꾼 이미지 / 이미지 없음.
+       - 샘플 암기와 시각 일반화를 구분하세요.
 
-    **실제 모델로 확장할 때:** `model/model_init.md`의 로컬 인코더,
-    `trainer/trainer_utils.py`의 가중치 로딩과 동결 정책, `eval_vlm.py`의 chat template와 생성 입력을 확인하세요.
-    비전 인코더 출력 차원·패치 수, config, tokenizer marker, 가중치 구조가 일치해야 합니다.
-    공개 체크포인트 추론, 긴 문맥 절단, 서로 다른 이미지 수의 배치, GPU·DDP 학습과 생성 품질은 이 실습의 검증 범위에 포함하지 않습니다.
+    **실제 모델로 확장할 때 볼 파일:**
 
-    **다음 실습:** `minimind_v_finetuning.py`. 여기서 확인한 교체·gradient 경로를 전제로
-    두 단계 학습과 "이미지를 실제로 근거로 쓰는가"를 검사합니다.
+    - `model/model_init.md`: 로컬 인코더
+    - `trainer/trainer_utils.py`: 가중치 로딩, 동결 정책
+    - `eval_vlm.py`: chat template, 생성 입력
+
+    인코더 출력 차원, 패치 수, config, tokenizer marker, 가중치 구조가 모두 맞아야 합니다.
+
+    **이 실습에서 검증하지 않은 것:** 공개 체크포인트 추론, 긴 문맥 절단,
+    이미지 수가 다른 배치, GPU·DDP 학습, 생성 품질.
+
+    **다음 실습:** `minimind_v_finetuning.py`.
+    두 단계 학습을 하고, 모델이 이미지를 실제로 근거로 쓰는지 검사합니다.
     """)
     return
 

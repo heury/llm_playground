@@ -50,25 +50,29 @@ def _(mo):
     mo.md(r"""
     # MiniMind-O: 보고 듣고 생각하고 말하는 모델
 
-    **학습 목표:** `minimind-o/model/model_omni.py`의 실제 연산을 따라
-    ① 서로 다른 입력을 같은 은닉 차원으로 연결하고 ② Thinker와 Talker를 구분하며
-    ③ 텍스트와 8개 음향 코드의 시간 정렬 및 손실을 설명합니다.
+    **학습 목표:** `minimind-o/model/model_omni.py`의 실제 연산을 따라가며 설명합니다.
 
-    **멀티모달 파트의 마지막 노트북**입니다. `minimind_vlm.py`(이미지 자리 교체·Projector)와
-    `minimind_v_finetuning.py`(Projector 학습·동결)를 먼저 읽으세요. 이미지 경로는 같으므로 짧게 확인하고,
-    새로 추가되는 **음성 입력, Thinker→Talker 연결, 8개 음향 코드북의 출력**에 집중합니다. 예상 60~90분.
+    1. 서로 다른 입력을 같은 은닉 차원으로 잇는 법
+    2. Thinker와 Talker의 역할
+    3. 텍스트와 음향 코드 8개의 시간 정렬, 그리고 손실
+
+    **멀티모달 파트의 마지막 노트북**입니다(예상 60~90분).
+    먼저 `minimind_vlm.py`와 `minimind_v_finetuning.py`를 읽으세요.
+    이미지 경로는 같아서 짧게 봅니다. 새로운 것에 집중합니다:
+    **음성 입력, Thinker→Talker 연결, 음향 코드북 8개 출력.**
 
     <img src="public/diagrams/omni.png" alt="MiniMind-O: Thinker와 Talker 연결 흐름" width="480">
 
-    여기서 *Omni*는 여러 모달리티를 다루는 모델이라는 뜻입니다. 이 구현의 출력은
-    **텍스트와 음성 코드**이며 이미지를 생성하는 경로는 없습니다.
-    Thinker는 이미지·음성을 넣은 임베딩을 처리하므로 멀티모달 문맥을 읽습니다.
-    Talker는 생성된 문장을 다시 토큰화하는 대신 **중간 은닉 상태**를 전달받습니다.
+    - *Omni*는 여러 모달리티를 다룬다는 뜻입니다.
+    - 출력은 **텍스트와 음성 코드**입니다. 이미지는 만들지 않습니다.
+    - Thinker: 이미지·음성이 들어간 임베딩을 읽습니다.
+    - Talker: 문장을 다시 토큰화하지 않고 **중간 은닉 상태**를 받습니다.
 
-    기본 실습은 CPU, 작은 무작위 모델, 합성 텐서만 사용합니다.
-    모델·데이터 다운로드, 음성 녹음, 실제 인식·합성, 대규모 학습을 수행하지 않습니다.
-    실제 원본 클래스를 사용하되 외부 인코더 로딩만 생략하고, 뒤에서 명시적인 교육용
-    가짜 인코더를 연결합니다. 의미 있는 답변이나 들을 수 있는 음성을 만드는 실습은 아닙니다.
+    **실행 환경:** CPU, 작은 무작위 모델, 합성 텐서만 씁니다.
+
+    - 다운로드, 녹음, 실제 인식·합성, 대규모 학습은 하지 않습니다.
+    - 원본 클래스를 쓰되 외부 인코더 로딩만 뺍니다. 대신 가짜 인코더를 붙입니다.
+    - 의미 있는 답이나 들을 수 있는 음성은 나오지 않습니다.
     """)
     return
 
@@ -121,10 +125,11 @@ def _(mo):
     mo.md(r"""
     ## 1. 입력은 왜 9개 행일까?
 
-    `[B,T]`이면 원본 `forward`가 8개 음향 행을 전부 PAD로 만듭니다.
-    `[B,9,T]`이면 앞 8개 행은 음향 코드북 0~7, 마지막 행은 텍스트입니다.
-    **코드북**은 음성 프레임을 표현하는 이산 코드들의 사전입니다. 이 구현은 프레임마다
-    8개 코드북의 ID를 쓰며, 8개가 서로 다른 시점이라는 뜻은 아닙니다.
+    - `[B,T]`를 넣으면: `forward`가 음향 8행을 모두 PAD로 채웁니다.
+    - `[B,9,T]`를 넣으면: 앞 8행은 음향 코드북 0~7, 마지막 행은 텍스트입니다.
+
+    **코드북:** 음성 프레임을 표현하는 이산 코드 사전입니다.
+    프레임마다 코드북 8개의 ID를 씁니다. 8개가 서로 다른 시점이라는 뜻은 아닙니다.
 
     | 값 | 텍스트 행에서 | 음향 행에서 |
     | --- | --- | --- |
@@ -132,9 +137,10 @@ def _(mo):
     | 12 | 이미지 특징을 넣을 자리(`<\|image_pad\|>`) | 일반 음향 코드 ID일 수 있음 |
     | 2049 / 2050 / 2051 | 이 실습 텍스트 사전에 없음 | PAD / STOP / 화자 자리 |
 
-    **토큰 공간은 별개**입니다. 음성 입력용 텍스트 자리 16과 출력 음향 PAD 2049를 구분하세요.
-    아래 숫자는 설명용 ID로 실제 한국어 토크나이저를 통과한 문장이 아닙니다.
-    예측: `[B,T]`와 PAD로 채운 `[B,9,T]`의 텍스트·음향 출력은 같을까요?
+    **텍스트와 음향은 토큰 공간이 다릅니다.** 텍스트의 음성 자리 16과 음향 PAD 2049를 구분하세요.
+    아래 숫자는 설명용 ID입니다. 실제 토크나이저 결과가 아닙니다.
+
+    **예측:** `[B,T]`와 PAD로 채운 `[B,9,T]`의 출력은 같을까요?
     """)
     return
 
@@ -173,14 +179,17 @@ def _(mo):
     mo.md(r"""
     ## 2. Projector는 차원을 바꾸고, 자리 교체는 길이를 맞춘다
 
-    이미지 경로는 VLM 노트북 3~4절과 같습니다. 새로 등장하는 `MMAudioProjector`도 같은
-    `LayerNorm → Linear → GELU → Linear` 구조로 **마지막 차원만** 바꾸고 토큰 수는 줄이지 않습니다.
-    차이는 음성 자리 교체 함수 `inject_audio_features`의 규칙입니다(아래 해설).
+    이미지 경로는 VLM 노트북 3~4절과 같습니다.
+    새 `MMAudioProjector`도 같은 구조입니다: `LayerNorm → Linear → GELU → Linear`.
+    **마지막 차원만** 바꾸고 토큰 수는 그대로입니다.
+    다른 점은 음성 교체 함수 `inject_audio_features`의 규칙입니다(아래 해설).
 
-    아래에서는 인코더 출력이라고 가정한 숫자 특징을 직접 만듭니다.
-    외부 SenseVoice나 SigLIP의 의미 표현을 재현하지 않습니다.
-    예측: 이미지 자리 3개에 특징 3개를 넣으면 전체 길이 T는 바뀔까요?
-    음성 특징이 자리보다 길면 남는 특징은 어떻게 될까요?
+    아래 특징은 인코더 출력이라고 가정한 숫자입니다. SenseVoice·SigLIP을 재현하지 않습니다.
+
+    **예측:**
+
+    - 이미지 자리 3개에 특징 3개를 넣으면 길이 T가 바뀔까요?
+    - 음성 특징이 자리보다 많으면 남는 특징은?
     """)
     return
 
@@ -228,20 +237,29 @@ def _(base_embeddings, injected_embeddings, mo, text_ids):
 @app.cell
 def _(mo):
     mo.md(r"""
-    **관찰 해설:** 교체가 일어난 위치만 바뀌고 전체 길이는 유지됩니다.
-    `inject_audio_features`는 첫 연속 음성 자리 구간에 `min(특징 수, 자리 수)`만 넣으며,
-    남는 자리는 텍스트 임베딩으로 남습니다. 뒤의 음성 자리 구간에는 같은 특징을 다시 쓰지 않습니다.
-    `count_vision_proj`는 이미지별 연속 자리 구간을 교체합니다. 특징 수가 부족하면 길이가
-    줄어들 수 있으므로 실제 데이터에서도 이미지 자리 수와 특징 수를 맞춰야 합니다.
-    `image_token_len=64`라는 설정만으로 projector가 64개를 만들어 주지는 않습니다.
+    **관찰 해설:** 교체된 위치만 바뀝니다. 전체 길이는 그대로입니다.
+
+    **음성 (`inject_audio_features`):**
+
+    - 첫 연속 음성 구간에 `min(특징 수, 자리 수)`개만 넣습니다.
+    - 남는 자리는 텍스트 임베딩 그대로입니다.
+    - 뒤의 음성 구간에는 특징을 다시 넣지 않습니다.
+
+    **이미지 (`count_vision_proj`):**
+
+    - 이미지별 연속 구간을 교체합니다.
+    - 특징이 부족하면 길이가 줄 수 있습니다. 자리 수와 특징 수를 맞추세요.
+    - `image_token_len=64`로 설정해도 projector가 64개를 만들어 주지는 않습니다.
 
     ## 3. 실제 forward 안에서 두 경로 만나기
 
-    다음 가짜 인코더는 항상 위의 합성 특징을 반환합니다. 파형·픽셀을 이해하지 않습니다.
-    대신 **원본 `encode_audio_inputs` → projector → 자리 교체 → Thinker → Talker**를
-    실제로 통과시킵니다. 외부 인코더는 `no_grad`로 호출되지만, projector에는 gradient가 흐릅니다.
-    원본은 외부 인코더를 `object.__setattr__`로 붙여 일반 하위 모듈 등록에서 제외합니다.
-    실제 실행에서는 `eval_omni.py`처럼 인코더를 장치로 따로 옮기는 코드도 확인하세요.
+    가짜 인코더는 항상 위의 합성 특징을 돌려줍니다. 파형·픽셀은 이해하지 않습니다.
+    대신 실제 경로를 그대로 지납니다:
+    **`encode_audio_inputs` → projector → 자리 교체 → Thinker → Talker.**
+
+    - 외부 인코더는 `no_grad`로 호출됩니다. projector에는 gradient가 흐릅니다.
+    - 원본은 인코더를 `object.__setattr__`로 붙여 하위 모듈 등록에서 뺍니다.
+    - 그래서 실제 실행에서는 인코더를 장치로 따로 옮겨야 합니다(`eval_omni.py` 참고).
     """)
     return
 
@@ -333,8 +351,8 @@ def _(audio_diff, mo, text_diff, traces):
                      for _k, _v in traces.items()], selection=None),
         mo.md(f"기본 배율 3 대비 최대 차이: 텍스트 **{text_diff:.6f}**, 코드북 0 **{audio_diff:.6f}**.\n\n"
               "Talker 입력 = `embed_proj(bridge) × text_scale + codec_proj(audio_embedding) × audio_scale`. "
-              "배율은 학습 가능한 Parameter입니다. 0으로 만들어도 codec 경로와 각 층의 bias 등이 남습니다. "
-              "이 실험은 한쪽 방향 연결을 확인하며 생성 품질을 비교하지 않습니다."),
+              "배율은 학습되는 Parameter입니다. 0으로 해도 codec 경로와 bias 등은 남습니다. "
+              "연결 방향만 확인하는 실험입니다. 생성 품질 비교가 아닙니다."),
     ])
     return
 
@@ -344,14 +362,16 @@ def _(mo):
     mo.md(r"""
     ## 4. 8개 코드북을 어떻게 읽고 예측할까?
 
-    `TalkerEmbedding`: 코드북마다 **공유 embedding + 개별 adapter**를 구한 후 8개를 평균합니다.
-    `TalkerHead`: 하나의 은닉 상태에 **공유 Linear + 개별 adapter**를 적용해 8개 logits를 만듭니다.
-    각 코드북은 같은 시점의 Talker 은닉 상태를 읽지만, 학습 데이터의 지연 배치 때문에
-    각기 다른 오디오 프레임을 예측하게 됩니다. 한 번에 미래 텍스트 8개를 생성하는 연산은 아닙니다.
+    - `TalkerEmbedding`: 코드북마다 **공유 embedding + 개별 adapter**. 8개를 평균합니다.
+    - `TalkerHead`: 은닉 상태 하나에 **공유 Linear + 개별 adapter**. logits 8개를 만듭니다.
 
-    아래 작은 독립 모듈만 rank=4로 만들고 원본 수식을 직접 계산합니다.
-    전체 Omni의 head/embedding은 원본 기본 rank=256을 그대로 사용합니다.
-    예측: head 8개의 결과가 항상 같을까요? 공유 항만 같고 개별 adapter는 다릅니다.
+    코드북 8개는 같은 시점의 은닉 상태를 읽습니다.
+    하지만 지연 배치(5절) 때문에 각각 다른 프레임을 예측합니다.
+    미래 텍스트 8개를 한 번에 만드는 것이 아닙니다.
+
+    아래는 작은 모듈(rank=4)로 수식을 직접 계산합니다. 전체 Omni는 원본 rank=256을 씁니다.
+
+    **예측:** head 8개의 결과는 같을까요? 공유 항은 같고 adapter는 다릅니다.
     """)
     return
 
@@ -386,14 +406,17 @@ def _(mo):
     mo.md(r"""
     ## 5. 지연 배치: 같은 음성 프레임을 대각선으로 보내기
 
-    원본 데이터셋의 `Y_audio_layers[k][assistant_start + k + 1 + f] = code[k,f]`를
-    숫자로 재현합니다. 코드북 번호 k가 클수록 늦게 시작합니다.
-    학습 입력은 `Y[:, :-1]`, 정답은 `Y[:, 1:]`입니다.
-    따라서 출력 위치 t의 코드북 k 정답 프레임은 `f = t - assistant_start - k`입니다.
-    **teacher forcing**은 학습 때 이전 시점의 정답 코드를 입력으로 제공한다는 뜻입니다.
+    원본 데이터셋 규칙을 숫자로 재현합니다:
+    `Y_audio_layers[k][assistant_start + k + 1 + f] = code[k,f]`.
 
-    아래 표에서 `k0:f0`, `k1:f0`, … `k7:f0`는 같은 음성 프레임의 서로 다른 코드입니다.
-    예측: 코드북 7의 첫 정답은 코드북 0보다 몇 위치 늦게 등장할까요?
+    - 코드북 번호 k가 클수록 늦게 시작합니다.
+    - 입력은 `Y[:, :-1]`, 정답은 `Y[:, 1:]`입니다.
+    - 그래서 위치 t, 코드북 k의 정답 프레임은 `f = t - assistant_start - k`입니다.
+    - **teacher forcing:** 학습 때 이전 정답 코드를 입력으로 줍니다.
+
+    표의 `k0:f0`, `k1:f0`, … `k7:f0`는 같은 프레임의 서로 다른 코드입니다.
+
+    **예측:** 코드북 7의 첫 정답은 코드북 0보다 몇 칸 늦을까요?
     """)
     return
 
@@ -436,7 +459,7 @@ def _(audio_targets, delay_rows, mo, text_targets, training_ids):
         mo.ui.table(delay_rows, selection=None),
         mo.md(f"모델 입력 `{tuple(training_ids.shape)}`, 텍스트 정답 `{tuple(text_targets.shape)}`, "
               f"음향 정답 `{tuple(audio_targets.shape)}`. `·`는 손실 제외(-100)입니다. "
-              "입력과 정답이 이미 한 칸 어긋나 있으므로 모델 안에서 또 이동하지 않습니다."),
+              "입력과 정답이 이미 한 칸 밀려 있어서 모델 안에서 또 옮기지 않습니다."),
     ])
     return
 
@@ -446,17 +469,20 @@ def _(mo):
     mo.md(r"""
     ## 6. 텍스트 CE + 음향 CE로 한 번 역전파하기
 
-    `MiniMindOmni.forward`는 labels로 주 손실을 계산하지 않습니다. 학습 스크립트가
-    텍스트 logits와 음향 logits의 CE를 계산합니다. 일반 MiniMind LM의 내부 shift와 다릅니다.
+    `MiniMindOmni.forward`는 손실을 계산하지 않습니다. 학습 스크립트가 직접 CE를 계산합니다.
+    일반 MiniMind LM처럼 내부에서 shift하지 않습니다.
 
-    - 텍스트: 유효한 응답 토큰 CE의 평균.
-    - 음향: 코드북별로 유효 토큰 CE를 합하되 STOP(2050)은 **10배**, 유효 토큰 수로 나눈 후 8개 평균.
-    - MoE일 때 `aux_loss`를 추가. 이 Dense 실습의 aux는 0입니다.
+    - **텍스트:** 유효 응답 토큰 CE의 평균.
+    - **음향:** 코드북마다 CE 합 ÷ 유효 토큰 수. STOP(2050)은 **10배**. 그 뒤 8개 평균.
+    - **MoE면** `aux_loss` 추가. 여기서는 Dense라 0입니다.
 
-    STOP의 가중치를 분모에는 적용하지 않으므로 이것은 가중치 합으로 정규화한 평균이 아닙니다.
-    정답이 없는 코드북은 0으로 기여하지만 마지막 나눗셈은 항상 8입니다.
-    아래 함수는 `train_sft_omni.py`의 손실 계산을 축소해 옮겼습니다.
-    합성 입력·정답으로 구조만 검증하며 실제 `OmniDataset`·Parquet·증강·scheduled sampling은 실행하지 않습니다.
+    **주의:**
+
+    - STOP 가중치는 분모에 들어가지 않습니다. 가중 평균이 아닙니다.
+    - 정답이 없는 코드북은 0이지만, 나눗셈은 항상 8로 합니다.
+
+    아래 함수는 `train_sft_omni.py`의 손실 계산을 줄여 옮긴 것입니다.
+    합성 데이터로 구조만 확인합니다. `OmniDataset`, Parquet, 증강, scheduled sampling은 쓰지 않습니다.
     """)
     return
 
@@ -525,9 +551,9 @@ def _(final_losses, gradient_rows, initial_losses, mo):
             {"시점": "학습 전", "텍스트 CE": initial_losses[0], "음향 CE": initial_losses[1]},
             {"시점": "5 step 후", "텍스트 CE": final_losses[0], "음향 CE": final_losses[1]},
         ], selection=None),
-        mo.md("음향 손실은 bridge 이전 Thinker까지 전달됩니다. bridge 이후 블록에는 "
-              "이 손실의 경로가 없습니다. 공동 손실에서는 텍스트 CE가 뒤쪽 Thinker도 학습합니다. "
-              "5 step 결과는 동일 합성 배치의 손실 감소이며 일반화·음질 지표가 아닙니다."),
+        mo.md("음향 손실은 bridge 이전 Thinker까지만 갑니다. bridge 이후 블록에는 경로가 없습니다. "
+              "뒤쪽 Thinker는 텍스트 CE가 학습시킵니다. "
+              "5 step 결과는 같은 합성 배치의 손실 감소일 뿐입니다. 일반화·음질 지표가 아닙니다."),
     ])
     return
 
@@ -537,10 +563,13 @@ def _(mo):
     mo.md(r"""
     ## 7. projector 학습과 인코더 동결은 어떻게 함께 가능할까?
 
-    `no_grad`는 **그 범위 안의 연산**을 기록하지 않습니다. 원본 음성 인코더 호출은
-    no_grad 안에 있지만 `self.audio_proj(emb)`는 밖에 있습니다.
-    이미지 경로도 같은 방식입니다. 고정 인코더 위에 붙은 projector를 학습할 수 있습니다.
-    예측: `mode=audio_proj`처럼 나머지를 동결하면 Thinker가 동결되어도 음향 CE가 projector에 도달할까요?
+    `no_grad`는 **그 범위 안의 연산만** 기록하지 않습니다.
+
+    - 음성 인코더 호출은 no_grad 안에 있습니다.
+    - `self.audio_proj(emb)`는 밖에 있습니다.
+    - 그래서 고정 인코더 위의 projector를 학습할 수 있습니다. 이미지도 같습니다.
+
+    **예측:** `mode=audio_proj`로 나머지를 동결해도, 음향 CE가 projector까지 갈까요?
     """)
     return
 
@@ -567,10 +596,10 @@ def _(audio_targets, copy, modal_inputs, multimodal_model, omni_losses, packed_i
 def _(mo, projector_grad_norm):
     # ▸ 결과 설명 — 실행하면 계산 값이 들어간 설명이 나타납니다 (marimo 표시 코드)
     mo.md(f"Audio Projector gradient norm: **{projector_grad_norm:.6f}**. "
-          "고정 음성 인코더와 Thinker의 parameter gradient는 없습니다. "
-          "Thinker 연산 자체를 no_grad로 감싸면 projector로 돌아가는 경로도 끊기므로 구분하세요.\n\n"
-          "원본 trainer의 `all`은 동결 설정을 별도로 확인해야 하며, `audio_proj`와 `vision_proj`는 "
-          "전체 parameter를 먼저 동결한 뒤 해당 projector만 다시 활성화합니다.")
+          "음성 인코더와 Thinker의 parameter에는 gradient가 없습니다. "
+          "단, Thinker 연산을 no_grad로 감싸면 projector로 가는 경로도 끊깁니다.\n\n"
+          "원본 trainer 모드: `audio_proj`, `vision_proj`는 전체를 동결한 뒤 해당 projector만 켭니다. "
+          "`all`은 동결 설정을 따로 확인하세요.")
     return
 
 
@@ -579,11 +608,14 @@ def _(mo):
     mo.md(r"""
     ## 8. KV cache와 스트리밍: 언제 무엇을 출력할까?
 
-    학습에서는 정답의 이전 값을 사용하지만 생성에서는 **직접 뽑은 텍스트·음향 코드를 다음 입력에 붙입니다**.
-    `stream_generate`는 첫 호출에서 프롬프트 전체를 처리하고 이후 마지막 한 위치만 처리합니다.
-    cache는 Thinker 층들 뒤에 Talker 층들이 이어지는 list입니다.
-    음성·이미지 특징 삽입은 `start_pos == 0`일 때만 실행합니다.
-    아래는 샘플링 대신 동일 토큰을 주어 cache 유무의 logits를 비교합니다.
+    학습은 이전 정답을 입력으로 씁니다.
+    생성은 **직접 뽑은 텍스트·음향 코드를 다음 입력에 붙입니다.**
+
+    - `stream_generate`: 첫 호출은 프롬프트 전체, 이후는 마지막 한 위치만 처리합니다.
+    - cache: Thinker 층들 뒤에 Talker 층들이 이어진 list입니다.
+    - 음성·이미지 삽입은 `start_pos == 0`일 때만 합니다.
+
+    아래는 같은 토큰을 넣어 cache 있을 때와 없을 때의 logits를 비교합니다.
     """)
     return
 
@@ -611,28 +643,29 @@ def _(cache_audio_error, cache_prefix_output, cache_text_error, mo):
     mo.md(f"cache 원소 `{len(cache_prefix_output.past_key_values)}`개, 첫 K shape "
           f"`{tuple(cache_prefix_output.past_key_values[0][0].shape)}`. "
           f"최대 logits 오차: 텍스트 `{cache_text_error:.2e}`, 음향 `{cache_audio_error:.2e}`. "
-          "이는 CPU float32의 텍스트·코드 입력 cache 동등성 검사입니다. "
-          "외부 인코더를 포함한 실제 음성 스트리밍 검증은 아닙니다.")
+          "CPU float32에서 cache 결과가 같은지만 확인했습니다. "
+          "실제 음성 스트리밍 검증은 아닙니다.")
     return
 
 
 @app.cell
 def _(mo):
     mo.md(r"""
-    일반 모드(`open_thinking=False`)에서 생성 step s의 `audio_step = s - 1`입니다.
-    코드북 k는 s ≥ k+1에서 시작하므로, **첫 텍스트 토큰을 뽑는 step 0에는 음향 코드가 없습니다**.
-    step 8부터 `[audio_codes[k][s - 7 + k]]`를 모아 같은 프레임의 8개 코드를 반환할 수 있습니다.
-    리스트에는 처음의 PAD도 저장되기 때문에 아래 인덱스는 단순한 프레임 번호가 아닙니다.
+    **일반 모드(`open_thinking=False`)의 타이밍:**
 
-    `yield`는 `(생성 텍스트 누적값 또는 None, 8개짜리 audio_frame 또는 None)`입니다.
-    텍스트 EOS 이후에도 음향 코드북의 종료를 기다리며 생성할 수 있습니다.
-    코드에서 종료는 `code >= 2048`로 판정합니다. STOP 2050 하나만 검사하는 구현은 아닙니다.
-    `open_thinking=True`일 때는 `think_end_ids` 탐지 후 기준 시점을 늦추는 별도 경로가 있습니다.
-    아래 표와 검증은 일반 모드만 다룹니다.
+    - 생성 step s에서 `audio_step = s - 1`.
+    - 코드북 k는 s ≥ k+1부터 시작합니다. 그래서 **step 0에는 음향 코드가 없습니다.**
+    - step 8부터 같은 프레임의 코드 8개를 모아 반환합니다: `[audio_codes[k][s - 7 + k]]`.
+    - 리스트에 처음 PAD도 들어 있어서, 인덱스가 곧 프레임 번호는 아닙니다.
 
-    `generate(stream=False)`는 이 구현에서 마지막 yield를 그대로 반환하므로 일반적인
-    Transformers의 토큰 텐서 반환을 가정하지 마세요. 실제 사용 예는 `eval_omni.py`의
-    `stream=True` 반복을 확인하세요. 현재 샘플링 코드는 배치 1을 전제로 합니다.
+    **`yield` 형식:** `(누적 텍스트 또는 None, 8개 audio_frame 또는 None)`.
+
+    - 텍스트 EOS 뒤에도 음향 종료를 기다리며 계속 생성할 수 있습니다.
+    - 종료 판정은 `code >= 2048`입니다. STOP 2050만 보는 게 아닙니다.
+    - `open_thinking=True`는 `think_end_ids`를 찾은 뒤 시점을 늦추는 별도 경로입니다. 아래는 일반 모드만 봅니다.
+
+    **주의:** `generate(stream=False)`는 마지막 yield를 그대로 반환합니다. 토큰 텐서가 아닙니다.
+    사용 예는 `eval_omni.py`의 `stream=True` 반복을 보세요. 샘플링 코드는 배치 1 전제입니다.
     """)
     return
 
@@ -689,20 +722,27 @@ def _(mo):
     mo.md(r"""
     ## 9. 화자 조건과 실시간 VAD는 어디에 있을까?
 
-    **화자 조건:** 첫 코드북 ID가 `audio_spk_token=2051`인 위치에서
-    `spk_proj(spk_emb)`가 Talker embedding을 대체합니다. 이 실습은 화자 벡터 차원을 4로
-    줄였고 원본 기본은 192입니다. `ref_codes`는 프롬프트 끝에 우측 정렬하는 참조 음향 코드이며
-    화자 벡터와 별개입니다. 화자 벡터·코드가 있다고 복제 음질을 보장하는 것은 아닙니다.
+    **화자 조건:**
 
-    **파형 복원:** `model_omni.py`가 내보내는 것은 이산 코드입니다.
-    `eval_omni.py`는 프레임을 `[1,8,F]`로 쌓아 외부 `MimiModel.decode`에 전달하고
-    24kHz로 저장합니다. 입력 SenseVoice의 16kHz 전처리와 출력 주파수를 구분하세요.
-    이 노트북은 Mimi를 로드하지 않으므로 코드 번호를 음성으로 들려주지 않습니다.
+    - 첫 코드북 ID가 `audio_spk_token=2051`인 위치에서 `spk_proj(spk_emb)`가 embedding을 대신합니다.
+    - 화자 벡터 차원: 실습 4, 원본 192.
+    - `ref_codes`는 참조 음향 코드입니다(프롬프트 끝에 우측 정렬). 화자 벡터와 별개입니다.
+    - 화자 정보가 있다고 목소리 복제 품질이 보장되지는 않습니다.
 
-    **실시간 제어:** `SileroVAD`는 ONNX 모델의 발화 확률을 계산하고,
-    `RealtimeSession`은 무음 길이·발화 길이를 세어 `listening`, `speech_end`, `interrupt`를
-    반환합니다. 이 제어 계층은 Thinker/Talker의 학습 가능한 attention 블록이 아닙니다.
-    아래는 실제 ONNX 대신 정해진 확률을 반환하는 VAD만 연결해 원본 상태 전이를 검사합니다.
+    **파형 복원:**
+
+    - `model_omni.py`의 출력은 이산 코드입니다.
+    - `eval_omni.py`가 `[1,8,F]`로 쌓아 `MimiModel.decode`에 넘기고 24kHz로 저장합니다.
+    - 입력(SenseVoice 16kHz)과 출력(24kHz) 주파수가 다릅니다.
+    - 이 노트북은 Mimi를 쓰지 않아서 소리는 들을 수 없습니다.
+
+    **실시간 제어:**
+
+    - `SileroVAD`: ONNX 모델로 발화 확률을 계산합니다.
+    - `RealtimeSession`: 무음·발화 길이를 세어 `listening`, `speech_end`, `interrupt`를 돌려줍니다.
+    - 학습되는 attention 블록이 아닌 별도 제어 계층입니다.
+
+    아래는 정해진 확률을 내는 가짜 VAD로 상태 전이만 확인합니다.
     """)
     return
 
@@ -735,10 +775,10 @@ def _(config, copy, initial_model, packed_ids, torch):
 @app.cell(hide_code=True)
 def _(mo, speaker_logit_diff):
     # ▸ 결과 설명 — 실행하면 계산 값이 들어간 설명이 나타납니다 (marimo 표시 코드)
-    mo.md(f"화자 자리의 Talker embedding이 spk_proj 출력과 일치합니다. "
-          f"다른 자리의 embedding은 같고, 텍스트 logits도 같습니다. "
+    mo.md(f"화자 자리의 embedding이 spk_proj 출력과 같습니다. "
+          f"다른 자리와 텍스트 logits는 그대로입니다. "
           f"코드북 0 logits 최대 차이: `{speaker_logit_diff:.5f}`. "
-          "이는 조건 전달 검사이며 실제 화자 유사도 측정은 아닙니다.")
+          "조건이 전달되는지만 확인했습니다. 화자 유사도 측정은 아닙니다.")
     return
 
 
@@ -779,8 +819,8 @@ def _(RealtimeSession, torch):
 def _(events, interrupt_events, mo):
     # ▸ 결과 설명 — 실행하면 계산 값이 들어간 설명이 나타납니다 (marimo 표시 코드)
     mo.md(f"발화→무음 이벤트: `{events}`\n\n생성 중 발화: `{interrupt_events}`\n\n"
-          "1024샘플은 16kHz에서 64ms입니다. 여기서는 2청크(128ms)를 최소 발화·무음으로 "
-          "설정했습니다. 원본의 기본 최소 무음은 800ms입니다. 확률은 정해 준 값이며 VAD 정확도를 평가하지 않습니다.")
+          "1024샘플 = 16kHz에서 64ms. 여기서는 최소 발화·무음을 2청크(128ms)로 두었습니다. "
+          "원본 기본 최소 무음은 800ms입니다. 확률은 정해 준 값이라 VAD 정확도는 평가하지 않습니다.")
     return
 
 
@@ -799,17 +839,19 @@ def _(mo):
 
     **스스로 설명하기**
 
-    1. 왜 이미지 projector의 차원 변환만으로 placeholder 수가 자동으로 맞춰지지 않을까?
-    2. 왜 Talker는 Thinker의 최종 logits 대신 중간 hidden state를 받을까?
-    3. 8개 head가 같은 시점에 예측하더라도 같은 음성 프레임을 모으려면 왜 기다려야 할까?
-    4. labels가 이미 한 칸 이동했는데 한 번 더 shift하면 어떤 대응이 깨질까?
-    5. 인코더의 동결과 모델 전체를 no_grad로 감싸는 것의 차이는 무엇일까?
+    1. projector가 차원을 바꿔도 placeholder 수는 왜 자동으로 안 맞을까?
+    2. Talker는 왜 최종 logits 대신 중간 hidden state를 받을까?
+    3. head 8개가 동시에 예측하는데, 같은 프레임을 모으려면 왜 기다려야 할까?
+    4. labels가 이미 밀려 있는데 또 shift하면 무엇이 깨질까?
+    5. 인코더 동결과 모델 전체 no_grad는 무엇이 다를까?
 
-    **해설:** projector는 마지막 특징 차원만 바꿉니다. bridge는 연속 의미 표현을 전달하고
-    음향 손실이 앞부분 Thinker까지 흐르게 합니다. 코드북 k는 k+1 위치 지연되므로
-    같은 프레임의 8개 코드를 모으려면 역지연 정렬이 필요합니다.
-    두 번째 shift는 입력 t와 정답 t+1의 대응을 t+2로 바꿉니다.
-    고정 층도 autograd가 입력에 대한 미분을 계산하면 앞쪽 projector를 학습할 수 있습니다.
+    **해설:**
+
+    1. projector는 마지막 차원만 바꿉니다. 토큰 수는 그대로입니다.
+    2. bridge는 연속 의미 표현을 넘깁니다. 음향 손실이 앞쪽 Thinker까지 흐릅니다.
+    3. 코드북 k는 k+1칸 늦습니다. 같은 프레임을 모으려면 지연을 되돌려야 합니다.
+    4. 입력 t ↔ 정답 t+1 대응이 t+2로 어긋납니다.
+    5. 고정된 층도 입력에 대한 미분은 계산합니다. 그래서 앞쪽 projector를 학습할 수 있습니다.
 
     ## 다음으로 읽을 원본
 
@@ -823,9 +865,9 @@ def _(mo):
     - `minimind-o/webui/web_demo.py`: 실시간 오디오와 끼어들기 제어.
     - `minimind-o/README_ko.md` 및 `minimind-o/LICENSE`: 리소스 준비, 실행 방법, 라이선스.
 
-    실제 가중치로 확장할 때는 기본 config의 차원·토크나이저 special ID·코드북 수·
-    placeholder 길이를 확인하고 프로젝트의 전용 환경에서 진행하세요.
-    이 노트북의 축소 가중치는 공개 체크포인트와 호환되지 않습니다.
+    **실제 가중치로 확장할 때:** config 차원, special ID, 코드북 수, placeholder 길이를 확인하세요.
+    프로젝트 전용 환경에서 실행하세요.
+    이 노트북의 작은 가중치는 공개 체크포인트와 호환되지 않습니다.
     """)
     return
 
@@ -855,7 +897,7 @@ def _(ZoneInfo, cache_audio_error, cache_text_error, datetime, final_losses, gra
 def _(artifact_dir, mo, repo_root):
     # ▸ 결과 설명 — 실행하면 계산 값이 들어간 설명이 나타납니다 (marimo 표시 코드)
     mo.md(f"이번 실행의 수치 기록: `{artifact_dir.relative_to(repo_root)}/metrics.json`. "
-          "UI를 바꾸면 관련 셀과 수치 저장도 다시 실행됩니다. 이전 결과는 별도 실행 폴더로 남습니다.")
+          "UI를 바꾸면 관련 셀과 저장이 다시 실행됩니다. 이전 결과는 다른 폴더에 남습니다.")
     return
 
 

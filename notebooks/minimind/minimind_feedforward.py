@@ -26,11 +26,14 @@ def _(mo):
     mo.md(r"""
     # MiniMind FeedForward: 토큰의 특징을 바꾸기
 
-    **목표:** 원본 `FeedForward`의 SwiGLU 계산을 직접 따라가고, 토큰 사이의 정보를
-    섞지 않는다는 성질과 역전파·학습을 확인합니다.
-    `minimind_structure.py` 4절에서 한 줄로 검증한 MLP를 자세히 해부하는 **구조 심화** 실습입니다.
-    외부 모델·데이터·GPU 없이 CPU에서 단독 실행합니다. 숫자 벡터는 계산을 보기 위한 가상 특징입니다.
-    설정을 바꾸면 새 모델로 다시 시작하므로 학습이 누적되지 않습니다.
+    **목표:** 원본 `FeedForward`의 SwiGLU 계산을 직접 따라갑니다.
+
+    - FFN은 토큰끼리 정보를 섞지 않습니다. 이를 확인합니다.
+    - 역전파와 학습도 확인합니다.
+
+    `minimind_structure.py` 4절의 MLP를 자세히 보는 **구조 심화** 실습입니다.
+    외부 모델·데이터·GPU 없이 CPU로 실행합니다. 숫자 벡터는 가상 특징입니다.
+    설정을 바꾸면 새 모델로 다시 시작합니다.
     """)
     return
 
@@ -44,13 +47,14 @@ def _(mo):
 
     <img src="public/diagrams/feedforward.png" alt="SwiGLU FeedForward 계산 흐름" width="620">
 
-    `D`는 은닉 차원, `M`은 중간 차원입니다. gate와 up은 서로 다른 학습 가능한 특징 조합입니다.
-    `*`는 같은 위치·같은 차원끼리 곱하고, `@`는 행렬 곱입니다.
-    SiLU는 $z\,\mathrm{sigmoid}(z)$로, 음수도 나올 수 있고 여러 값의 합이 1일 필요도 없습니다.
-    **이 gate는 MoE에서 전문가를 고르는 softmax router와 다릅니다.**
+    - `D` 은닉 차원, `M` 중간 차원.
+    - gate와 up은 서로 다른 특징 조합입니다. 둘 다 학습됩니다.
+    - `*`는 원소별 곱, `@`는 행렬 곱입니다.
+    - SiLU는 $z\,\mathrm{sigmoid}(z)$입니다. 음수도 나옵니다. 합이 1일 필요도 없습니다.
+    - **이 gate는 MoE의 router(softmax)와 다릅니다.**
 
-    **예측:** D=4, M=8이면 세 가중치의 shape와 총 매개변수 수는 무엇일까요?
-    원본은 bias가 없어 `gate: [M,D]`, `up: [M,D]`, `down: [D,M]`, 합계 `3DM=96`개입니다.
+    **예측:** D=4, M=8이면 가중치 shape와 매개변수 수는?
+    bias가 없으므로 `gate: [M,D]`, `up: [M,D]`, `down: [D,M]`. 합계 `3DM=96`개.
     """)
     return
 
@@ -99,13 +103,13 @@ def _(F, demo_ffn, sample_x, torch):
 def _(activated_gate, gate_values, gated_features, manual_ffn, mo, sample_x, up_values):
     # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([
-        mo.md(f"입력 `{tuple(sample_x.shape)}` → 중간 `{tuple(gated_features.shape)}` → 출력 `{tuple(manual_ffn.shape)}`. 원본 출력과 일치합니다."),
+        mo.md(f"입력 `{tuple(sample_x.shape)}` → 중간 `{tuple(gated_features.shape)}` → 출력 `{tuple(manual_ffn.shape)}`. 원본과 같습니다."),
         mo.ui.table([
             {"중간 차원": i, "gate 선형값": float(gate_values[0, 0, i]), "SiLU(gate)": float(activated_gate[0, 0, i]),
              "up 값": float(up_values[0, 0, i]), "곱한 값": float(gated_features[0, 0, i])}
             for i in range(8)
         ], selection=None),
-        mo.md("**관찰:** 첫 배치 첫 토큰의 8개 중간 특징입니다. 한 차원의 곱을 손으로 확인하세요. down_proj는 이 특징들을 다시 4차원으로 조합합니다."),
+        mo.md("**관찰:** 첫 토큰의 중간 특징 8개입니다. 한 칸의 곱을 손으로 계산해 보세요. down_proj가 이를 다시 4차원으로 합칩니다."),
     ])
     return
 
@@ -121,7 +125,7 @@ def _(F, mo, plt, torch):
     _ax.set(xlabel="z", ylabel="Value", title="SiLU is not a probability")
     _ax.legend()
     _fig.tight_layout()
-    mo.vstack([_fig, mo.md("**해설:** SiLU에는 음수 구간도 있습니다. gate의 값을 확률이나 토큰 선택 여부로 해석하지 않습니다.")])
+    mo.vstack([_fig, mo.md("**해설:** SiLU는 음수도 냅니다. gate 값은 확률이 아닙니다. 토큰 선택도 아닙니다.")])
     return
 
 
@@ -131,8 +135,9 @@ def _(mo):
     ## 2. 한 토큰을 바꾸면 다른 토큰도 바뀔까?
 
     **예측:** 첫 배치의 두 번째 토큰만 바꾸면 첫 번째 토큰의 출력도 바뀔까요?
-    FeedForward는 같은 가중치를 모든 토큰에 독립적으로 적용합니다. 가중치를 공유하지만
-    이 연산 안에서 토큰끼리 정보를 주고받지는 않습니다. Attention과 비교할 핵심입니다.
+    FeedForward는 같은 가중치를 토큰마다 따로 적용합니다.
+    가중치는 같지만, 토큰끼리 정보를 주고받지 않습니다.
+    이것이 Attention과의 핵심 차이입니다.
     """)
     return
 
@@ -170,10 +175,14 @@ def _(mo):
     ## 3. 블록 안에서는 정규화와 잔차 연결을 더한다
 
     **예측:** FeedForward 단독 출력에 입력 x가 이미 더해져 있을까요?
-    원본 FeedForward는 특징 변환만 합니다. 블록의 뒷부분에서
-    `h + FeedForward(RMSNorm(h))`를 계산합니다. h는 Attention과 첫 잔차 연결을 지난 값입니다.
-    FFN이 위치를 직접 섞지 않아도, 입력 h에는 이미 다른 토큰의 문맥이 들어 있습니다.
-    FFN 출력의 마지막 차원은 입력과 같은 D이므로 h에 더할 수 있습니다. 아래에서는 원본 블록 전체와 비교합니다.
+    **아닙니다.** FeedForward는 특징 변환만 합니다. 더하기는 블록이 합니다:
+    `h + FeedForward(RMSNorm(h))`.
+
+    - h는 Attention과 첫 잔차 연결을 지난 값입니다.
+    - 그래서 h에는 이미 다른 토큰의 문맥이 들어 있습니다.
+    - FFN 출력도 D차원이라 h에 바로 더할 수 있습니다.
+
+    아래에서 원본 블록 전체와 비교합니다.
     """)
     return
 
@@ -210,10 +219,10 @@ def _(MiniMindBlock, demo_config, precompute_freqs_cis, sample_x, torch):
 def _(block_hidden, context_change_rows, mo):
     # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([
-        mo.md(f"직접 조립한 블록과 원본 출력이 같습니다. h·FFN·잔차 출력 shape는 모두 `{tuple(block_hidden.shape)}`입니다. 잔차 연결은 FeedForward 바깥에서 수행합니다."),
-        mo.md("**예측:** 배치 0의 위치 1을 바꾸면 위치 2도 바뀔까요? 아래 두 경로의 같은 위치를 비교하세요."),
+        mo.md(f"직접 조립한 블록과 원본 출력이 같습니다. h·FFN·잔차 출력 shape는 모두 `{tuple(block_hidden.shape)}`입니다. 잔차 연결은 FeedForward 밖에서 합니다."),
+        mo.md("**예측:** 배치 0의 위치 1을 바꾸면 위치 2도 바뀔까요? 두 경로를 비교하세요."),
         mo.ui.table(context_change_rows, selection=None),
-        mo.md("**해설:** FFN 단독에서는 위치 1만 달라집니다. 전체 블록은 Attention으로 위치 2도 달라집니다. 위치 0은 미래를 볼 수 없어 유지됩니다. 'FFN이 위치를 섞지 않는다'는 말이 '문맥을 활용하지 않는다'는 뜻은 아닙니다."),
+        mo.md("**해설:** FFN만 쓰면 위치 1만 바뀝니다. 전체 블록에서는 Attention 때문에 위치 2도 바뀝니다. 위치 0은 미래를 못 보므로 그대로입니다. 'FFN은 위치를 섞지 않는다'가 '문맥을 안 쓴다'는 뜻은 아닙니다."),
     ])
     return
 
@@ -223,13 +232,15 @@ def _(mo):
     mo.md("""
     ## 4. 숫자 특징 변환을 실제로 학습하기
 
-    이제 가상 입력 x의 네 성분으로 `목표=[x0*x1, SiLU(x2), x0-x3, x1*x2]`를 만듭니다.
-    다음 토큰 예측과 달리 연속값 회귀이며, 오차는 평균제곱오차(MSE)입니다.
-    전체 80개 입력 중 64개로 학습하고 나머지 16개는 optimizer에 넣지 않습니다.
-    **예측:** 중간 차원을 늘리면 매개변수 수는 어떻게 바뀔까요? 검증 오차도 반드시 줄까요?
+    **과제:** 입력 x로 `목표=[x0*x1, SiLU(x2), x0-x3, x1*x2]`를 맞힙니다.
 
-    `zero_grad`로 기울기를 비우고, `backward`로 기울기를 계산한 뒤 `step`으로 갱신합니다.
-    `eval()`은 동작 모드이며, `no_grad()`가 gradient 기록을 끕니다. 매번 새 모델로 시작합니다.
+    - 다음 토큰 예측이 아닌 연속값 회귀입니다. 오차는 MSE입니다.
+    - 80개 중 64개로 학습합니다. 16개는 검증용입니다.
+
+    **예측:** 중간 차원을 늘리면 매개변수 수는? 검증 오차도 꼭 줄까요?
+
+    학습 순서: `zero_grad` → `backward` → `step`.
+    `no_grad()`는 gradient 기록을 끕니다. 매번 새 모델로 시작합니다.
     """)
     return
 
@@ -315,7 +326,7 @@ def _(ffn_eval_x, ffn_eval_y, ffn_fig, ffn_gradient_norms, ffn_metrics, ffn_pred
             {"검증 입력": str(ffn_eval_x[0, i].tolist()), "목표": str(ffn_eval_y[0, i].tolist()), "예측": str(ffn_prediction[0, i].tolist())}
             for i in range(4)
         ], selection=None),
-        mo.md("**관찰·해설:** 세 projection 모두 gradient를 받습니다. 학습 오차 감소와 검증 오차는 별도로 읽으세요. 이 숫자 과제의 결과가 언어 모델 성능을 뜻하지는 않습니다."),
+        mo.md("**관찰:** 세 projection 모두 gradient를 받습니다. 학습 오차와 검증 오차는 따로 보세요. 이 결과는 언어 모델 성능과 무관합니다."),
     ])
     return
 
@@ -325,10 +336,12 @@ def _(mo):
     mo.md(r"""
     ### 4-1. 왜 선형층 하나 대신 SwiGLU를 쓸까?
 
-    **예측:** x0*x1처럼 입력 성분의 곱을 선형 변환 하나로 항상 표현할 수 있을까요?
-    선형층은 가중합만 합니다. 활성화 없이 두 층을 연결해도
-    $W_2(W_1x)=(W_2W_1)x$이므로 여전히 선형 변환입니다.
-    아래는 같은 학습·검증 데이터, step, optimizer와 학습률로 네 구조를 비교합니다.
+    **예측:** x0*x1 같은 곱을 선형층 하나로 표현할 수 있을까요?
+
+    선형층은 가중합만 합니다.
+    활성화 없이 두 층을 쌓아도 $W_2(W_1x)=(W_2W_1)x$. 여전히 선형입니다.
+
+    아래 네 구조를 같은 데이터·step·학습률로 비교합니다.
 
     | 구조 | 계산 | 매개변수 수(D=4) |
     | --- | --- | --- |
@@ -337,8 +350,9 @@ def _(mo):
     | SiLU MLP | x → up → SiLU → down (곱셈 gate 없음) | 2DM |
     | SwiGLU | down(SiLU(gate(x)) * up(x)) | 3DM |
 
-    마지막 세 구조의 up/down은 같은 초기 가중치에서 시작합니다. 사용되지 않는 gate는 비교 모델에 넣지 않습니다.
-    모델별 매개변수 수가 다르므로 동일 용량 비교는 아닙니다. 이 숫자 과제의 유한한 학습 결과를 관찰합니다.
+    - 아래 세 구조의 up/down은 같은 초기값에서 시작합니다.
+    - 매개변수 수가 달라서 공정한 용량 비교는 아닙니다.
+    - 이 작은 과제의 결과만 관찰합니다.
     """)
     return
 
@@ -394,7 +408,7 @@ def _(comparison_fig, ffn_comparison_rows, mo):
     # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([
         comparison_fig, mo.ui.table(ffn_comparison_rows, selection=None),
-        mo.md("**관찰·해설:** 선형 모델도 목표의 일부를 맞히지만, 곱셈·비선형 특징을 표현하는 방식은 다릅니다. 학습·검증 MSE와 매개변수 수를 함께 읽으세요. 한 seed의 결과로 모든 과제의 우열을 결론 내리지 않습니다."),
+        mo.md("**관찰:** 선형 모델도 일부는 맞힙니다. 하지만 곱셈·비선형 특징은 잘 못 표현합니다. MSE와 매개변수 수를 함께 보세요. seed 하나로 우열을 단정하지 마세요."),
     ])
     return
 
@@ -404,15 +418,16 @@ def _(mo):
     mo.md("""
     ## 5. 직접 바꿔 볼 과제와 해설
 
-    1. M을 8/16/32로 바꾸기 전에 매개변수 수를 쓰세요. 실행 후 학습·검증 MSE를 각각 기록하세요.
-       **기준:** 개수는 `3DM`에 맞아야 합니다. 더 큰 M이 검증 오차를 항상 줄이지는 않습니다.
-    2. 4-1절에서 TwoLinear와 SwiGLU의 오차를 비교하세요. 두 선형층을 합친 가중치의 shape는 무엇일까요?
-       **해설:** `[D,M] @ [M,D] = [D,D]`이며 여전히 선형입니다. 원본 일치 검증을 깨지 않고 변형을 비교할 수 있습니다.
-    3. 한 토큰 수정 실험에서 위치 두 곳을 바꾸면 어디의 출력이 달라질까요?
-       **해설:** FFN 단독은 바꾼 위치들만 달라집니다. 전체 블록은 문맥을 섞으므로 뒤 위치도 달라질 수 있습니다. 3절 표와 비교하세요.
-    4. 왜 down_proj가 D차원으로 돌아와야 할까요? **해설:** 잔차 입력과 같은 shape로 더하기 위해서입니다.
+    1. M을 8/16/32로 바꾸기 전에 매개변수 수를 예측하세요. 실행 후 학습·검증 MSE를 적으세요.
+       **기준:** 개수는 `3DM`입니다. M이 커도 검증 오차가 꼭 줄지는 않습니다.
+    2. 4-1절의 TwoLinear와 SwiGLU를 비교하세요. 두 선형층을 합치면 shape는?
+       **해설:** `[D,M] @ [M,D] = [D,D]`. 여전히 선형입니다.
+    3. 두 위치를 바꾸면 어디 출력이 달라질까요?
+       **해설:** FFN만이면 바꾼 위치만. 전체 블록이면 뒤 위치도 달라질 수 있습니다.
+    4. down_proj는 왜 D차원으로 돌아가야 할까요?
+       **해설:** 잔차 입력과 더하려면 shape가 같아야 합니다.
 
-    **다음 실습:** `minimind_moe.py`에서는 이런 FeedForward 여러 개 중 일부를 토큰마다 선택합니다.
+    **다음 실습:** `minimind_moe.py`. FeedForward 여러 개 중 일부를 토큰마다 고릅니다.
     """)
     return
 

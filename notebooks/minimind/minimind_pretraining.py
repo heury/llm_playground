@@ -49,19 +49,25 @@ def _(mo):
     mo.md(r"""
     # MiniMind 사전 학습: 원문에서 다음 토큰 예측까지
 
-    **목표:** `trainer/train_pretrain.py`의 학습 흐름과 `dataset/lm_dataset.py`의
-    **실제 PretrainDataset**을 작은 데이터로 연결합니다. 모델 구조를 읽은 뒤 진행하면 좋습니다.
-    Python 함수, 텐서 shape, 행렬 곱을 알고 시작하세요. 모델·데이터 다운로드나 GPU는 필요 없습니다.
+    **목표:** 실제 학습 코드를 작은 데이터로 따라갑니다.
 
-    이 실습은 질문/답변 쌍 대신 **일반 문장의 다음 토큰**을 학습합니다.
-    원문 자체가 정답을 제공하는 자기지도 학습입니다. 모델은 무작위 가중치에서 시작합니다.
-    이 저장소의 SFT는 대화에서 주로 assistant 응답 위치를 학습한다는 데이터·마스킹 차이가 있습니다.
-    여기서 다루는 것은 자기회귀 사전 학습이며, 사전 학습의 모든 종류를 다루지는 않습니다.
+    - `trainer/train_pretrain.py`: 학습 흐름
+    - `dataset/lm_dataset.py`: **실제 PretrainDataset**
 
-    **학습 파이프라인의 첫 노트북**입니다. 여기서 정리하는 정답 이동·패딩 마스크·기울기 누적·
-    학습률·체크포인트는 SFT·LoRA·증류·DPO 노트북에서 다시 자세히 설명하지 않습니다.
-    아래 데이터 설정을 바꾸면 관련 학습을 새 모델에서 시작합니다.
-    원본 trainer 전체를 실행하거나 원래 모델·데이터 파일을 덮어쓰지 않습니다.
+    **사전 지식:** Python 함수, 텐서 shape, 행렬 곱. 모델 구조 노트북을 먼저 보면 좋습니다.
+    다운로드와 GPU는 필요 없습니다.
+
+    **무엇을 학습하나:** 일반 문장의 **다음 토큰**입니다.
+
+    - 원문 자체가 정답입니다(자기지도 학습).
+    - 모델은 무작위 가중치에서 시작합니다.
+    - SFT와 다른 점: SFT는 대화에서 assistant 응답만 학습합니다.
+
+    **학습 파이프라인의 첫 노트북**입니다.
+    정답 이동, 패딩 마스크, 기울기 누적, 학습률, 체크포인트를 여기서 정리합니다.
+    뒤 노트북(SFT·LoRA·증류·DPO)은 이를 다시 설명하지 않습니다.
+
+    원본 trainer 전체를 돌리지 않습니다. 원래 모델·데이터 파일도 덮어쓰지 않습니다.
 
     산출물 저장 위치: `outputs/notebooks/<실행 ID>/`
     """)
@@ -73,11 +79,13 @@ def _(mo):
     mo.md("""
     ## 1. 일반 문장으로 JSONL 데이터 만들기
 
-    한 줄이 `{"text": "고양이 는 야옹 한다 ."}`인 원본 형식입니다.
-    아래 12개 조합 중 8개는 학습, 4개는 검증으로 분리합니다.
-    검증에는 학습에 없던 수식어·동물 조합이 있지만 단어 자체는 모두 학습에 있습니다.
-    검증 문장으로 optimizer를 갱신하지 않습니다.
-    **예측:** 학습 문장을 잘 외운 것과 새로운 조합을 잘 이어 쓰는 것은 같은가요?
+    원본 형식: 한 줄에 `{"text": "고양이 는 야옹 한다 ."}`.
+
+    - 12개 조합 중 8개는 학습, 4개는 검증용입니다.
+    - 검증 문장은 새 조합입니다. 단어는 모두 학습에 나옵니다.
+    - 검증 문장으로는 학습하지 않습니다.
+
+    **예측:** 학습 문장을 외우는 것과 새 조합을 잘 쓰는 것은 같을까요?
     """)
     return
 
@@ -117,11 +125,14 @@ def _(mo):
     mo.md("""
     ## 2. 눈으로 읽을 수 있는 작은 토크나이저
 
-    원본은 저장된 토크나이저를 불러옵니다. 여기서는 **학습 텍스트만** 사용해 공백 단위 사전을 만듭니다.
-    실제 PreTrainedTokenizerFast를 로컬에 저장하여 원본 init_model에서도 읽을 수 있게 합니다.
-    실제 대규모 학습의 서브워드 토크나이저를 단순화한 것입니다.
-    PAD=0, BOS=1, EOS=2, UNK=3이며, 사전에 없는 단어는 UNK입니다.
-    **예측:** 새 단어가 UNK가 되었다면 생성 결과로 그 단어의 학습 여부를 판단할 수 있을까요?
+    원본은 저장된 토크나이저를 씁니다.
+    여기서는 **학습 텍스트만**으로 공백 단위 사전을 만듭니다.
+
+    - 서브워드 토크나이저를 단순화한 것입니다.
+    - PreTrainedTokenizerFast로 저장합니다. 원본 init_model이 읽을 수 있습니다.
+    - PAD=0, BOS=1, EOS=2, UNK=3. 사전에 없는 단어는 UNK입니다.
+
+    **예측:** 새 단어가 UNK가 되면, 그 단어를 배웠는지 생성으로 알 수 있을까요?
     """)
     return
 
@@ -148,7 +159,7 @@ def _(mo, tokenizer, vocabulary):
     # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([
         mo.ui.table([{"ID": i, "단어": w} for i, w in enumerate(vocabulary)], selection=None),
-        mo.md(f"검증 문장의 단어는 모두 사전에 있습니다. `새로운 고양이` → `{tokenizer('새로운 고양이', add_special_tokens=False).input_ids}`. **해설:** UNK는 단어 구분을 잃으므로 단어 습득 평가로 쓰지 않습니다."),
+        mo.md(f"검증 문장의 단어는 모두 사전에 있습니다. `새로운 고양이` → `{tokenizer('새로운 고양이', add_special_tokens=False).input_ids}`. **해설:** UNK는 단어 구분이 사라집니다. 단어 학습 평가에 쓸 수 없습니다."),
     ])
     return
 
@@ -169,9 +180,12 @@ def _(mo):
     ## 3. 실제 PretrainDataset: 자르기 → BOS/EOS → 패딩 → labels
 
     **예측:** max_length=6이면 본문은 최대 몇 토큰을 남길까요?
-    원본은 `max_length-2`개로 자른 뒤 BOS/EOS를 붙입니다. 빈자리는 PAD,
-    labels의 PAD만 -100으로 바꿉니다. labels를 미리 한 칸 이동하지 않습니다.
-    잘린 본문 뒤에도 EOS가 붙으므로, 길이 설정은 학습할 문장 내용도 바꿉니다.
+    1. 본문을 `max_length-2`개로 자릅니다.
+    2. BOS/EOS를 붙입니다.
+    3. 빈자리는 PAD로 채웁니다.
+    4. labels에서 PAD만 -100으로 바꿉니다. 한 칸 이동은 하지 않습니다.
+
+    잘린 본문 뒤에도 EOS가 붙습니다. 그래서 길이 설정이 학습 내용도 바꿉니다.
     """)
     return
 
@@ -205,14 +219,17 @@ def _(mo):
     mo.md("""
     ## 4. 모델 안에서 정답을 이동한다
 
-    `MiniMindForCausalLM.forward`는 `logits[:, :-1]`과 `labels[:, 1:]`를 비교합니다.
-    [BOS] 출력은 첫 본문 토큰을, 마지막 본문 출력은 EOS를 예측합니다.
-    PAD 정답은 무시하고, BOS 자체를 예측하는 위치는 없습니다.
-    -100은 **정답 무시 값**이며 Embedding에 넣는 입력 토큰 ID가 아닙니다.
+    `forward`는 `logits[:, :-1]`과 `labels[:, 1:]`를 비교합니다.
 
-    이 원본 trainer는 attention_mask를 전달하지 않습니다. 현재의 **오른쪽 패딩과 causal Attention**에서는
-    앞의 실제 토큰이 뒤의 PAD를 보지 못합니다. labels 마스킹과 Attention 마스킹은 별개의 역할입니다.
-    이 설명을 왼쪽 패딩이나 비인과 모델에 그대로 적용하면 안 됩니다.
+    - BOS 출력 → 첫 본문 토큰을 예측
+    - 마지막 본문 출력 → EOS를 예측
+    - PAD 정답은 무시합니다. BOS를 예측하는 위치는 없습니다.
+    - -100은 **"정답 무시" 표시**입니다. 입력 토큰 ID가 아닙니다.
+
+    **attention_mask는?** 이 trainer는 넘기지 않습니다.
+    **오른쪽 패딩 + causal Attention**이라 실제 토큰은 뒤의 PAD를 못 봅니다.
+    labels 마스킹과 Attention 마스킹은 다른 역할입니다.
+    왼쪽 패딩이나 비인과 모델에는 이 설명이 맞지 않습니다.
     """)
     return
 
@@ -265,7 +282,7 @@ def _(input_ids, manual_loss, mo, per_position, shifted_targets, tokenizer, vali
              "평균에 포함": bool(valid_targets[0, t]), "위치별 손실": float(per_position[0, t])}
             for t in range(input_ids.shape[1] - 1)
         ], selection=None),
-        mo.md(f"유효한 정답 {valid_targets.sum().item()}개만 평균: `{float(manual_loss):.4f}`. 원본 loss와 일치합니다. **관찰:** 뒤의 PAD 입력을 바꾸어도 유효 예측과 손실은 같습니다. 길이 6 설정에는 PAD가 없을 수 있으므로 표를 함께 확인하세요."),
+        mo.md(f"유효한 정답 {valid_targets.sum().item()}개만 평균: `{float(manual_loss):.4f}`. 원본 loss와 같습니다. **관찰:** 뒤의 PAD를 바꿔도 손실은 같습니다. 길이 6이면 PAD가 없을 수 있으니 표를 보세요."),
     ])
     return
 
@@ -275,14 +292,20 @@ def _(mo):
     mo.md("""
     ## 5. 기울기 누적: microbatch와 optimizer step 구분
 
-    microbatch는 한 forward/backward의 묶음, optimizer step은 가중치를 실제 갱신하는 시점입니다.
-    두 microbatch의 loss를 각각 2로 나눠 backward하면 gradient를 더한 뒤 한 번 갱신할 수 있습니다.
-    **예측:** 모든 microbatch의 유효 정답 수가 같고 dropout=0이면 큰 배치와 같은 gradient일까요?
+    - **microbatch:** forward/backward 한 번의 묶음.
+    - **optimizer step:** 가중치를 실제로 바꾸는 순간.
 
-    단, 원본은 항상 `loss / accumulation_steps`입니다. 마지막 그룹이 덜 차도 같은 값으로 나누고 갱신합니다.
-    따라서 불완전 그룹은 완전한 큰 배치 평균과 다릅니다. 패딩 때문에 유효 토큰 수가 서로 달라도
-    'microbatch별 평균의 평균'과 '모든 토큰의 평균'은 다를 수 있습니다.
-    아래는 같은 길이의 두 문장으로 동등 조건을 먼저 검증합니다.
+    두 microbatch의 loss를 각각 2로 나눠 backward하면, gradient가 더해집니다. 그 뒤 한 번 갱신합니다.
+
+    **예측:** 유효 정답 수가 같고 dropout=0이면, 큰 배치와 gradient가 같을까요?
+
+    **주의할 점:**
+
+    - 원본은 항상 `loss / accumulation_steps`로 나눕니다. 마지막 그룹이 덜 차도 같습니다.
+      그래서 덜 찬 그룹은 큰 배치 평균과 다릅니다.
+    - 패딩으로 유효 토큰 수가 다르면, "평균의 평균"과 "전체 평균"이 다를 수 있습니다.
+
+    아래에서는 길이가 같은 두 문장으로 먼저 검증합니다.
     """)
     return
 
@@ -317,7 +340,7 @@ def _(copy, initial_model, torch, train_dataset):
 @app.cell(hide_code=True)
 def _(accumulation_max_error, mo):
     # ▸ 결과 설명 — 실행하면 계산 값이 들어간 설명이 나타납니다 (marimo 표시 코드)
-    mo.md(f"같은 길이의 큰 배치와 누적 gradient 최대 오차: `{accumulation_max_error:.2e}`. **해설:** A=3인데 마지막 한 microbatch만 남은 원본 방식에서는 그 배치 단독 gradient의 1/3입니다. 아래 학습은 이 원본 동작을 유지하며 그룹 크기를 기록합니다. 토큰 수 가중 평균 방식으로 바꾸려면 유효 정답 수에 따라 loss를 가중해야 합니다.")
+    mo.md(f"같은 길이의 큰 배치와 누적 gradient 최대 오차: `{accumulation_max_error:.2e}`. **해설:** A=3인데 마지막에 microbatch 하나만 남으면, gradient는 그 배치의 1/3입니다. 아래 학습은 원본 동작 그대로 두고 그룹 크기를 기록합니다. 토큰 수 기준 평균을 원하면 유효 정답 수로 loss를 가중하세요.")
     return
 
 
@@ -349,16 +372,22 @@ def _(mo):
 
     <img src="public/diagrams/pretraining.png" alt="사전 학습 루프: 누적 경계에서만 optimizer step" width="280">
 
-    Dense 모델이므로 aux_loss=0이지만 원본의 합산 위치를 유지합니다.
-    CPU float32이므로 원본의 AMP/GradScaler는 생략하고, DDP·compile·wandb도 사용하지 않습니다.
-    cosine 학습률은 원본 get_lr를 호출하며 **microstep마다** 바뀝니다. warmup은 없는 원본 수식입니다.
+    **원본과 다른 점:**
+
+    - Dense 모델이라 aux_loss=0입니다. 더하는 위치는 원본 그대로 둡니다.
+    - CPU float32라 AMP/GradScaler를 뺐습니다. DDP·compile·wandb도 안 씁니다.
+
+    **학습률:** 원본 `get_lr`를 씁니다. **microstep마다** 바뀝니다. warmup은 없습니다.
 
     $$\mathrm{lr}(s)=\mathrm{lr}_{0}\left(0.1+0.45\left(1+\cos\frac{\pi s}{S}\right)\right)$$
 
-    s=0에서 lr₀, s=S(전체 microstep)에서 0.1·lr₀입니다. 0까지 내려가지 않는 바닥값이 있습니다.
-    실제 optimizer step에는 그 누적 그룹의 마지막 microstep에서 설정한 학습률이 적용됩니다.
-    gradient clipping은 optimizer step 직전의 누적 gradient 크기를 제한합니다.
-    학습·검증 평가는 유효 토큰 수로 가중 평균하고, 검증에서는 backward를 하지 않습니다.
+    - s=0이면 lr₀, s=S이면 0.1·lr₀입니다. 0까지 내려가지 않습니다.
+    - optimizer step에는 그룹 마지막 microstep의 학습률이 쓰입니다.
+
+    **그 밖에:**
+
+    - gradient clipping은 step 직전에 gradient 크기를 제한합니다.
+    - 평가 손실은 유효 토큰 수로 가중 평균합니다. 검증에서는 backward하지 않습니다.
     """)
     return
 
@@ -450,9 +479,9 @@ def _(final_train_metrics, final_validation_metrics, initial_train_metrics, init
     mo.vstack([
         pretrain_fig,
         mo.ui.table([{"분할": name, **metrics} for name, metrics in [("학습 전 train", initial_train_metrics), ("학습 후 train", final_train_metrics), ("학습 전 validation", initial_validation_metrics), ("학습 후 validation", final_validation_metrics)]], selection=None),
-        mo.md(f"microstep {len(training_trace)}회, optimizer step {optimizer_updates}회. 유효 토큰 평균 loss의 exp가 perplexity입니다. 같은 tokenizer·같은 데이터 조건에서 비교하고 언어 능력 전체 점수로 해석하지 않습니다."),
+        mo.md(f"microstep {len(training_trace)}회, optimizer step {optimizer_updates}회. perplexity = exp(평균 loss)입니다. 같은 tokenizer·데이터끼리만 비교하세요. 언어 능력 점수가 아닙니다."),
         mo.ui.table(training_trace[:8], selection=None),
-        mo.md("**관찰:** update=True일 때만 갱신합니다. A=3이면 epoch 마지막에 group_size=1인 갱신이 나옵니다. 이때도 loss를 3으로 나누는 원본 동작과, clip 전후 norm을 함께 확인하세요."),
+        mo.md("**관찰:** update=True일 때만 갱신합니다. A=3이면 epoch 끝에 group_size=1 갱신이 나옵니다. 이때도 loss를 3으로 나눕니다. clip 전후 norm도 보세요."),
     ])
     return
 
@@ -462,7 +491,10 @@ def _(mo):
     mo.md(r"""
     ## 7. 문장 이어 쓰기와 검증 해석
 
-    **예측:** 손실 감소가 모든 입력의 정답 생성을 보장할까요? 학습 8개와 검증 4개 원문 각각의 앞부분을 넣습니다. 원문 분할과 생성 결과를 함께 읽으세요.
+    **예측:** 손실이 줄면 모든 문장을 맞게 생성할까요?
+
+    학습 8개, 검증 4개 문장의 앞부분을 넣어 봅니다.
+    학습/검증 구분과 생성 결과를 함께 보세요.
     """)
     return
 
@@ -492,7 +524,7 @@ def _(generation_rows, mo):
     # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([
         mo.ui.table(generation_rows, selection=None),
-        mo.md("**해설:** greedy 생성은 점수가 가장 큰 다음 토큰을 반복 선택합니다. 학습 손실, 검증 손실, 문장별 결과를 따로 판단하세요. 길이 6으로 잘라 학습했다면 생성 문장이 짧아질 수 있습니다. 이 작은 데이터 실험은 한국어 일반화 성능 평가가 아닙니다."),
+        mo.md("**해설:** greedy는 점수가 가장 큰 토큰을 계속 고릅니다. 학습 손실, 검증 손실, 문장별 결과는 따로 보세요. 길이 6으로 잘랐다면 생성 문장도 짧을 수 있습니다. 한국어 일반화 평가가 아닙니다."),
     ])
     return
 
@@ -502,12 +534,17 @@ def _(mo):
     mo.md("""
     ## 8. 가중치 파일과 학습 재개 체크포인트
 
-    원본 lm_checkpoint는 float16 가중치와 별도의 resume 파일을 저장합니다.
-    가중치만으로는 AdamW의 이동 평균이나 진행 위치를 복원할 수 없습니다.
-    실습에서는 실제 함수를 호출해 float32 모델 상태·optimizer·epoch·step과 학습 설정을 저장합니다.
-    **예측:** 같은 모델·optimizer 상태에서 같은 추가 배치를 갱신하면 연속 실행과 같을까요?
-    아래는 optimizer 갱신 경계에서 저장한 뒤, 같은 LR·배치로 추가 한 step을 비교하는 통제 실험입니다.
-    전체 DataLoader 중간 재개나 DDP 재개를 검증하는 실험은 아닙니다.
+    원본 `lm_checkpoint`는 두 파일을 저장합니다.
+
+    - float16 가중치
+    - resume 파일: optimizer·epoch·step 등
+
+    가중치만으로는 AdamW 상태와 진행 위치를 복원할 수 없습니다.
+
+    **예측:** 저장 후 복원해서 한 step 더 가면, 쉬지 않고 이어 간 것과 같을까요?
+
+    아래 실험은 step 경계에서 저장하고, 같은 배치로 한 step을 더 비교합니다.
+    DataLoader 중간 재개나 DDP 재개는 검증하지 않습니다.
     """)
     return
 
@@ -546,8 +583,8 @@ def _(checkpoint_rows, mo, resume_max_error, training_dir):
     # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([
         mo.ui.table(checkpoint_rows, selection=None),
-        mo.md(f"동일한 추가 optimizer step 후 최대 가중치 오차: `{resume_max_error:.2e}`. 저장 위치: `{training_dir}`. 노트북의 원래 학습 모델은 복사했으므로 변경하지 않았습니다."),
-        mo.md("**해설:** 같은 초기 가중치만이 아니라 optimizer 상태도 필요합니다. 실제 중간 재개에는 셔플 순서·건너뛸 배치·난수 상태·누적 중인 gradient도 고려해야 합니다. 여기서는 dropout=0, 고정 추가 배치, 누적 경계 저장 조건입니다."),
+        mo.md(f"동일한 추가 optimizer step 후 최대 가중치 오차: `{resume_max_error:.2e}`. 저장 위치: `{training_dir}`. 원래 학습 모델은 복사본을 썼으므로 그대로입니다."),
+        mo.md("**해설:** 가중치뿐 아니라 optimizer 상태도 필요합니다. 실제 중간 재개에는 셔플 순서, 건너뛸 배치, 난수 상태, 누적 중인 gradient도 필요합니다. 여기서는 단순한 조건(dropout=0, 고정 배치, step 경계 저장)만 봅니다."),
     ])
     return
 
@@ -575,20 +612,22 @@ def _(mo):
     | lm_checkpoint | 8절의 실제 저장·복원 및 추가 한 step 비교 |
     | AMP·DDP·wandb·torch.compile | 이 CPU 입문 실습에서는 실행하지 않음 |
 
-    1. 길이 10→6으로 바꾸기 전에 본문 최대 토큰 수와 EOS 위치를 쓰세요.
-       **해설:** 본문은 최대 4토큰, 그 뒤에 EOS입니다. 일부 원문이 잘린 채 새 학습 목표가 됩니다.
-    2. 누적 수 1/2/3에서 microstep 수·optimizer step 수·마지막 그룹 크기를 기록하세요.
-       **기준:** epoch당 microstep 4회이며 optimizer step은 각각 4/2/2회입니다. A=3의 마지막 그룹은 1개입니다.
-    3. 검증 손실이 낮아졌는데 한 문장 생성이 틀릴 수 있을까요?
-       **해설:** 토큰 평균 확률과 greedy 문장 정답은 다른 지표입니다. 둘을 함께 기록하세요.
-    4. labels를 미리 한 칸 이동하면 왜 안 될까요? **해설:** 모델 내부에서 또 이동하여 목표가 어긋납니다.
-    5. 가중치만 복원했을 때 optimizer step이 같을지 예측하세요.
-       **해설:** AdamW 상태가 빠지면 이후 갱신이 달라질 수 있습니다. optimizer 상태와 진행 위치를 구분하세요.
+    1. 길이를 10→6으로 바꾸면 본문은 몇 토큰이고 EOS는 어디일까요?
+       **해설:** 본문 최대 4토큰, 그 뒤 EOS. 잘린 문장이 새 학습 목표가 됩니다.
+    2. 누적 수 1/2/3에서 microstep 수, optimizer step 수, 마지막 그룹 크기를 적으세요.
+       **기준:** epoch당 microstep 4회. optimizer step은 4/2/2회. A=3이면 마지막 그룹은 1개.
+    3. 검증 손실이 낮은데 생성이 틀릴 수 있을까요?
+       **해설:** 있습니다. 평균 확률과 greedy 정답은 다른 지표입니다.
+    4. labels를 미리 한 칸 옮기면 왜 안 될까요?
+       **해설:** 모델 안에서 또 옮겨서 정답이 어긋납니다.
+    5. 가중치만 복원하면 다음 step이 같을까요?
+       **해설:** AdamW 상태가 없으면 달라질 수 있습니다.
 
     **기록할 것:** 설정, 유효 정답 수, 학습·검증 loss/perplexity, 생성 결과,
-    microstep·optimizer step 수, 체크포인트 경로를 적으세요. 대규모 학습·GPU 성능·일반화는 별도 검증이 필요합니다.
+    microstep·optimizer step 수, 체크포인트 경로.
+    대규모 학습, GPU 성능, 일반화는 이 실습 범위 밖입니다.
 
-    **다음 실습:** `minimind_sft.py`. 같은 다음 토큰 손실에 **대화 형식과 assistant 정답 마스크**가 더해집니다.
+    **다음 실습:** `minimind_sft.py`. 같은 손실에 **대화 형식과 assistant 정답 마스크**가 더해집니다.
     """)
     return
 

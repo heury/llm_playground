@@ -64,23 +64,26 @@ def _(mo):
     mo.md(r"""
     # MiniMind DPO: 두 응답의 선호 비교로 미세 조정하기
 
-    **목표:** 같은 질문의 chosen/rejected 응답을 읽고, 토큰 확률에서 DPO 손실을 계산한 뒤
-    실제 MiniMind의 응답 선호를 바꿉니다. `dataset/lm_dataset.py`의 **DPODataset**과
-    `trainer/train_dpo.py`의 **logits_to_log_probs, dpo_loss**를 직접 사용합니다.
+    **목표:** 같은 질문의 좋은 답(chosen)과 덜 좋은 답(rejected)으로 모델의 선호를 바꿉니다.
 
-    SFT는 정답 응답의 다음 토큰을 학습합니다. DPO는 선호 응답과 비선호 응답의
-    **상대적인 로그 확률 차이**를 고정된 참조 모델과 비교하여 정책 모델을 학습합니다.
-    여기서는 별도 보상 모델을 학습하거나 온라인으로 응답을 수집하지 않습니다.
-    LoRA는 학습할 매개변수를 정하는 방법이고 DPO는 학습 목적이므로 함께 쓸 수도 있습니다.
-    이 실습은 전체 매개변수를 업데이트합니다.
+    - `dataset/lm_dataset.py`의 **DPODataset**
+    - `trainer/train_dpo.py`의 **logits_to_log_probs, dpo_loss**
 
-    **선수 실습:** `minimind_sft.py`(assistant 마스크·대화 template). DPODataset의 마스크 규칙은 SFT와 같고,
-    다른 점은 **Dataset이 미리 한 칸 이동한 x/y를 돌려준다**는 것입니다(2절).
-    **선호 학습·강화 학습 파트의 첫 노트북**이며 다음은 PPO → GRPO입니다.
-    CPU에서 단독 실행하며 모델·데이터 다운로드가 없습니다. 작은 합성 데이터 실습입니다.
+    **SFT와 DPO의 차이:**
 
-    산출물은 저장소의 `outputs/notebooks/<실행 ID>/`에 저장합니다.
-    실제 저장 경로는 마지막 저장 결과 셀에서 확인할 수 있습니다.
+    - SFT: 정답 응답의 다음 토큰을 학습합니다.
+    - DPO: chosen과 rejected의 **로그 확률 차이**를 키웁니다. 고정된 참조 모델과 비교합니다.
+    - 보상 모델도, 온라인 응답 수집도 없습니다.
+
+    LoRA(무엇을 바꾸나)와 DPO(무엇을 학습하나)는 함께 쓸 수 있습니다.
+    이 실습은 전체 매개변수를 학습합니다.
+
+    **선수 실습:** `minimind_sft.py`. 마스크 규칙은 SFT와 같습니다.
+    다른 점: **Dataset이 이미 한 칸 옮긴 x/y를 돌려줍니다**(2절).
+
+    **선호·강화 학습 파트의 첫 노트북**입니다. 다음은 PPO → GRPO.
+    CPU로 실행하며 다운로드는 없습니다. 작은 합성 데이터 실습입니다.
+    산출물: `outputs/notebooks/<실행 ID>/`. 정확한 경로는 마지막 셀에 나옵니다.
     """)
     return
 
@@ -91,13 +94,16 @@ def _(mo):
     ## 1. 선호 데이터: 같은 질문, 다른 표현
 
     **예측:** `야옹 .`도 내용은 맞는데 왜 rejected일까요?
-    이번 데이터의 선호 기준은 **같은 동물 소리를 공손한 완성 문장으로 말하기**입니다.
-    chosen은 `네 야옹 입니다 .`, rejected는 `야옹 .`입니다.
-    rejected가 항상 거짓이거나 유해한 답이라는 뜻은 아닙니다. 선호 기준은 데이터 작성자가 정합니다.
+    선호 기준: **공손한 완성 문장으로 답하기**.
 
-    원본 형식은 한 JSONL 행에 `chosen`, `rejected`가 있고, 각각 **전체 메시지 목록**입니다.
-    공통 질문은 같고 마지막 assistant 응답만 다릅니다.
-    8개 질문 조합 중 6개는 학습, 2개는 검증입니다. 검증 응답으로 optimizer를 갱신하지 않습니다.
+    - chosen: `네 야옹 입니다 .`
+    - rejected: `야옹 .`
+
+    rejected가 틀린 답이라는 뜻은 아닙니다. 기준은 데이터를 만든 사람이 정합니다.
+
+    **형식:** JSONL 한 줄에 `chosen`, `rejected`. 각각 **전체 메시지 목록**입니다.
+    질문은 같고 마지막 assistant 응답만 다릅니다.
+    8쌍 중 6쌍은 학습, 2쌍은 검증용입니다.
     """)
     return
 
@@ -173,17 +179,21 @@ def _(mo):
     mo.md(r"""
     ## 2. DPODataset: 템플릿 → 토큰 → 마스크 → 한 칸 이동
 
-    로컬 공백 단위 토크나이저를 사용합니다. 원본의 경계 탐지 규칙에 맞춰
-    `<bos>assistant\n`과 `<eos>\n`을 구성합니다. 실제 학습에서는 모델의 토크나이저와 템플릿을 씁니다.
-    이 템플릿에는 빈 think 블록이 없어 원본의 확률적 빈 think 제거가 결과에 영향을 주지 않습니다.
+    공백 단위 작은 토크나이저를 씁니다.
+    원본 경계 규칙에 맞춰 `<bos>assistant\n`과 `<eos>\n`을 만듭니다.
+    빈 think 블록이 없어서 무작위 think 제거는 영향이 없습니다.
 
-    **예측:** assistant 헤더, 답변 본문, EOS 중 어디에 mask=1이 붙을까요?
-    원본은 assistant 헤더 다음부터 EOS까지 1로 만듭니다. 여러 턴이면 **모든 assistant 응답**을 포함합니다.
-    user와 패딩은 손실에서 제외됩니다. 질문 토큰도 Attention의 문맥으로는 사용됩니다.
+    **예측:** 헤더, 본문, EOS 중 어디에 mask=1이 붙을까요?
 
-    `x = ids[:-1]`, `y = ids[1:]`, `mask = loss_mask[1:]`로 이미 한 칸 이동합니다.
-    따라서 `model(x).logits`에서 `y`의 확률을 직접 읽습니다. 모델에 `labels=y`를 넘겨
-    내부에서 다시 이동시키면 정렬이 틀어집니다. 길이 L=24이면 x/y/mask는 모두 길이 23입니다.
+    - assistant 헤더 다음부터 EOS까지 1입니다.
+    - 여러 턴이면 **모든 assistant 응답**이 포함됩니다.
+    - user와 패딩은 0입니다. 질문은 문맥으로만 쓰입니다.
+
+    **이미 옮겨진 x/y:** `x = ids[:-1]`, `y = ids[1:]`, `mask = loss_mask[1:]`.
+
+    - 그래서 `model(x).logits`에서 `y`의 확률을 바로 읽습니다.
+    - `labels=y`로 넘기면 모델이 또 옮겨서 어긋납니다.
+    - L=24이면 x/y/mask 길이는 모두 23입니다.
     """)
     return
 
@@ -230,7 +240,7 @@ def _(mo, truncation_rows):
     # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([
         mo.ui.table(truncation_rows, selection=None),
-        mo.md("**관찰·해설:** 너무 짧게 자르면 응답이 사라지거나 EOS 없이 일부만 남습니다. 원본은 mask가 전부 0인 쌍도 거부하지 않습니다. 양쪽 모두 0이면 손실은 log(2)이지만 gradient 신호가 없습니다. 데이터 검사에서 제외하거나 길이를 늘리세요. 원본은 별도 attention_mask를 전달하지 않습니다. 여기서는 오른쪽 패딩과 causal Attention을 쓰므로 앞의 유효 위치는 뒤 PAD를 보지 않습니다."),
+        mo.md("**관찰:** 너무 짧게 자르면 응답이 사라지거나 EOS 없이 잘립니다. 원본은 mask가 전부 0인 쌍도 그대로 씁니다. 이때 손실은 log(2)지만 gradient는 없습니다. 이런 쌍은 빼거나 길이를 늘리세요. attention_mask는 넘기지 않습니다. 오른쪽 패딩 + causal Attention이라 실제 토큰은 뒤 PAD를 못 봅니다."),
     ])
     return
 
@@ -240,17 +250,18 @@ def _(mo):
     mo.md(r"""
     ## 3. logits에서 응답 로그 확률까지
 
-    logits `[2B,T,V]` → `log_softmax` → `gather(y)` → 정답 토큰별 log p `[2B,T]`.
-    log p에 mask를 곱하고 시간축을 **합산**하면 응답별 점수 `[2B]`입니다.
-    원본은 토큰 수로 나누지 않습니다. 로그 확률의 합은 조건부 토큰 확률 곱의 로그입니다.
-    답변 길이가 다르면 점수에 길이 영향이 있으므로 chosen의 원점수가 더 크다고 가정하지 마세요.
+    1. logits `[2B,T,V]` → `log_softmax` → `gather(y)` → 토큰별 log p `[2B,T]`
+    2. mask를 곱하고 시간축으로 **더하면** 응답별 점수 `[2B]`
 
-    원본 배치 순서는 `[chosen 0, chosen 1, …, rejected 0, rejected 1, …]`입니다.
-    `dpo_loss`가 앞 절반/뒤 절반을 자르므로 순서가 바뀌면 다른 응답끼리 비교합니다.
-    B는 선호 **쌍의 수**이고, 모델 입력 행은 2B개입니다.
+    - 토큰 수로 나누지 않습니다(평균 아님).
+    - 그래서 길이가 다르면 점수도 길이 영향을 받습니다. chosen 점수가 더 크다고 가정하지 마세요.
 
-    **예측:** 정답 토큰의 logits만 먼저 골라 softmax하면 같은 값일까요?
-    정규화에는 V개 전체가 필요합니다. 아래에서 실제 원본 함수와 직접 계산을 비교합니다.
+    **배치 순서:** `[chosen 0, chosen 1, …, rejected 0, rejected 1, …]`.
+    `dpo_loss`는 앞 절반과 뒤 절반을 짝짓습니다. 순서가 틀리면 엉뚱한 짝을 비교합니다.
+    B는 **쌍의 수**, 입력 행은 2B개입니다.
+
+    **예측:** 정답 토큰 logits만 골라 softmax해도 같을까요?
+    아닙니다. 정규화에는 V개 전체가 필요합니다. 아래에서 비교합니다.
     """)
     return
 
@@ -284,19 +295,21 @@ def _(mo):
     $$\Delta=(s_\theta(y^+)-s_\theta(y^-))-(s_{ref}(y^+)-s_{ref}(y^-))$$
     $$L=-\log\sigma(\beta\Delta)$$
 
-    θ는 학습할 정책, ref는 고정 참조 모델, +는 chosen, −는 rejected입니다.
-    `sθ − sref`는 참조 대비 변화입니다. `β(sθ−sref)`를 암묵적 보상으로 볼 수 있습니다.
-    별도의 reward head 출력이 아닙니다. `sigmoid(βΔ)`는 이 선호 모델의 쌍 비교 값이며
-    실제 사용자 만족도의 보정된 확률로 해석하지 않습니다.
+    **기호:** θ 학습할 정책, ref 고정 참조 모델, + chosen, − rejected.
 
-    **예측:** 정책과 참조가 같으면 chosen의 원래 확률에 관계없이 손실은 얼마일까요?
-    Δ=0이므로 log(2)≈0.693입니다. Δ가 증가하면 손실은 감소합니다.
-    도함수는 `dL/dΔ = −β sigmoid(−βΔ)`입니다. chosen 점수는 올리고 rejected 점수는
-    내리는 방향의 신호지만, 공유 가중치를 업데이트하므로 개별 확률의 단조 변화는 보장되지 않습니다.
+    - `sθ − sref`: 참조 대비 변화량
+    - `β(sθ−sref)`: 암묵적 보상. 별도 reward head는 없습니다.
+    - `sigmoid(βΔ)`: 쌍 비교 값. 사용자 만족 확률이 아닙니다.
 
-    β는 참조 대비 로그 비율의 척도이자 이론적 KL 제약의 강도와 연결됩니다.
-    같은 Δ에서의 손실·gradient 변화와, 다른 β로 다시 학습한 결과를 구분하세요.
-    “β가 클수록 무조건 정책이 더 많이 바뀐다”라고 결론 내릴 수 없습니다.
+    **예측:** 정책 = 참조이면 손실은?
+    Δ=0이므로 log(2)≈0.693입니다. Δ가 커지면 손실이 줄어듭니다.
+
+    **기울기:** `dL/dΔ = −β sigmoid(−βΔ)`.
+    chosen은 올리고 rejected는 내리는 방향입니다.
+    하지만 가중치를 공유하므로, 각 확률이 꼭 그렇게 움직이지는 않습니다.
+
+    **β:** 참조에서 얼마나 멀어질지와 관련된 척도입니다.
+    "β가 크면 무조건 더 많이 바뀐다"고 단정할 수 없습니다.
     """)
     return
 
@@ -335,7 +348,7 @@ def _(demo_beta, demo_delta, dpo_loss, math, plt, torch):
 @app.cell(hide_code=True)
 def _(delta_tensor, demo_loss, dpo_loss_fig, mo, zero_delta_loss):
     # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
-    mo.vstack([dpo_loss_fig, mo.md(f"손실 = **{demo_loss.item():.4f}**, dL/dΔ = **{delta_tensor.grad.item():.4f}**. Δ=0 손실 = {zero_delta_loss.item():.4f}. **해설:** 손실값뿐 아니라 gradient 부호도 확인하세요.")])
+    mo.vstack([dpo_loss_fig, mo.md(f"손실 = **{demo_loss.item():.4f}**, dL/dΔ = **{delta_tensor.grad.item():.4f}**. Δ=0 손실 = {zero_delta_loss.item():.4f}. **해설:** 손실값과 gradient 부호를 함께 보세요.")])
     return
 
 
@@ -344,14 +357,21 @@ def _(mo):
     mo.md("""
     ## 5. 작은 SFT 기준 모델 준비 후 두 모델로 복사
 
-    실제 원본은 `init_model(..., from_weight='full_sft')`로 같은 SFT 가중치를 두 번 읽습니다.
-    여기서는 무작위 초기화한 작은 Dense MiniMind를 두 응답 모두에 100 step SFT하여
-    문장 형식을 익히게 합니다. 이 준비 단계는 선호를 구분하지 않습니다.
-    **이후부터 DPO**이며, policy/ref 모두 이 동일한 준비 가중치의 별도 복사본입니다.
+    원본은 같은 SFT 가중치를 두 번 읽습니다(`from_weight='full_sft'`).
 
-    이미 이동한 y를 사용하므로 SFT도 logits와 y의 cross entropy를 직접 계산하고 응답만 학습합니다.
-    `requires_grad_(False)`는 참조 매개변수를 동결하고, `eval()`은 dropout 등을 평가 모드로 바꾸며,
-    `no_grad()`는 참조 순전파의 계산 그래프 생성을 막습니다. 세 역할을 구분하세요.
+    여기서는 이렇게 준비합니다.
+
+    1. 작은 Dense MiniMind를 무작위로 만듭니다.
+    2. chosen·rejected 모두로 100 step SFT합니다. 선호는 아직 구분하지 않습니다.
+    3. 이 가중치를 두 번 복사해 policy와 ref를 만듭니다. **여기부터 DPO**입니다.
+
+    y가 이미 옮겨져 있으므로 SFT 손실도 직접 계산합니다.
+
+    **참조 모델 고정에 쓰는 세 가지:**
+
+    - `requires_grad_(False)`: 매개변수 동결
+    - `eval()`: dropout 등을 평가 모드로
+    - `no_grad()`: 계산 그래프를 만들지 않음
     """)
     return
 
@@ -401,15 +421,16 @@ def _(mo):
     mo.md("""
     ## 6. 원본 학습 흐름을 한 배치로 실행
 
-    **예측:** 첫 DPO loss는 약 0.693일까요? 참조 매개변수에도 gradient가 생길까요?
-    참조 순전파 → 정책 순전파 → 원본 dpo_loss → backward → clipping → optimizer step 순서입니다.
-    원본처럼 `outputs.aux_loss`를 한 번 더합니다. 여기서는 Dense라 0이고, MoE에서는 별도 항입니다.
+    **예측:** 첫 loss는 약 0.693일까요? 참조 모델에도 gradient가 생길까요?
 
-    CPU float32, 전체 학습 쌍 한 배치, 누적 1, 고정 학습률 0.001로 축소합니다.
-    원본의 AMP·DDP·cosine 학습률·분할 배치·재개는 실행하지 않습니다.
-    원본 CLI 기본 β=0.15, 학습률=4e-8과 실습 설정은 다릅니다.
-    작은 모델용 학습률을 실제 SFT 체크포인트에 그대로 적용하지 마세요.
-    UI 변경 시 기준 모델의 새 복사본에서 다시 학습합니다.
+    **순서:** 참조 순전파 → 정책 순전파 → dpo_loss → backward → clip → step.
+    `outputs.aux_loss`도 더합니다(Dense라 0).
+
+    **축소한 설정:** CPU float32, 전체 쌍 한 배치, 누적 1, 고정 lr 0.001.
+
+    - AMP·DDP·cosine lr·재개는 하지 않습니다.
+    - 원본 기본값은 β=0.15, lr=4e-8입니다. 이 실습 lr을 실제 모델에 쓰지 마세요.
+    - UI를 바꾸면 기준 모델의 새 복사본에서 다시 학습합니다.
     """)
     return
 
@@ -501,7 +522,7 @@ def _(after_metrics, before_metrics, dpo_history, plt, preference_train, prefere
 def _(dpo_curve_fig, mo, pair_rows):
     # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([dpo_curve_fig, mo.ui.table(pair_rows, selection=None), mo.md(
-        "**관찰·해설:** Δ>0은 참조보다 선호 격차가 커졌다는 뜻입니다. chosen 원확률이 rejected보다 높다는 조건(raw gap>0)과 다릅니다. 초기 Δ=0은 엄격한 >0 지표에서 승리로 세지 않습니다. 검증도 두 문장의 조합 확인일 뿐이며 일반적인 선호 정렬 성능을 증명하지 않습니다. 곡선의 마지막 점은 마지막 갱신 전, After 값은 마지막 갱신 후입니다."
+        "**관찰:** Δ>0은 참조보다 선호 격차가 커졌다는 뜻입니다. chosen 확률이 rejected보다 높다(raw gap>0)와는 다릅니다. 처음 Δ=0은 승리로 세지 않습니다. 검증은 두 쌍뿐이라 일반적인 선호 성능을 보여 주지 않습니다. 곡선 마지막 점은 갱신 전, After 값은 갱신 후입니다."
     )])
     return
 
@@ -537,7 +558,7 @@ def _(policy, preference_validation, reference, tokenizer, torch):
 def _(generated_examples, mo):
     # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([mo.ui.table(generated_examples, selection=None),
-               mo.md("**예측·관찰:** Δ가 커지면 greedy 결과도 반드시 바뀔까요? 쌍의 점수 차이는 전체 응답의 확률을 비교하고, greedy는 매 위치의 최대 확률 토큰을 고릅니다. loss 감소·후보 순위·실제 생성·새 질문 일반화는 각각 확인해야 합니다. 정해진 두 후보 이외의 응답을 억제하는 보장은 없습니다.")])
+               mo.md("**예측·관찰:** Δ가 커지면 greedy 결과도 꼭 바뀔까요? 점수 차이는 응답 전체 확률을 비교합니다. greedy는 위치마다 최대 토큰을 고릅니다. loss, 후보 순위, 실제 생성, 일반화는 따로 확인하세요. 두 후보 밖의 응답을 막는다는 보장도 없습니다.")])
     return
 
 
@@ -579,7 +600,7 @@ def _(
 @app.cell(hide_code=True)
 def _(experiment_dir, mo, output_dir):
     # ▸ 결과 설명 — 실행하면 계산 값이 들어간 설명이 나타납니다 (marimo 표시 코드)
-    mo.md(f"데이터·토크나이저는 `{output_dir}`, 이번 설정의 가중치·config·지표는 `{experiment_dir}`에 저장했습니다. 각 설정 실행은 별도 폴더를 만듭니다. 원본 trainer의 optimizer·scaler 재개 형식을 검증한 것은 아닙니다.")
+    mo.md(f"데이터·토크나이저는 `{output_dir}`, 이번 설정의 가중치·config·지표는 `{experiment_dir}`에 저장했습니다. 설정마다 폴더가 따로 생깁니다. 원본의 재개 형식은 검증하지 않았습니다.")
     return
 
 
@@ -588,28 +609,39 @@ def _(mo):
     mo.md("""
     ## 8. 수강생 과제와 코드로 돌아가기
 
-    1. 숫자 실험에서 Δ=-1, 0, +1과 β=0.1, 1을 비교하세요.
-       **기록:** 손실과 dL/dΔ. **힌트:** β를 바꾸어도 Δ=0의 손실은 log(2), gradient는 −β/2입니다.
-    2. DPO β를 바꾸어 새로 학습하세요. **기록:** 학습/검증 loss, Δ, raw gap, greedy 응답.
-       **해설:** β가 다르면 손실 척도도 달라집니다. loss만으로 설정의 우열을 판정하지 마세요.
-    3. 학습 데이터 중 한 쌍의 chosen/rejected를 뒤집으세요. **기록:** 그 질문과 검증 질문의 Δ.
-       **해설:** 선호 라벨이 학습 방향을 정하며, 공유 매개변수 때문에 다른 질문에도 영향이 갑니다.
-    4. 길이가 다른 답변을 추가하고 유효 mask 수를 비교하세요.
-       **힌트:** 원본은 합산합니다. 평균으로 바꾸면 원본과 다른 목적 함수가 됩니다.
+    1. 숫자 실험: Δ=-1, 0, +1과 β=0.1, 1을 비교하세요.
+       **기록:** 손실, dL/dΔ. **힌트:** Δ=0이면 β와 상관없이 손실 log(2), gradient −β/2.
+    2. β를 바꿔 다시 학습하세요. **기록:** loss, Δ, raw gap, greedy 응답.
+       **해설:** β가 다르면 손실 척도도 다릅니다. loss만으로 비교하지 마세요.
+    3. 학습 쌍 하나의 chosen/rejected를 뒤집으세요. **기록:** 그 질문과 검증 질문의 Δ.
+       **해설:** 라벨이 방향을 정합니다. 가중치를 공유하므로 다른 질문에도 영향이 갑니다.
+    4. 길이가 다른 답변을 넣고 mask 수를 비교하세요.
+       **힌트:** 원본은 합산합니다. 평균으로 바꾸면 다른 목적 함수가 됩니다.
 
-    원본 연결: `DPODataset.__getitem__`은 6개 텐서를 만들고, `generate_loss_mask`는 assistant 경계를 찾습니다.
-    `train_epoch`는 chosen 전체/ rejected 전체를 연결하고 참조와 정책을 순전파합니다.
-    `logits_to_log_probs`는 정답 토큰 확률, `dpo_loss`는 응답별 합산·절반 분할·참조 차감·logsigmoid를 담당합니다.
-    main에서는 동일 SFT 가중치로 두 모델을 만들고 ref만 동결합니다.
+    **원본 코드 대응:**
 
-    **실제 데이터 적용 전 확인:** 같은 질문의 비교인지, 선호 기준이 일관적인지,
-    토크나이저 경계가 원본 mask와 맞는지, 절단 후 양쪽 응답이 남는지,
-    학습 질문과 별도 평가 질문이 섞이지 않았는지 확인하세요.
-    이 실습은 6쌍 학습·2쌍 검증이며 대규모 학습, 사용자 선호 평가, 망각 평가, GPU 분산 실행은 포함하지 않습니다.
-    원본 저작권·라이선스는 `minimind/LICENSE`를 따릅니다.
+    - `DPODataset.__getitem__`: 텐서 6개를 만듭니다.
+    - `generate_loss_mask`: assistant 경계를 찾습니다.
+    - `train_epoch`: chosen·rejected를 이어 붙여 참조와 정책을 실행합니다.
+    - `logits_to_log_probs`: 정답 토큰 확률을 뽑습니다.
+    - `dpo_loss`: 합산 → 절반 분할 → 참조 차감 → logsigmoid.
+    - main: 같은 SFT 가중치로 두 모델을 만들고 ref만 동결합니다.
 
-    **다음 실습:** `minimind_ppo.py`. DPO는 **이미 수집한** 선호 쌍을 쓰는 오프라인 방법입니다.
-    PPO는 모델이 **직접 생성한** 응답에 보상을 주는 온라인 방법이며 Critic이 추가됩니다.
+    **실제 데이터에 쓰기 전 확인:**
+
+    - 같은 질문끼리 비교하나요?
+    - 선호 기준이 일관적인가요?
+    - 토크나이저 경계가 mask 규칙과 맞나요?
+    - 자른 뒤에도 양쪽 응답이 남나요?
+    - 학습 질문과 평가 질문이 섞이지 않았나요?
+
+    **범위 밖:** 대규모 학습, 사용자 선호 평가, 망각 평가, GPU 분산 실행.
+    저작권·라이선스는 `minimind/LICENSE`를 따릅니다.
+
+    **다음 실습:** `minimind_ppo.py`.
+
+    - DPO: **이미 모은** 선호 쌍으로 학습(오프라인)
+    - PPO: 모델이 **직접 만든** 응답에 보상(온라인), Critic 추가
     """)
     return
 
