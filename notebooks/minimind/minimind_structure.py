@@ -1,10 +1,3 @@
-# /// script
-# requires-python = ">=3.13"
-# dependencies = [
-#     "marimo>=0.23.3",
-# ]
-# ///
-
 import marimo
 
 __generated_with = "0.25.2"
@@ -144,6 +137,7 @@ def _(decode, input_ids, mo, vocabulary):
     mo.vstack([
         mo.ui.table([{"ID": i, "토큰": w} for i, w in enumerate(vocabulary)], selection=None),
         mo.md(f"첫 문장: `{decode(input_ids[0])}`\n\n입력 shape: `{tuple(input_ids.shape)}`"),
+        mo.md(f"**input_ids** (행: 문장, 열: 토큰 위치)\n```text\n{input_ids}\n```"),
     ])
     return
 
@@ -156,7 +150,7 @@ def _(mo):
     은닉 차원 32, 층 2개, Query head 4개, Key/Value head 2개.
 
     - **GQA:** 여러 Query head가 Key/Value를 나눠 씁니다. 3-2절에서 봅니다.
-    - head 차원은 `32 / 4 = 8`입니다. 짝수여야 합니다. 3-2절의 RoPE가 차원을 둘씩 짝지어 회전하기 때문입니다.
+    - head 차원은 `32 / 4 = 8`입니다. RoPE는 두 차원을 짝지어 회전하므로 짝수여야 합니다(3-2절).
     - **Embedding과 LM head는 같은 가중치 표 `[V, D]`를 씁니다.**
       - 입력: 토큰 ID에 해당하는 행 하나를 꺼냅니다.
       - 출력: 마지막 벡터를 모든 행과 내적해 어휘별 점수를 만듭니다.
@@ -175,8 +169,11 @@ def _(MiniMindConfig, MiniMindForCausalLM, torch, vocabulary):
         flash_attn=False, use_moe=False,
         bos_token_id=1, eos_token_id=2,
     )
+    # 은닉 벡터를 Attention head들에 같은 크기로 나누기 위한 조건입니다.
     assert config.hidden_size % config.num_attention_heads == 0
+    # GQA에서 각 Key/Value head를 같은 수의 Query head가 공유하기 위한 조건입니다.
     assert config.num_attention_heads % config.num_key_value_heads == 0
+    # RoPE는 head 내부의 차원을 두 개씩 짝지어 회전하므로 짝수여야 합니다.
     assert config.head_dim % 2 == 0
     # fork_rng: 시드를 이 블록 안에서만 고정합니다. 다른 셀의 난수에는 영향이 없습니다.
     # 그래서 몇 번을 다시 실행해도 같은 초기 가중치가 나옵니다.
@@ -191,6 +188,13 @@ def _(MiniMindConfig, MiniMindForCausalLM, torch, vocabulary):
 def _(initial_model, mo):
     # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
     mo.vstack([
+        mo.md(f"**모델 구조**\n\n```text\n{initial_model}\n```"),
+        mo.md(
+            f"**initial_model.lm_head**\n\n```text\n{initial_model.lm_head}\n```\n\n"
+            f"가중치 shape `[어휘 수, 은닉 차원]`: `{tuple(initial_model.lm_head.weight.shape)}`\n\n"
+            "각 토큰의 은닉 벡터를 어휘별 점수(logits)로 변환합니다. "
+            "Embedding과 가중치를 공유하므로 아래 고유 매개변수 표에는 한 번만 집계됩니다."
+        ),
         mo.md(f"고유 매개변수: **{sum(p.numel() for p in initial_model.parameters()):,}개**"),
         mo.ui.table([
             {"이름": name, "shape": str(tuple(p.shape)), "개수": p.numel()}
@@ -217,12 +221,13 @@ def _(mo):
        - 가린 자리는 `-inf`로 채웁니다. softmax에서 `exp(-inf) = 0`이므로 확률이 0이 됩니다.
     3. 그 비율로 V를 가중합합니다.
 
-    ```text
-    triu(1) 마스크      key: 고양이  는     야옹
-    query 고양이            F       T      T
-    query 는                F       F      T
-    query 야옹              F       F      F
-    ```
+    **`triu(1)` 마스크** — 행은 query, 열은 key입니다. `T`는 가림, `F`는 허용입니다.
+
+    | query ＼ key | 고양이 | 는 | 야옹 |
+    | --- | --- | --- | --- |
+    | 고양이 | F | T | T |
+    | 는 | F | F | T |
+    | 야옹 | F | F | F |
 
     예: 두 번째 행은 `는`이 각 위치를 얼마나 보는지입니다.
     """)
@@ -276,10 +281,16 @@ def _(mo):
     - V: 전달할 정보
 
     이 구현은 Q와 K에 RMSNorm을 head별로 한 번 더 씁니다(QK-norm).
-    Q·K 값의 크기가 커지면 점수가 폭주합니다. 이를 막아 학습을 안정시킵니다.
+    QK-norm은 Q·K 값의 크기를 조절해 내적 점수가 지나치게 커지는 것을 막습니다.
+    별도로 점수를 `√head_dim`으로 나누는 스케일링은 차원 수 증가에 따른 점수 크기 변화를 보정합니다.
+    둘 다 softmax가 한쪽에 과도하게 몰리는 것을 줄입니다.
 
-    **shape:** 입력 `[B,T,32]` → projection `[B,T,32]` → `view`로 head 축 분리 → Q `[B,T,4,8]`, K/V `[B,T,2,8]`.
-    `view`는 값을 바꾸지 않습니다. 마지막 축 32를 `4 × 8`로 나눠 볼 뿐입니다.
+    **shape:** 입력은 `[B,T,32]`로 같습니다. projection 뒤에는 Q와 K/V의 크기가 다릅니다.
+
+    - Q: `[B,T,32]` → `view` → `[B,T,4,8]`
+    - K/V: 각각 `[B,T,16]` → `view` → `[B,T,2,8]`
+
+    Q의 마지막 축 32는 `4×8`, K/V의 16은 `2×8`로 나눕니다.
     """)
     return
 
@@ -318,40 +329,24 @@ def _(mo):
     mo.md("""
     ### 3-2. 위치 정보(RoPE)와 K/V 공유(GQA)
 
+    Attention 점수를 내기 전에 Q/K에 위치를 넣고(RoPE), K/V head 수를 Q head 수에 맞춥니다(GQA).
+    원본 `Attention.forward`도 이 순서입니다. 먼저 RoPE를 보고, GQA는 3-2-2절에서 봅니다.
+
     **RoPE:** Q/K 벡터의 차원을 둘씩 짝지어, 위치에 비례한 각도만큼 회전시킵니다.
-    짝은 **앞 절반 i번과 뒤 절반 i+d/2번**입니다. 각도 계산은 바로 다음 절(3-2-1)에서 봅니다.
+    짝은 **앞 절반 i번과 뒤 절반 i+d/2번**입니다. 각도 계산은 3-2-1절에서 봅니다.
 
     - 같은 벡터도 위치가 다르면 회전 결과가 다릅니다.
     - 벡터 길이는 그대로입니다.
     - **핵심:** 위치 m의 Q와 위치 n의 K를 내적하면, 점수는 **거리 `m − n`**에만 달라집니다.
       두 회전이 내적에서 빼기로 합쳐지기 때문입니다. 그래서 점수에 상대 위치가 들어갑니다.
 
-    아래에서 세 가지를 모두 확인합니다.
-
-    **`repeat_kv`:** K/V head를 반복해서 Q head 수에 맞춥니다(GQA).
-    Q head 4개, K/V head 2개이므로 `attn.n_rep = 4 // 2 = 2`입니다.
-
-    ```text
-    Q head:       Q0   Q1   Q2   Q3
-    대응 K head:  K0   K0   K1   K1
-    대응 V head:  V0   V0   V1   V1
-    ```
-
-    - K/V shape: `[B, T, 2, 8]` → `[B, T, 4, 8]`.
-    - 결과는 `k.repeat_interleave(n_rep, dim=2)`와 같습니다. 아래에서 확인합니다.
-    - 새 K/V를 만드는 게 아닙니다. 기존 값을 나눠 씁니다.
-    - K/V가 같아도 Q가 다르므로 head마다 Attention 결과는 다릅니다.
-    - 캐시에는 펼치기 전 K/V를 저장합니다. 그래서 메모리가 줄어듭니다.
-    - K/V head 수가 Q head 수와 같으면 `n_rep = 1`이고, 공유하지 않습니다.
-
-    **`transpose(1, 2)`:** `[B, T, H, d]` → `[B, H, T, d]`.
-    head마다 `[T, d] @ [d, T]` 행렬 곱을 하려면 head 축이 앞에 와야 합니다.
+    아래 ①에서 앞의 두 성질을, ②에서 상대 위치를 확인합니다.
     """)
     return
 
 
 @app.cell
-def _(apply_rotary_pos_emb, attn, initial_model, k, q, repeat_kv, torch, v):
+def _(apply_rotary_pos_emb, initial_model, k, q, torch):
     with torch.no_grad():
         _t = q.shape[1]
         position_embeddings = (
@@ -382,34 +377,12 @@ def _(apply_rotary_pos_emb, attn, initial_model, k, q, repeat_kv, torch, v):
         # float32 계산이라 아주 작은 오차는 허용합니다.
         assert abs(_s[0] - _s[1]) < 1e-4 and abs(_s[0] - _s[2]) < 1e-4  # 거리 2끼리 같음
         assert abs(_s[3] - _s[4]) < 1e-4                                # 거리 4끼리 같음
-
-        # GQA: K/V head를 Q head 수만큼 반복한 뒤, head 축을 앞으로 옮깁니다.
-        torch.testing.assert_close(repeat_kv(k_rotated, attn.n_rep), k_rotated.repeat_interleave(attn.n_rep, dim=2))
-        query_heads = q_rotated.transpose(1, 2)
-        key_heads = repeat_kv(k_rotated, attn.n_rep).transpose(1, 2)
-        value_heads = repeat_kv(v, attn.n_rep).transpose(1, 2)
-        if attn.n_rep > 1:
-            # 공유할 때만: Q head 0과 1은 같은 원본 K head를 봅니다.
-            torch.testing.assert_close(key_heads[:, 0], key_heads[:, 1])
-    return (
-        key_heads,
-        position_embeddings,
-        q_rotated,
-        query_heads,
-        rope_rows,
-        same_q_at_2,
-        value_heads,
-    )
+    return k_rotated, position_embeddings, q_rotated, rope_rows, same_q_at_2
 
 
 @app.cell(hide_code=True)
-def _(attn, key_heads, mo, q_rotated, query_heads, rope_rows, same_q_at_2):
+def _(mo, q_rotated, rope_rows, same_q_at_2):
     # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
-    _gqa_note = (
-        f"`n_rep = {attn.n_rep}`: 펼친 K의 head 0과 1은 같은 원본 head입니다."
-        if attn.n_rep > 1
-        else "`n_rep = 1`: K/V head 수가 Q head 수와 같아 공유하지 않습니다."
-    )
     mo.vstack([
         mo.md("**① 같은 벡터, 다른 위치:** 좌표는 다르고 길이는 같습니다."),
         mo.ui.table([
@@ -418,7 +391,6 @@ def _(attn, key_heads, mo, q_rotated, query_heads, rope_rows, same_q_at_2):
         ], selection=None),
         mo.md("**② 상대 위치:** 거리가 같으면 절대 위치가 달라도 점수가 같습니다."),
         mo.ui.table(rope_rows, selection=None),
-        mo.md(f"**③ GQA:** 회전·공유 후 shape: Q `{tuple(query_heads.shape)}`, K/V `{tuple(key_heads.shape)}` (`[B, H, T, d]`). {_gqa_note}"),
     ])
     return
 
@@ -428,7 +400,7 @@ def _(mo):
     mo.md(r"""
     ### 3-2-1. RoPE 각도는 어떻게 정해지나 (`precompute_freqs_cis`)
 
-    지금까지 쓴 `freqs_cos`/`freqs_sin`은 모델이 미리 계산해 둔 표입니다. 이 표를 직접 만들어 봅니다.
+    `freqs_cos`/`freqs_sin`은 미리 계산한 회전 각도 표입니다. 직접 만들어 봅니다.
 
     **① 어떤 차원끼리 짝을 짓나:** `rotate_half`는 벡터를 앞 절반 `a`와 뒤 절반 `b`로 나눕니다.
     head 차원 `d = 8`이면 짝은 `(0,4) (1,5) (2,6) (3,7)`입니다. **인접한 (0,1)이 아닙니다.**
@@ -438,7 +410,8 @@ def _(mo):
     - 짝 0은 $f_0 = 1$입니다. 한 칸마다 1 라디안씩, 빠르게 돕니다.
     - 뒤 짝일수록 아주 천천히 돕니다.
     - 빠른 짝은 가까운 거리를, 느린 짝은 먼 거리를 구분합니다. 시계의 초침·분침·시침과 비슷합니다.
-    - $\theta$를 크게 잡으면 느린 짝이 더 느려집니다. 긴 문맥에서도 각도가 한 바퀴를 넘지 않습니다.
+    - $\theta$를 키우면 `i>0`인 짝은 더 느리게 돕니다. 짝 0의 주파수 1은 그대로입니다.
+      한 바퀴 미만인 조건은 `m×f_i < 2π`입니다. θ가 커도 모든 위치와 짝이 이 조건을 만족하지는 않습니다.
 
     **③ 위치 m의 각도:** $m \times f_i$. `freqs_cos`는 `cos(각도)` `[T, d/2]`를 두 번 이어 붙인 `[T, d]`입니다.
 
@@ -510,6 +483,60 @@ def _(math, mo, plt, rope_angles, rope_freqs):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md("""
+    ### 3-2-2. K/V 공유(GQA): `repeat_kv`
+
+    **목적:** K/V를 Q보다 적은 head로 만들어, `k_proj`/`v_proj` 매개변수와
+    생성 때 저장하는 K/V(KV cache, 6절)를 줄입니다.
+
+    **`repeat_kv`:** K/V head를 반복해서 Q head 수에 맞춥니다.
+    Q head 4개, K/V head 2개이므로 `attn.n_rep = 4 // 2 = 2`입니다.
+
+    | Q head | Q0 | Q1 | Q2 | Q3 |
+    | --- | --- | --- | --- | --- |
+    | 대응 K head | K0 | K0 | K1 | K1 |
+    | 대응 V head | V0 | V0 | V1 | V1 |
+
+    - K/V shape: `[B, T, 2, 8]` → `[B, T, 4, 8]`.
+    - 결과는 `k.repeat_interleave(n_rep, dim=2)`와 같습니다. 아래에서 확인합니다.
+    - 새 K/V를 계산하는 게 아닙니다. 같은 값을 복사해 여러 Q head가 함께 씁니다.
+    - K/V가 같아도 Q가 다르므로 head마다 Attention 결과는 다릅니다.
+    - RoPE를 적용한 **뒤에** 펼칩니다. 그래서 캐시에는 펼치기 전의 작은 K/V만 저장합니다.
+
+    **`transpose(1, 2)`:** `[B, T, H, d]` → `[B, H, T, d]`.
+    head마다 `[T, d] @ [d, T]` 행렬 곱을 하려면 head 축이 앞에 와야 합니다.
+    """)
+    return
+
+
+@app.cell
+def _(attn, k_rotated, q_rotated, repeat_kv, torch, v):
+    with torch.no_grad():
+        # GQA: K/V head를 Q head 수만큼 반복한 뒤, head 축을 앞으로 옮깁니다.
+        torch.testing.assert_close(repeat_kv(k_rotated, attn.n_rep), k_rotated.repeat_interleave(attn.n_rep, dim=2))
+        query_heads = q_rotated.transpose(1, 2)
+        key_heads = repeat_kv(k_rotated, attn.n_rep).transpose(1, 2)
+        value_heads = repeat_kv(v, attn.n_rep).transpose(1, 2)
+        if attn.n_rep > 1:
+            # 공유할 때만: Q head 0과 1은 같은 원본 K head를 봅니다.
+            torch.testing.assert_close(key_heads[:, 0], key_heads[:, 1])
+    return key_heads, query_heads, value_heads
+
+
+@app.cell(hide_code=True)
+def _(attn, key_heads, mo, query_heads):
+    # ▸ 결과 표시 — 실행하면 계산 값이 들어간 설명이 나타납니다 (marimo 표시 코드)
+    _gqa_note = (
+        f"`n_rep = {attn.n_rep}`: 펼친 K의 head 0과 1은 같은 원본 head입니다."
+        if attn.n_rep > 1
+        else "`n_rep = 1`: K/V head 수가 Q head 수와 같아 공유하지 않습니다."
+    )
+    mo.md(f"**GQA:** 회전·공유 후 shape: Q `{tuple(query_heads.shape)}`, K/V `{tuple(key_heads.shape)}` (`[B, H, T, d]`). {_gqa_note}")
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md("""
     ### 3-3. 점수 → 미래 가리기 → 확률 → 가중합
 
     3절의 작은 예제와 같은 규칙입니다. 이번에는 모든 배치와 head에 적용합니다.
@@ -517,7 +544,8 @@ def _(mo):
     - head별 출력을 이어 붙이고 `o_proj`로 섞습니다.
     - `causal mask`는 미래를 가립니다.
     - `attention_mask`는 패딩을 가립니다. 지금 배치에는 패딩이 없습니다. 3-4절에서 봅니다.
-    - `use_causal_mask`는 7절 과제 4용 스위치입니다. 지금은 `True`로 두세요.
+    - `use_causal_mask`는 **이 셀의 수동 계산만** 바꾸는 7절 과제 4용 스위치입니다.
+      원본 모델과 5절 학습 모델의 causal 설정은 바꾸지 않습니다. 지금은 `True`로 두세요.
 
     학습 후에 같은 위치의 Attention을 다시 비교합니다.
     """)
@@ -555,7 +583,12 @@ def _(
             torch.testing.assert_close(manual_attention, _actual)
             assert attention_probabilities.masked_select(causal_mask[None, None]).eq(0).all()
     future_attention = attention_probabilities.masked_select(causal_mask[None, None]).sum().item()
-    return attention_probabilities, future_attention, manual_attention, use_causal_mask
+    return (
+        attention_probabilities,
+        future_attention,
+        manual_attention,
+        use_causal_mask,
+    )
 
 
 @app.cell(hide_code=True)
@@ -622,7 +655,7 @@ def _(F, apply_rotary_pos_emb, math, repeat_kv, torch):
         v = a.v_proj(x).view(b, t, a.n_local_kv_heads, a.head_dim)
         q, k = apply_rotary_pos_emb(q, k, cos, sin)                          # 3-2 RoPE
         q = q.transpose(1, 2)                                                # [B, H, T, d]
-        k = repeat_kv(k, a.n_rep).transpose(1, 2)                            # 3-2 GQA
+        k = repeat_kv(k, a.n_rep).transpose(1, 2)                            # 3-2-2 GQA
         v = repeat_kv(v, a.n_rep).transpose(1, 2)
         scores = q @ k.transpose(-2, -1) / math.sqrt(a.head_dim)             # 3-3
         if causal:
@@ -633,6 +666,7 @@ def _(F, apply_rotary_pos_emb, math, repeat_kv, torch):
         output = a.o_proj((probs @ v).transpose(1, 2).reshape(b, t, -1))
         reference, _ = a(x, (cos, sin), attention_mask=attention_mask)
         return probs, output, reference
+
     return (attention_forward,)
 
 
@@ -665,7 +699,7 @@ def _(mask_demo_ids, mask_demo_mask, mask_demo_probs, mo, vocabulary):
              "패딩 key로 간 확률": float(mask_demo_probs[_row, 0, _i][_is_pad].sum())}
             for _i in range(len(_words))
         ], selection=None),
-        mo.md("**관찰:** 모든 행에서 패딩 key로 간 확률은 0입니다. 패딩인 query 행도 계산은 됩니다. 이 행의 결과는 손실의 `-100`이 버립니다. 직접 계산한 결과는 원본 출력과 같습니다(head 0 표시)."),
+        mo.md("**관찰:** 모든 행에서 패딩 key로 간 확률은 0입니다. 패딩인 query 행도 계산은 됩니다. 이 행의 결과는 손실의 `-100`이 버립니다. 직접 계산한 결과는 원본과 같습니다. 그림은 head 0입니다."),
     ])
     return
 
@@ -861,6 +895,7 @@ def _(decode, encode, token_to_id, torch):
                 top_k=0, top_p=1.0, temperature=1.0,
             )
         return decode(result[0])
+
     return (complete,)
 
 
@@ -1140,7 +1175,7 @@ def _(mo):
     mo.md(r"""
     ### 6-1. 캐시는 왜 RoPE와 함께 맞게 동작하나
 
-    결과가 같다는 것만으로는 원리가 보이지 않습니다. 1층 Attention을 캐시로 직접 계산해 봅니다.
+    1층 Attention을 캐시로 직접 계산해 원리를 확인합니다.
 
     **① 캐시에 무엇이 저장되나:** RoPE를 **적용한 뒤**, `repeat_kv`로 **펼치기 전**의 K와 V입니다.
 
@@ -1227,7 +1262,7 @@ def _(
             {"새 토큰을 회전한 위치": f"start_pos = {cache_start_pos} (올바름)", "전체 계산과의 최대 오차": f"{cache_right_error:.2e}"},
             {"새 토큰을 회전한 위치": "0 (잘못됨)", "전체 계산과의 최대 오차": f"{cache_wrong_error:.2e}"},
         ], selection=None),
-        mo.md("**관찰:** 올바른 위치로 회전해야 전체 계산과 같아집니다. RoPE는 상대 거리로 점수를 정하므로, 새 토큰의 위치가 틀리면 모든 과거 토큰과의 거리가 틀어집니다."),
+        mo.md("**관찰:** 새 토큰을 올바른 위치로 회전해야 전체 계산과 같아집니다. 위치가 틀리면 과거 토큰과의 상대 거리도 틀어집니다."),
     ])
     return
 
@@ -1263,7 +1298,9 @@ def _(mo):
     - **새 동물:** 어휘가 동물 이름·울음소리만큼 늘어납니다. LM head와 Embedding의 `V` 축이 함께 커집니다. 같은 표이기 때문입니다. 손실 하한도 `ln(동물 수) / 6`으로 바뀝니다.
     - **KV head 2→4:** `n_rep`가 1이 되어 공유하지 않습니다. K/V head 축과 캐시 크기가 두 배입니다.
     - **hidden 32→64, Q head 4:** head 차원이 8→16입니다. 매개변수가 늘고 학습이 느려집니다.
-    - **causal mask 제거:** 위치 t가 t+1의 토큰을 봅니다. 그런데 그 토큰이 바로 t의 정답입니다. 학습 때 답을 보고 맞히는 셈이라, 생성할 때는 쓸 수 없는 모델이 됩니다.
+    - **causal mask 제거:** 이 수동 Attention 계산에서는 위치 t가 정답인 t+1 토큰을 볼 수 있습니다.
+      실제 학습 모델에서도 미래를 허용하면 다음 토큰 과제에 정답이 누출됩니다.
+      다만 이 과제의 스위치는 수동 관찰용이므로 5절 학습·생성 모델은 계속 causal입니다.
     """),
         "해설: 확인 질문": mo.md(r"""
     **`labels=input_ids`인데 왜 자기 자신을 맞히지 않나요?**
@@ -1274,8 +1311,8 @@ def _(mo):
 
     | 구성 요소 | 주로 정보를 섞는 축 | 하는 일 |
     | --- | --- | --- |
-    | Attention | 토큰 위치 `T` | 다른 토큰의 정보를 가져와 현재 토큰의 벡터를 갱신합니다. |
-    | MLP | 특징 차원 `D` | 각 토큰 안의 특징들을 조합해 벡터를 변환합니다. |
+    | Attention | 토큰 위치 `T` | 다른 토큰의 정보를 가져옵니다. |
+    | MLP | 특징 차원 `D` | 토큰 안의 특징을 조합합니다. |
 
     예: **`고양이 는 야옹`**
 
