@@ -315,7 +315,6 @@ def _(mo):
 
 @app.cell
 def _(
-    F,
     MiniMindConfig,
     MiniMindForCausalLM,
     input_ids,
@@ -332,13 +331,21 @@ def _(
         bos_token_id=tokenizer.bos_token_id, eos_token_id=tokenizer.eos_token_id,
     )
     _model = MiniMindForCausalLM(config).eval()
+    # 원본 모델이 logits와 손실을 함께 계산합니다.
     with torch.no_grad():
         initial_result = _model(input_ids, labels=labels)
+    return config, initial_result
+
+
+@app.cell
+def _(F, initial_result, labels, torch, vocabulary):
+    # 같은 logits로 손실을 직접 계산해 원본 손실과 비교합니다.
+    with torch.no_grad():
         manual_loss = F.cross_entropy(
             initial_result.logits[:, :-1].reshape(-1, len(vocabulary)), labels[:, 1:].reshape(-1), ignore_index=-100,
         )
     assert torch.allclose(initial_result.loss, manual_loss)
-    return config, initial_result, manual_loss
+    return (manual_loss,)
 
 
 @app.cell(hide_code=True)

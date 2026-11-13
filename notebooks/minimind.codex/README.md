@@ -21,6 +21,7 @@ LLM의 구조, 미세 조정, 선호·강화 학습과 추론(reasoning), 멀티
 
 | 단계 | 노트북 | 핵심 질문 | 사용하는 원본 |
 | --- | --- | --- | --- |
+| 1-0 | [모델 구조 따라가기](minimind_model_tour.py) | `model_minimind.py`를 위에서 아래로: Config·매개변수 분포, Embedding 공유, RMSNorm, RoPE, Attention(QK-norm·GQA·마스크), SwiGLU, 블록, 손실, KV cache 생성, MoE를 직접 계산해 원본과 비교 | `minimind/model/model_minimind.py` |
 | 1-1 | [모델 구조와 학습](minimind_structure.py) | 토큰 ID가 Embedding·Attention(RoPE 주파수·GQA·패딩 마스크)·MLP를 지나 다음 토큰 확률이 되는 과정, 생성과 KV cache(RoPE 위치) | `minimind/model/model_minimind.py` |
 | 1-2 | [FeedForward](minimind_feedforward.py) | SwiGLU는 무엇을 계산하고, 왜 위치를 섞지 않는가 | `FeedForward`, `MiniMindBlock` |
 | 1-3 | [MoE](minimind_moe.py) | router·top-k·가중합, 보조 손실, top-1 straight-through | `MOEFeedForward` |

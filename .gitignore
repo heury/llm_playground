@@ -16,5 +16,7 @@ __pycache__/
 .ruff_cache/
 .mypy_cache/
 .hypothesis/
+*_compiled_cache/
+__marimo__/
 .venv/
 *.log

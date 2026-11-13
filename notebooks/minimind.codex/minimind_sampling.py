@@ -492,17 +492,29 @@ def _(
         dict(temperature=1.5, top_k=0, top_p=0.8, repetition_penalty=1.0),
         dict(temperature=1.0, top_k=0, top_p=1.0, repetition_penalty=2.0),
     ]
+    # 직접 구현으로 설정 4개 × seed 3개를 생성합니다.
+    manual_generations = {}
+    with torch.no_grad():
+        for _i, _options in enumerate(generation_settings):
+            for _seed in range(3):
+                with torch.random.fork_rng(devices=[]):
+                    torch.manual_seed(_seed)
+                    manual_generations[_i, _seed] = manual_generate(prompt_ids, 5, **_options)
+    return choose_next_token, generation_settings, manual_generations
+
+
+@app.cell
+def _(generation_settings, manual_generations, model, prompt_ids, token_to_id, torch):
+    # 원본 generate로 같은 설정·seed를 생성해 직접 구현과 비교합니다.
     reproduce_rows = []
     with torch.no_grad():
-        for _options in generation_settings:
+        for _i, _options in enumerate(generation_settings):
             for _seed in range(3):
                 with torch.random.fork_rng(devices=[]):
                     torch.manual_seed(_seed)
                     _original = model.generate(prompt_ids, max_new_tokens=5, do_sample=True,
                                                eos_token_id=token_to_id["<eos>"], **_options)
-                with torch.random.fork_rng(devices=[]):
-                    torch.manual_seed(_seed)
-                    _manual = manual_generate(prompt_ids, 5, **_options)
+                _manual = manual_generations[_i, _seed]
                 assert torch.equal(_original, _manual), (_options, _seed)
                 reproduce_rows.append({**_options, "seed": _seed, "original": _original, "manual": _manual})
 
@@ -513,7 +525,7 @@ def _(
     except RuntimeError as error:
         greedy_default_error = str(error)
     assert greedy_default_error is not None
-    return choose_next_token, greedy_default_error, reproduce_rows
+    return greedy_default_error, reproduce_rows
 
 
 @app.cell(hide_code=True)

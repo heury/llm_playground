@@ -253,23 +253,38 @@ def _(MiniMindConfig, init_model, tokenizer, tokenizer_dir, torch):
 
 
 @app.cell
-def _(F, initial_model, input_ids, labels, tokenizer, torch):
+def _(initial_model, input_ids, labels, torch):
+    # 원본 모델이 logits와 손실을 함께 계산합니다.
     with torch.no_grad():
-        _out = initial_model(input_ids, labels=labels)
+        initial_lm_out = initial_model(input_ids, labels=labels)
+    return (initial_lm_out,)
+
+
+@app.cell
+def _(F, initial_lm_out, labels, tokenizer, torch):
+    # 같은 logits로 위치별 손실을 직접 계산하고, 유효한 정답만 평균 내 원본 손실과 비교합니다.
+    with torch.no_grad():
         shifted_targets = labels[:, 1:]
         valid_targets = shifted_targets != -100
         per_position = F.cross_entropy(
-            _out.logits[:, :-1].reshape(-1, len(tokenizer)), shifted_targets.reshape(-1),
+            initial_lm_out.logits[:, :-1].reshape(-1, len(tokenizer)), shifted_targets.reshape(-1),
             ignore_index=-100, reduction="none",
         ).reshape_as(shifted_targets)
         manual_loss = per_position[valid_targets].mean()
-        torch.testing.assert_close(manual_loss, _out.loss)
+    torch.testing.assert_close(manual_loss, initial_lm_out.loss)
+    return manual_loss, per_position, shifted_targets, valid_targets
+
+
+@app.cell
+def _(initial_lm_out, initial_model, input_ids, labels, tokenizer, torch, valid_targets):
+    # PAD 자리의 토큰을 바꿔도 유효한 위치의 logits와 손실은 같습니다.
+    with torch.no_grad():
         _changed_padding = input_ids.clone()
         _changed_padding[input_ids == tokenizer.pad_token_id] = tokenizer.unk_token_id
         _changed_out = initial_model(_changed_padding, labels=labels)
-        torch.testing.assert_close(_out.logits[:, :-1][valid_targets], _changed_out.logits[:, :-1][valid_targets])
-        torch.testing.assert_close(_out.loss, _changed_out.loss)
-    return (manual_loss, per_position, shifted_targets, valid_targets,)
+    torch.testing.assert_close(initial_lm_out.logits[:, :-1][valid_targets], _changed_out.logits[:, :-1][valid_targets])
+    torch.testing.assert_close(initial_lm_out.loss, _changed_out.loss)
+    return
 
 
 @app.cell(hide_code=True)

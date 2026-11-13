@@ -1,27 +1,29 @@
 [project]
-name = "minimind-structure-lab"
+name = "minimind-notebooks"
 version = "0.1.0"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "datasets>=4,<6",
+    "huggingface-hub>=0.34,<1",
+    "librosa>=0.11,<1",
     "marimo>=0.19,<1",
     "matplotlib>=3.10,<4",
-    "Pillow>=10,<14",
-    "torch>=2.6,<3",
-    "tokenizers>=0.22,<0.23",
-    "transformers>=4.57.6,<5",
-    "soundfile>=0.13,<1",
-    "librosa>=0.11,<1",
     "onnxruntime>=1.23,<2",
+    "safetensors>=0.4",
+    "soundfile>=0.13,<1",
+    "torch>=2.6,<3",
+    "transformers>=4.57.6,<5",
 ]
 
 [tool.uv]
 package = false
 
+# Linux/Windows는 CUDA 13.2용 PyTorch(GPU가 없으면 CPU로 동작), macOS는 PyPI 빌드를 설치합니다.
+# GPU를 쓰려면 CUDA 13을 지원하는 NVIDIA 드라이버가 필요합니다.
 [tool.uv.sources]
-torch = [{ index = "pytorch-cpu", marker = "sys_platform != 'darwin'" }]
+torch = [{ index = "pytorch-cu132", marker = "sys_platform != 'darwin'" }]
 
 [[tool.uv.index]]
-name = "pytorch-cpu"
-url = "https://download.pytorch.org/whl/cpu"
+name = "pytorch-cu132"
+url = "https://download.pytorch.org/whl/cu132"
 explicit = true

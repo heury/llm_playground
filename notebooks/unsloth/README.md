@@ -19,7 +19,7 @@ VS Code에서는 marimo 편집기와 `.venv/bin/python` 환경을 사용합니�
 
 ## marimo 노트북
 
-실습 9개를 marimo `.py` 파일로 제공합니다. `.ipynb` 원본은 제거했습니다.
+실습 10개를 marimo `.py` 파일로 제공합니다. `.ipynb` 원본은 제거했습니다.
 설명·코드와 원래 학습 설정을 유지하고, 코드 셀 사이에 `execution_step_*` 의존성을
 추가해 모델 변경 → 데이터 준비 → 학습 → 추론·저장 순서를 보존했습니다.
 `scripts/`의 기존 Jupyter 실행 유틸리티는 별도로 준비한 외부 `.ipynb` 입력에만 사용합니다.
@@ -35,6 +35,7 @@ uv run --locked marimo edit 'Qwen3_5_(4B)-Decision.py'
 | 실습 | marimo 파일 | 추가 옵션 |
 | --- | --- | --- |
 | Decision | [Qwen3_5_(4B)-Decision.py](Qwen3_5_%284B%29-Decision.py) | 기본 |
+| Decision 내부 구조 | [Qwen3_5_(4B)-Decision_Internals.py](Qwen3_5_%284B%29-Decision_Internals.py) | 기본 (1~8부 CPU) |
 | Vision | [Qwen3_5_(4B)_Vision.py](Qwen3_5_%284B%29_Vision.py) | 기본 |
 | Vision GRPO | [Qwen3_5_(4B)_Vision_GRPO.py](Qwen3_5_%284B%29_Vision_GRPO.py) | 기본 |
 | Knowledge Distillation | [Qwen3_(0.6B)-Knowledge_Distillation.py](Qwen3_%280.6B%29-Knowledge_Distillation.py) | 기본 |
@@ -66,6 +67,17 @@ marimo가 이전 셀의 변수를 유지하므로 GRPO의 SFT 데이터셋은 �
 초기 실행입니다. 변환본으로 GPU 학습·추론·내보내기는 다시 실행하지 않았으며,
 아래 A40 검증 기록은 원본 `.ipynb`에 대한 결과입니다.
 변환 방식은 [marimo의 Jupyter 마이그레이션 안내](https://docs.marimo.io/guides/coming_from/jupyter/)를 참고했습니다.
+
+## 판단 모델 내부 구조 실습
+
+[`Qwen3_5_(4B)-Decision_Internals.py`](Qwen3_5_%284B%29-Decision_Internals.py)는 Decision 실습의
+API 아래를 단계별로 살펴보는 교육용 노트북입니다. Unsloth의 `decision_from_lm.py`, `decision.py`,
+`decision_datasets.py`와 포함된 Cloudflare Clef 구현을 참고했습니다.
+설치된 `unsloth` 패키지를 초기화하지 않고 필요한 원본 파일만 경로로 불러오므로 1~8부는 GPU 없이 실행됩니다.
+데이터 형식, 스키마 증강, 프롬프트 span 인코딩, `JointSchemaHead` 순전파, 손실 함수, 작은 무작위 백본의
+2단계 CPU 학습(헤드만 → 백본 포함), 온도 보정과 추론을 다룹니다. 9부는 GPU에서 같은 과정을
+`FastDecisionModel`·`DecisionTrainer`로 실행하며 기본 백본은 `unsloth/Qwen3.5-0.8B`입니다.
+검증 범위는 [검증 보고서](../../reports/unsloth/20261113-151500-decision-internals.md)에 기록했습니다.
 
 ## GPU 환경과 추가 옵션
 

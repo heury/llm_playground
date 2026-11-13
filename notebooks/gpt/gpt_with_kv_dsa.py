@@ -103,7 +103,7 @@ def _(nn, torch):
             index_head_dim: dimension of each index head.
         """
 
-        def __init__(self, d_model: int, index_n_heads: int, index_head_dim: int):
+        def __init__(self, d_model, index_n_heads, index_head_dim):
             super().__init__()
             self.index_n_heads = index_n_heads
             self.index_head_dim = index_head_dim
@@ -119,11 +119,11 @@ def _(nn, torch):
 
         def forward(
             self,
-            x: torch.Tensor,         # (b, T, d_model)  current token(s)
-            x_ctx: torch.Tensor,     # (b, S, d_model)  all past + current tokens
-            topk: int,
-            causal_mask: torch.Tensor | None = None,  # (T, S) float mask
-        ) -> torch.Tensor:
+            x,         # (b, T, d_model)  current token(s)
+            x_ctx,     # (b, S, d_model)  all past + current tokens
+            topk,
+            causal_mask = None,  # (T, S) float mask
+        ):
             """Return top-K token indices shape (b, T, topk)."""
             b, T, _ = x.shape
             _, S, _ = x_ctx.shape
@@ -189,14 +189,14 @@ def _(LightningIndexer, nn, torch):
 
         def __init__(
             self,
-            d_in: int,
-            d_out: int,
-            dropout: float,
-            num_heads: int,
-            qkv_bias: bool = False,
-            index_n_heads: int = 4,
-            index_head_dim: int = 64,
-            topk: int = 64,
+            d_in,
+            d_out,
+            dropout,
+            num_heads,
+            qkv_bias = False,
+            index_n_heads = 4,
+            index_head_dim = 64,
+            topk = 64,
         ):
             super().__init__()
             assert d_out % num_heads == 0, "d_out must be divisible by num_heads"
@@ -229,7 +229,7 @@ def _(LightningIndexer, nn, torch):
             self.cache_x = None
             self.ptr_current_pos = 0
 
-        def forward(self, x: torch.Tensor, use_cache: bool = False) -> torch.Tensor:
+        def forward(self, x, use_cache = False):
             b, num_tokens, d_in = x.shape
 
             queries = self.W_query(x)

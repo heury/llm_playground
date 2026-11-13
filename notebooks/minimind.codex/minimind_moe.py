@@ -160,7 +160,8 @@ def _(mo):
 
 
 @app.cell
-def _(combine_weights, flat_tokens, route_inputs, routed_moe, selected_experts, torch):
+def _(combine_weights, flat_tokens, routed_moe, selected_experts, torch):
+    # 직접 계산: 토큰마다 고른 전문가의 출력에 가중치를 곱해 더합니다.
     with torch.no_grad():
         manual_moe_output = torch.zeros_like(flat_tokens)
         first_token_rows = []
@@ -173,10 +174,17 @@ def _(combine_weights, flat_tokens, route_inputs, routed_moe, selected_experts, 
                 if _token == 0:
                     first_token_rows.append({"첫 토큰의 전문가": _expert, "가중치": float(combine_weights[_token, _slot]),
                                   "전문가 출력": str(_output.tolist()), "가중치 × 출력": str(_contribution.tolist())})
+    return first_token_rows, manual_moe_output
+
+
+@app.cell
+def _(manual_moe_output, route_inputs, routed_moe, torch):
+    # 원본 MOEFeedForward로 계산해 직접 계산과 비교합니다.
+    with torch.no_grad():
         _actual = routed_moe(route_inputs)
-        routing_max_error = float((manual_moe_output.reshape_as(_actual) - _actual).abs().max())
-        torch.testing.assert_close(manual_moe_output.reshape_as(_actual), _actual)
-    return (first_token_rows, manual_moe_output, routing_max_error,)
+    routing_max_error = float((manual_moe_output.reshape_as(_actual) - _actual).abs().max())
+    torch.testing.assert_close(manual_moe_output.reshape_as(_actual), _actual)
+    return (routing_max_error,)
 
 
 @app.cell(hide_code=True)
@@ -252,17 +260,11 @@ def _(mo):
 
 @app.cell
 def _(moe_config, plt, route_inputs, routed_moe, router_probabilities, selected_experts, torch):
+    # 직접 계산: 전문가별 선택 비율 × 평균 확률로 보조 손실을 구합니다.
     with torch.no_grad():
         expert_counts = torch.bincount(selected_experts.flatten(), minlength=moe_config.num_experts)
         _mean_probability = router_probabilities.mean(0)
         manual_aux_loss = (expert_counts / selected_experts.shape[0] * _mean_probability).sum() * moe_config.num_experts * moe_config.router_aux_loss_coef
-        routed_moe.train()
-        routed_moe(route_inputs)
-        torch.testing.assert_close(manual_aux_loss, routed_moe.aux_loss)
-        routed_moe.eval()
-        routed_moe(route_inputs)
-        assert float(routed_moe.aux_loss) == 0
-        routed_moe.train()
     assert int(expert_counts.sum()) == route_inputs.shape[0] * route_inputs.shape[1] * moe_config.num_experts_per_tok
     routing_fig, _ax = plt.subplots(figsize=(5, 3))
     _ax.bar(range(3), expert_counts.numpy())
@@ -275,7 +277,21 @@ def _(moe_config, plt, route_inputs, routed_moe, router_probabilities, selected_
         "MoE 전체 보유량": sum(p.numel() for p in routed_moe.parameters()),
         "선택 경로 가중치 수(토큰당 참고값)": _router_parameters + moe_config.num_experts_per_tok * _expert_parameters,
     }
-    return (expert_counts, manual_aux_loss, moe_parameter_summary, routing_fig,)
+    return manual_aux_loss, moe_parameter_summary, routing_fig
+
+
+@app.cell
+def _(manual_aux_loss, route_inputs, routed_moe, torch):
+    # 원본 모듈의 보조 손실과 비교합니다. train 모드에서만 계산하고, eval 모드에서는 0입니다.
+    with torch.no_grad():
+        routed_moe.train()
+        routed_moe(route_inputs)
+        torch.testing.assert_close(manual_aux_loss, routed_moe.aux_loss)
+        routed_moe.eval()
+        routed_moe(route_inputs)
+        assert float(routed_moe.aux_loss) == 0
+        routed_moe.train()
+    return
 
 
 @app.cell(hide_code=True)

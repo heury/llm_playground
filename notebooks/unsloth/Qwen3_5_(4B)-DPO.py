@@ -105,7 +105,6 @@ def _(execution_step_2):
     execution_step_3 = execution_step_2 + 1
     # Alignment Handbook 데이터 로딩 유틸리티와 Qwen 채팅 형식
     import os
-    from typing import List, Optional
     from datasets import DatasetDict, concatenate_datasets, load_dataset, load_from_disk
     from datasets.builder import DatasetGenerationError
 
@@ -147,10 +146,10 @@ def _(execution_step_2):
 
 
     def get_datasets(
-        data_config: dict,
-        splits: List[str] = ["train", "test"],
-        shuffle: bool = True,
-    ) -> DatasetDict:
+        data_config,
+        splits = ["train", "test"],
+        shuffle = True,
+    ):
         """
         Loads one or more datasets with varying training set proportions.
 
@@ -182,8 +181,8 @@ def _(execution_step_2):
 
 
     def mix_datasets(
-        dataset_mixer: dict, splits: Optional[List[str]] = None, shuffle = True
-    ) -> DatasetDict:
+        dataset_mixer, splits = None, shuffle = True
+    ):
         """
         Loads and mixes datasets according to proportions specified in `dataset_mixer`.
 

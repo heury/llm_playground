@@ -377,16 +377,45 @@ def _(mo):
 def _(TalkerEmbedding, TalkerHead, torch):
     with torch.random.fork_rng(devices=[]):
         torch.manual_seed(7)
-        _emb = TalkerEmbedding(20, 8, num_layers=8, rank=4)
-        _head = TalkerHead(8, 20, num_layers=8, rank=4)
-        _codes = torch.randint(0, 20, (1, 8, 3))
-        _hidden = torch.randn(1, 3, 8)
-    manual_emb = sum(_emb.base(_codes[:, _i]) + _emb.adapters[_i](_codes[:, _i]) for _i in range(8)) / 8
-    torch.testing.assert_close(_emb(_codes), manual_emb)
-    head_outputs = _head(_hidden)
+        talker_demo_emb = TalkerEmbedding(20, 8, num_layers=8, rank=4)
+        talker_demo_head = TalkerHead(8, 20, num_layers=8, rank=4)
+        talker_demo_codes = torch.randint(0, 20, (1, 8, 3))
+        talker_demo_hidden = torch.randn(1, 3, 8)
+    # 직접 계산: 층마다 공유 base + 층별 adapter. Embedding은 8개 층의 평균입니다.
+    manual_emb = sum(
+        talker_demo_emb.base(talker_demo_codes[:, _i]) + talker_demo_emb.adapters[_i](talker_demo_codes[:, _i])
+        for _i in range(8)
+    ) / 8
+    manual_head_outputs = [
+        talker_demo_head.base(talker_demo_hidden) + talker_demo_head.adapters[_i](talker_demo_hidden)
+        for _i in range(8)
+    ]
+    return (
+        manual_emb,
+        manual_head_outputs,
+        talker_demo_codes,
+        talker_demo_emb,
+        talker_demo_head,
+        talker_demo_hidden,
+    )
+
+
+@app.cell
+def _(
+    manual_emb,
+    manual_head_outputs,
+    talker_demo_codes,
+    talker_demo_emb,
+    talker_demo_head,
+    talker_demo_hidden,
+    torch,
+):
+    # 원본 TalkerEmbedding/TalkerHead로 계산해 직접 계산과 비교합니다.
+    torch.testing.assert_close(talker_demo_emb(talker_demo_codes), manual_emb)
+    head_outputs = talker_demo_head(talker_demo_hidden)
     for _i in range(8):
-        torch.testing.assert_close(head_outputs[_i], _head.base(_hidden) + _head.adapters[_i](_hidden))
-    return (head_outputs, manual_emb,)
+        torch.testing.assert_close(head_outputs[_i], manual_head_outputs[_i])
+    return (head_outputs,)
 
 
 @app.cell(hide_code=True)

@@ -223,7 +223,7 @@ def _(execution_step_1, nn, torch):
         """시각 특징을 언어 모델의 임베딩 공간으로 투영합니다.
         """
     
-        def __init__(self, vision_dim: int, language_dim: int):
+        def __init__(self, vision_dim, language_dim):
             super().__init__()
             self.projection = nn.Sequential(
                 nn.Linear(vision_dim, language_dim),
@@ -232,7 +232,7 @@ def _(execution_step_1, nn, torch):
                 nn.Linear(language_dim, language_dim),
             )
     
-        def forward(self, vision_features: torch.Tensor) -> torch.Tensor:
+        def forward(self, vision_features):
             return self.projection(vision_features)
 
     return VisionProjector, execution_step_2
@@ -262,10 +262,10 @@ def _(
     
         def __init__(
             self,
-            vision_encoder: ViTModel,
-            language_model: AutoModelForCausalLM,
-            projector: VisionProjector,
-            tokenizer: AutoTokenizer,
+            vision_encoder,
+            language_model,
+            projector,
+            tokenizer,
         ):
             super().__init__()
             self.vision_encoder = vision_encoder
@@ -276,7 +276,7 @@ def _(
             for param in self.vision_encoder.parameters():
                 param.requires_grad = False
     
-        def encode_image(self, pixel_values: torch.Tensor) -> torch.Tensor:
+        def encode_image(self, pixel_values):
             """단일 이미지를 인코딩합니다.
             """
             with torch.no_grad():
@@ -285,7 +285,7 @@ def _(
             projected = self.projector(image_features)
             return projected
     
-        def encode_images(self, pixel_values_list: list) -> list:
+        def encode_images(self, pixel_values_list):
             """여러 이미지를 인코딩합니다.
             
             인자:
@@ -298,11 +298,11 @@ def _(
     
         def forward(
             self,
-            pixel_values_list: list,  # 이미지 텐서 목록
-            input_ids: torch.Tensor,
-            attention_mask: torch.Tensor,
-            image_positions: list = None,  # 시퀀스에서 각 이미지를 삽입할 위치
-            labels: torch.Tensor = None,
+            pixel_values_list,  # 이미지 텐서 목록
+            input_ids,
+            attention_mask,
+            image_positions = None,  # 시퀀스에서 각 이미지를 삽입할 위치
+            labels = None,
         ):
             """여러 이미지를 사용하는 순전파입니다.
             
@@ -360,12 +360,12 @@ def _(
         @torch.no_grad()
         def generate(
             self,
-            pixel_values_list: list,  # 이미지 텐서 목록
-            prompt: str,
-            max_new_tokens: int = 50,
-            temperature: float = 0.7,
-            do_sample: bool = True,
-        ) -> str:
+            pixel_values_list,  # 이미지 텐서 목록
+            prompt,
+            max_new_tokens = 50,
+            temperature = 0.7,
+            do_sample = True,
+        ):
             """여러 이미지와 프롬프트에서 텍스트를 생성합니다.
             """
             self.eval()

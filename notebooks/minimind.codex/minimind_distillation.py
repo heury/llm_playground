@@ -134,30 +134,45 @@ def _(mo):
 
 
 @app.cell
-def _(F, alpha_ui, distillation_loss, temperature_ui, torch):
+def _(F, temperature_ui, torch):
+    # 직접 계산: 온도로 나눈 교사 확률과 학생 log 확률로 KL 항을 구합니다.
     _tau = temperature_ui.value
     demo_student_logits = torch.tensor([[1.0, 1.5, -0.5]], requires_grad=True)
     demo_teacher_logits = torch.tensor([[4.0, 2.0, 0.0]], requires_grad=True)
     demo_teacher_probs = F.softmax(demo_teacher_logits.detach() / _tau, dim=-1)
     demo_student_logps = F.log_softmax(demo_student_logits / _tau, dim=-1)
     demo_kl_terms = demo_teacher_probs * (demo_teacher_probs.log() - demo_student_logps)
-    demo_kd = distillation_loss(demo_student_logits, demo_teacher_logits, temperature=_tau)
-    demo_ce = F.cross_entropy(demo_student_logits, torch.tensor([0]))
-    demo_mixed = alpha_ui.value * demo_ce + (1 - alpha_ui.value) * demo_kd
-    demo_mixed.backward()
-    assert torch.allclose(_tau ** 2 * demo_kl_terms.sum(), demo_kd)
-    assert demo_teacher_logits.grad is None and torch.isfinite(demo_student_logits.grad).all()
-    assert torch.allclose(distillation_loss(demo_student_logits.repeat(2, 1), demo_teacher_logits.repeat(2, 1), _tau), demo_kd)
     return (
-        demo_ce,
-        demo_kd,
         demo_kl_terms,
-        demo_mixed,
         demo_student_logits,
         demo_student_logps,
         demo_teacher_logits,
         demo_teacher_probs,
     )
+
+
+@app.cell
+def _(
+    F,
+    alpha_ui,
+    demo_kl_terms,
+    demo_student_logits,
+    demo_teacher_logits,
+    distillation_loss,
+    temperature_ui,
+    torch,
+):
+    # 원본 distillation_loss로 계산해 직접 계산(τ² × KL 합)과 비교합니다.
+    _tau = temperature_ui.value
+    demo_kd = distillation_loss(demo_student_logits, demo_teacher_logits, temperature=_tau)
+    demo_ce = F.cross_entropy(demo_student_logits, torch.tensor([0]))
+    demo_mixed = alpha_ui.value * demo_ce + (1 - alpha_ui.value) * demo_kd
+    demo_student_logits.grad = None   # α만 바꿔 다시 실행해도 gradient가 쌓이지 않게 합니다.
+    demo_mixed.backward()
+    assert torch.allclose(_tau ** 2 * demo_kl_terms.sum(), demo_kd)
+    assert demo_teacher_logits.grad is None and torch.isfinite(demo_student_logits.grad).all()
+    assert torch.allclose(distillation_loss(demo_student_logits.repeat(2, 1), demo_teacher_logits.repeat(2, 1), _tau), demo_kd)
+    return demo_ce, demo_kd, demo_mixed
 
 
 @app.cell(hide_code=True)

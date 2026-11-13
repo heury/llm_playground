@@ -88,15 +88,24 @@ def _(demo_ffn, mo):
 
 @app.cell
 def _(F, demo_ffn, sample_x, torch):
+    # 직접 계산: 가중치 행렬을 꺼내 SwiGLU를 한 단계씩 계산합니다.
     with torch.no_grad():
         gate_values = sample_x @ demo_ffn.gate_proj.weight.T
         activated_gate = F.silu(gate_values)
         up_values = sample_x @ demo_ffn.up_proj.weight.T
         gated_features = activated_gate * up_values
         manual_ffn = gated_features @ demo_ffn.down_proj.weight.T
-        torch.testing.assert_close(manual_ffn, demo_ffn(sample_x))
     assert sum(p.numel() for p in demo_ffn.parameters()) == 96
-    return (activated_gate, gate_values, gated_features, manual_ffn, up_values,)
+    return activated_gate, gate_values, gated_features, manual_ffn, up_values
+
+
+@app.cell
+def _(demo_ffn, manual_ffn, sample_x, torch):
+    # 원본 FeedForward 모듈로 계산해 직접 계산과 비교합니다.
+    with torch.no_grad():
+        _module_output = demo_ffn(sample_x)
+    torch.testing.assert_close(manual_ffn, _module_output)
+    return
 
 
 @app.cell(hide_code=True)
@@ -191,19 +200,27 @@ def _(mo):
 def _(MiniMindBlock, demo_config, precompute_freqs_cis, sample_x, torch):
     with torch.random.fork_rng(devices=[]):
         torch.manual_seed(22)
-        _block = MiniMindBlock(0, demo_config).eval()
+        context_block = MiniMindBlock(0, demo_config).eval()
+    # 직접 계산: Attention → 잔차 → FFN → 잔차
     with torch.no_grad():
-        _position = precompute_freqs_cis(demo_config.head_dim, end=sample_x.shape[1])
-        _attention, _ = _block.self_attn(_block.input_layernorm(sample_x), _position)
+        context_position = precompute_freqs_cis(demo_config.head_dim, end=sample_x.shape[1])
+        _attention, _ = context_block.self_attn(context_block.input_layernorm(sample_x), context_position)
         block_hidden = sample_x + _attention
-        _ff_output = _block.mlp(_block.post_attention_layernorm(block_hidden))
-        _manual = block_hidden + _ff_output
-        _actual, _ = _block(sample_x, _position)
-        torch.testing.assert_close(_manual, _actual)
+        _ff_output = context_block.mlp(context_block.post_attention_layernorm(block_hidden))
+        context_manual_output = block_hidden + _ff_output
+    return block_hidden, context_block, context_manual_output, context_position
+
+
+@app.cell
+def _(context_block, context_manual_output, context_position, sample_x, torch):
+    # 원본 블록으로 계산해 직접 계산과 비교하고, 토큰 하나만 바꿔 봅니다.
+    with torch.no_grad():
+        _actual, _ = context_block(sample_x, context_position)
+        torch.testing.assert_close(context_manual_output, _actual)
         _changed = sample_x.clone()
         _changed[0, 1, 0] += 3
-        _block_after, _ = _block(_changed, _position)
-        _ffn_change = (_block.mlp(_changed) - _block.mlp(sample_x)).abs().amax(-1)
+        _block_after, _ = context_block(_changed, context_position)
+        _ffn_change = (context_block.mlp(_changed) - context_block.mlp(sample_x)).abs().amax(-1)
         _block_change = (_block_after - _actual).abs().amax(-1)
         assert float(_ffn_change[0, 2]) == 0
         assert float(_block_change[0, 2]) > 0
@@ -212,7 +229,7 @@ def _(MiniMindBlock, demo_config, precompute_freqs_cis, sample_x, torch):
         {"배치": b, "토큰 위치": t, "FFN 단독 출력 변화": float(_ffn_change[b, t]), "전체 블록 출력 변화": float(_block_change[b, t])}
         for b in range(2) for t in range(3)
     ]
-    return (block_hidden, context_change_rows,)
+    return (context_change_rows,)
 
 
 @app.cell(hide_code=True)

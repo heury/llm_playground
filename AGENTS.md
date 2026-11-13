@@ -12,6 +12,7 @@
 ├── README.md
 ├── notebooks/                # 설명과 실행 중심의 실습 (각각 독립 uv 환경)
 │   ├── gpt/                  # GPT 챕터별 실습과 구조 실험
+│   ├── lerobot/              # LeRobot 정책(ACT 등) marimo 실습, lerobot 미설치·코드 이식
 │   ├── minimind/             # MiniMind marimo 실습 (이전 notebooks/)
 │   └── unsloth/              # Qwen 미세 조정·배포 실습
 ├── projects/                 # 독립 모델 구현·학습·추론

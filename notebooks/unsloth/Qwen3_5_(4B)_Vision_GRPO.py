@@ -265,7 +265,7 @@ def _(
             scores.append(score)  # 과도한 addCriterion 및 줄바꿈에 감점
         return scores
 
-    def correctness_reward_func(prompts, completions, answer, **kwargs) -> list[float]:
+    def correctness_reward_func(prompts, completions, answer, **kwargs):
         answer_pattern = f'{SOLUTION_START}(.*?){SOLUTION_END}'
         completions = [(c[0]['content'] if c else '') if isinstance(c, list) else c for c in completions]
         responses = [re.findall(answer_pattern, completion, re.DOTALL) for completion in completions]

@@ -337,10 +337,10 @@ def _(mo):
 
     - 같은 벡터도 위치가 다르면 회전 결과가 다릅니다.
     - 벡터 길이는 그대로입니다.
-    - **핵심:** 위치 m의 Q와 위치 n의 K를 내적하면, 점수는 **거리 `m − n`**에만 달라집니다.
-      두 회전이 내적에서 빼기로 합쳐지기 때문입니다. 그래서 점수에 상대 위치가 들어갑니다.
+    - **핵심:** 같은 Q·K 벡터라면, 위치 m의 Q와 위치 n의 K의 내적 점수는 **거리 `m − n`**에만 달라집니다.
+      그래서 점수에 상대 위치가 들어갑니다.
 
-    아래 ①에서 앞의 두 성질을, ②에서 상대 위치를 확인합니다.
+    아래 ①에서 앞의 두 성질을, ②에서 상대 위치를 확인합니다. 왜 그런지는 ② 결과 바로 뒤에서 설명합니다.
     """)
     return
 
@@ -348,49 +348,88 @@ def _(mo):
 @app.cell
 def _(apply_rotary_pos_emb, initial_model, k, q, torch):
     with torch.no_grad():
-        _t = q.shape[1]
-        position_embeddings = (
-            initial_model.model.freqs_cos[:_t], initial_model.model.freqs_sin[:_t],
-        )
-        q_rotated, k_rotated = apply_rotary_pos_emb(q, k, *position_embeddings)
-        # 회전해도 벡터 길이는 같습니다.
-        torch.testing.assert_close(q.norm(dim=-1), q_rotated.norm(dim=-1))
+        # 벡터 하나 [d]를 원하는 위치 pos의 각도로 회전합니다.
+        def rope_rotate(vec, pos):
+            _cos = initial_model.model.freqs_cos[pos:pos + 1]
+            _sin = initial_model.model.freqs_sin[pos:pos + 1]
+            _out, _ = apply_rotary_pos_emb(vec[None, None, None], vec[None, None, None], _cos, _sin)
+            return _out.flatten()
 
-        def rotate_at(vector, position):
-            # vector [1,1,H,d]를 지정한 위치의 각도로 회전합니다.
-            # apply_rotary_pos_emb는 Q와 K를 함께 받으므로 같은 벡터를 두 번 넘기고 하나만 씁니다.
-            _cos = initial_model.model.freqs_cos[position:position + 1]
-            _sin = initial_model.model.freqs_sin[position:position + 1]
-            rotated, _ = apply_rotary_pos_emb(vector, vector, _cos, _sin)
-            return rotated
+        rope_q_vec = q[0, 1, 0]  # 첫 문장 · 1번 토큰 · head 0의 Q [d]
+        _k_vec = k[0, 2, 0]      # 같은 문장 · 2번 토큰 · head 0의 K [d]
 
-        # 같은 Q 벡터(1번 위치 토큰)를 위치 1과 위치 2에 놓아 회전 효과만 비교합니다.
-        same_q_at_2 = rotate_at(q[:, 1:2], 2)
+        # ① 같은 Q를 위치 1과 2에 놓기: 좌표는 달라지고 길이는 그대로입니다.
+        rope_q_at_1, rope_q_at_2 = rope_rotate(rope_q_vec, 1), rope_rotate(rope_q_vec, 2)
+        assert not torch.allclose(rope_q_at_1, rope_q_at_2)
+        torch.testing.assert_close(rope_q_at_1.norm(), rope_q_vec.norm())
+        torch.testing.assert_close(rope_q_at_2.norm(), rope_q_vec.norm())
 
-        # 상대 위치: 같은 Q·K 벡터 쌍을 여러 위치에 놓고 점수를 잽니다.
-        _q_vec, _k_vec = q[:1, 1:2, :1], k[:1, 2:3, :1]
-        rope_rows = []
-        for _qp, _kp in [(2, 0), (5, 3), (9, 7), (4, 0), (8, 4)]:
-            _score = (rotate_at(_q_vec, _qp) * rotate_at(_k_vec, _kp)).sum().item()
-            rope_rows.append({"Q 위치": _qp, "K 위치": _kp, "거리": _qp - _kp, "Q·K 점수": _score})
+        # ② 같은 Q·K 쌍을 여러 위치에 놓기: 점수는 거리(Q 위치 − K 위치)에만 달라집니다.
+        rope_rows = [
+            {"Q 위치": _qp, "K 위치": _kp, "거리": _qp - _kp,
+             "Q·K 점수": float(rope_rotate(rope_q_vec, _qp) @ rope_rotate(_k_vec, _kp))}
+            for _qp, _kp in [(2, 0), (5, 3), (9, 7), (4, 0), (8, 4)]
+        ]
         _s = [_row["Q·K 점수"] for _row in rope_rows]
-        # float32 계산이라 아주 작은 오차는 허용합니다.
-        assert abs(_s[0] - _s[1]) < 1e-4 and abs(_s[0] - _s[2]) < 1e-4  # 거리 2끼리 같음
+        assert abs(_s[0] - _s[1]) < 1e-4 and abs(_s[0] - _s[2]) < 1e-4  # 거리 2끼리 같음 (float32 오차 허용)
         assert abs(_s[3] - _s[4]) < 1e-4                                # 거리 4끼리 같음
-    return k_rotated, position_embeddings, q_rotated, rope_rows, same_q_at_2
+    return rope_q_at_1, rope_q_at_2, rope_q_vec, rope_rows
 
 
 @app.cell(hide_code=True)
-def _(mo, q_rotated, rope_rows, same_q_at_2):
+def _(mo, rope_q_at_1, rope_q_at_2, rope_q_vec, rope_rows):
     # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
+    _cols = {"회전 전": rope_q_vec, "위치 1에서 회전": rope_q_at_1, "위치 2에서 회전": rope_q_at_2}
+    _rows = [{"차원": str(i), **{name: round(float(v[i]), 4) for name, v in _cols.items()}} for i in range(len(rope_q_vec))]
+    _rows.append({"차원": "길이", **{name: round(float(v.norm()), 4) for name, v in _cols.items()}})
     mo.vstack([
-        mo.md("**① 같은 벡터, 다른 위치:** 좌표는 다르고 길이는 같습니다."),
-        mo.ui.table([
-            {"차원": i, "같은 Q를 위치 1에서 회전": float(q_rotated[0, 1, 0, i]), "같은 Q를 위치 2에서 회전": float(same_q_at_2[0, 0, 0, i])}
-            for i in range(4)
-        ], selection=None),
+        mo.md("**① 같은 벡터, 다른 위치:** 좌표는 다르고 길이(마지막 행)는 같습니다."),
+        mo.ui.table(_rows, selection=None),
         mo.md("**② 상대 위치:** 거리가 같으면 절대 위치가 달라도 점수가 같습니다."),
         mo.ui.table(rope_rows, selection=None),
+    ])
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.vstack([
+        mo.md(r"""
+    **왜 점수가 거리에만 달라지나**
+
+    한 짝 `(a, b)`를 2차원 평면의 점으로 보면 쉽습니다.
+
+    1. **내적은 사이 각도로 정해집니다:** $q \cdot k = |q|\,|k|\cos(\text{사이 각도})$.
+       회전은 길이를 바꾸지 않으므로, 점수를 바꾸는 것은 사이 각도뿐입니다.
+    2. **RoPE는 위치만큼 돌립니다:** 위치 m의 Q는 `m·f`, 위치 n의 K는 `n·f`만큼 돕니다.
+       두 회전이 사이 각도에서는 빼기로 합쳐져, 사이 각도는 `(m − n)·f`만큼 바뀝니다.
+
+    | Q 위치 m | K 위치 n | Q 회전 | K 회전 | 사이 각도 변화 |
+    | --- | --- | --- | --- | --- |
+    | 2 | 0 | 2f | 0f | **2f** |
+    | 5 | 3 | 5f | 3f | **2f** |
+    | 9 | 7 | 9f | 7f | **2f** |
+
+    그래서 ②에서 (2, 0), (5, 3), (9, 7)의 점수가 같습니다.
+    `d = 8`이면 짝 4개가 각자 다른 속도 $f_i$로 돌고, 점수는 짝별 내적의 합입니다.
+    짝마다 거리에만 의존하므로 합도 거리에만 의존합니다.
+
+    **왜 중요한가**
+
+    - 모델은 "3번째 토큰" 같은 절대 위치보다 "2칸 앞 토큰" 같은 상대 관계를 배웁니다.
+      같은 패턴이 문장 어디에 나와도 같은 방식으로 처리됩니다.
+    - 6-1절의 KV cache가 맞게 동작하는 근거입니다. 과거 K를 자기 위치로 한 번만 돌려 저장해도,
+      새 Q와의 거리 관계가 그대로 유지됩니다.
+    """),
+        mo.accordion({
+            "더 보기: 행렬로 쓰면": mo.md(r"""
+    회전 행렬 $R(\alpha)$는 $R(a)^\top = R(-a)$, $R(a)R(b) = R(a+b)$를 만족합니다. 그래서
+
+    $$(R(mf)\,q)\cdot(R(nf)\,k) = q^\top R(-mf)\,R(nf)\,k = q^\top R\big((n-m)f\big)\,k$$
+
+    위치는 $n - m$ 형태로만 남습니다.
+    """),
+        }),
     ])
     return
 
@@ -404,6 +443,15 @@ def _(mo):
 
     **① 어떤 차원끼리 짝을 짓나:** `rotate_half`는 벡터를 앞 절반 `a`와 뒤 절반 `b`로 나눕니다.
     head 차원 `d = 8`이면 짝은 `(0,4) (1,5) (2,6) (3,7)`입니다. **인접한 (0,1)이 아닙니다.**
+
+    - **어떤 차원끼리 짝을 짓든 결과는 같습니다.** 조건은 Q와 K가 같은 규칙으로 짝짓는 것 하나입니다.
+      인접 방식 `(0,1) (2,3) …`과 절반 방식은 차원 순서만 다릅니다. Q와 K의 순서를 똑같이 바꾸면 내적은 그대로이고,
+      이 순서 바꾸기는 `q_proj`/`k_proj` 가중치 행을 재배열한 것과 같아 학습이 알아서 맞춥니다.
+    - **절반 방식이 구현에 더 편합니다.** 연속된 두 구간을 자르고 붙이면 끝납니다:
+      `rotate_half(x) = [−b, a]`, 결과는 `x * cos + rotate_half(x) * sin`처럼 원소별 곱 두 번입니다.
+      인접 방식은 `x[..., 0::2]`, `x[..., 1::2]`처럼 한 칸씩 건너 꺼내 다시 엇갈려 끼우거나 복소수로 바꿔야 합니다.
+    - 원 논문(RoFormer)과 Meta의 원본 LLaMA는 인접 방식, Hugging Face 구현과 MiniMind는 절반 방식입니다.
+      둘은 결과가 같지만 **가중치는 서로 호환되지 않으므로**, 다른 방식으로 학습한 가중치를 옮길 때는 Q/K 행을 재배열해야 합니다.
 
     **② 짝마다 회전 속도(주파수)가 다릅니다:** $f_i = 1 / \theta^{2i/d}$, $\theta$ = `rope_theta` = $10^6$.
 
@@ -428,7 +476,8 @@ def _(mo):
 
 
 @app.cell
-def _(apply_rotary_pos_emb, initial_model, q, torch):
+def _(initial_model, q, torch):
+    # 직접 계산: 각도 표와 2차원 회전
     with torch.no_grad():
         _d = initial_model.config.head_dim
         _theta = initial_model.config.rope_theta
@@ -437,23 +486,49 @@ def _(apply_rotary_pos_emb, initial_model, q, torch):
         # ③ 위치 m의 각도 = m × 주파수
         _positions = torch.arange(initial_model.config.max_position_embeddings).float()
         rope_angles = torch.outer(_positions, rope_freqs)                          # [T, d/2]
-        _manual_cos = torch.cat([rope_angles.cos(), rope_angles.cos()], dim=-1)    # [T, d]
-        _manual_sin = torch.cat([rope_angles.sin(), rope_angles.sin()], dim=-1)
-        torch.testing.assert_close(_manual_cos, initial_model.model.freqs_cos)
-        torch.testing.assert_close(_manual_sin, initial_model.model.freqs_sin)
+        rope_manual_cos = torch.cat([rope_angles.cos(), rope_angles.cos()], dim=-1)    # [T, d]
+        rope_manual_sin = torch.cat([rope_angles.sin(), rope_angles.sin()], dim=-1)
 
-        # ④ 짝 (a, b)를 2차원 회전한 결과 = 원본 apply_rotary_pos_emb
-        _pos = 3
-        _vec = q[0, 1, 0]                                   # head 차원 벡터 하나 [d]
-        _a, _b = _vec[: _d // 2], _vec[_d // 2:]            # 앞 절반·뒤 절반
-        _cos, _sin = rope_angles[_pos].cos(), rope_angles[_pos].sin()
-        _manual_rotated = torch.cat([_a * _cos - _b * _sin, _b * _cos + _a * _sin])
+        # ④ 짝 (a, b)를 2차원 회전
+        rope_demo_pos = 3
+        rope_demo_vec = q[0, 1, 0]                                         # head 차원 벡터 하나 [d]
+        _a, _b = rope_demo_vec[: _d // 2], rope_demo_vec[_d // 2:]         # 앞 절반·뒤 절반
+        _cos, _sin = rope_angles[rope_demo_pos].cos(), rope_angles[rope_demo_pos].sin()
+        rope_manual_rotated = torch.cat([_a * _cos - _b * _sin, _b * _cos + _a * _sin])
+    return (
+        rope_angles,
+        rope_demo_pos,
+        rope_demo_vec,
+        rope_freqs,
+        rope_manual_cos,
+        rope_manual_rotated,
+        rope_manual_sin,
+    )
+
+
+@app.cell
+def _(
+    apply_rotary_pos_emb,
+    initial_model,
+    rope_demo_pos,
+    rope_demo_vec,
+    rope_manual_cos,
+    rope_manual_rotated,
+    rope_manual_sin,
+    torch,
+):
+    # 원본과 비교: 원본 freqs_cos/freqs_sin 표와 apply_rotary_pos_emb
+    with torch.no_grad():
+        torch.testing.assert_close(rope_manual_cos, initial_model.model.freqs_cos)
+        torch.testing.assert_close(rope_manual_sin, initial_model.model.freqs_sin)
+        _vec = rope_demo_vec[None, None, None]
         _original, _ = apply_rotary_pos_emb(
-            _vec[None, None, None], _vec[None, None, None],
-            initial_model.model.freqs_cos[_pos:_pos + 1], initial_model.model.freqs_sin[_pos:_pos + 1],
+            _vec, _vec,
+            initial_model.model.freqs_cos[rope_demo_pos:rope_demo_pos + 1],
+            initial_model.model.freqs_sin[rope_demo_pos:rope_demo_pos + 1],
         )
-        torch.testing.assert_close(_manual_rotated, _original.flatten())
-    return rope_angles, rope_freqs
+        torch.testing.assert_close(rope_manual_rotated, _original.flatten())
+    return
 
 
 @app.cell(hide_code=True)
@@ -509,17 +584,26 @@ def _(mo):
 
 
 @app.cell
-def _(attn, k_rotated, q_rotated, repeat_kv, torch, v):
+def _(apply_rotary_pos_emb, attn, initial_model, k, q, repeat_kv, torch, v):
     with torch.no_grad():
-        # GQA: K/V head를 Q head 수만큼 반복한 뒤, head 축을 앞으로 옮깁니다.
-        torch.testing.assert_close(repeat_kv(k_rotated, attn.n_rep), k_rotated.repeat_interleave(attn.n_rep, dim=2))
+        # 1) RoPE: 위치 0..T-1의 각도로 Q, K 전체를 회전합니다. (V는 회전하지 않음)
+        _t = q.shape[1]
+        position_embeddings = (initial_model.model.freqs_cos[:_t], initial_model.model.freqs_sin[:_t])
+        q_rotated, k_rotated = apply_rotary_pos_emb(q, k, *position_embeddings)
+
+        # 2) GQA: 회전한 K와 V의 head를 Q head 수만큼 반복합니다. [B, T, 2, d] → [B, T, 4, d]
+        _k_repeated = repeat_kv(k_rotated, attn.n_rep)
+        _v_repeated = repeat_kv(v, attn.n_rep)
+        torch.testing.assert_close(_k_repeated, k_rotated.repeat_interleave(attn.n_rep, dim=2))
+
+        # 3) head 축을 앞으로: [B, T, H, d] → [B, H, T, d]
         query_heads = q_rotated.transpose(1, 2)
-        key_heads = repeat_kv(k_rotated, attn.n_rep).transpose(1, 2)
-        value_heads = repeat_kv(v, attn.n_rep).transpose(1, 2)
+        key_heads = _k_repeated.transpose(1, 2)
+        value_heads = _v_repeated.transpose(1, 2)
         if attn.n_rep > 1:
             # 공유할 때만: Q head 0과 1은 같은 원본 K head를 봅니다.
             torch.testing.assert_close(key_heads[:, 0], key_heads[:, 1])
-    return key_heads, query_heads, value_heads
+    return key_heads, position_embeddings, query_heads, value_heads
 
 
 @app.cell(hide_code=True)
@@ -553,18 +637,8 @@ def _(mo):
 
 
 @app.cell
-def _(
-    F,
-    attn,
-    key_heads,
-    math,
-    normalized,
-    position_embeddings,
-    query_heads,
-    torch,
-    value_heads,
-):
-    # 과제 4: False로 바꾸면 미래를 가리지 않습니다. 아래 검증도 건너뜁니다.
+def _(F, attn, key_heads, math, normalized, query_heads, torch, value_heads):
+    # 과제 4: False로 바꾸면 미래를 가리지 않습니다. 원본과 비교하는 뒤 셀(4절, 5-3절)의 검증도 건너뜁니다.
     use_causal_mask = True
 
     with torch.no_grad():
@@ -577,40 +651,30 @@ def _(
         attention_probabilities = F.softmax(_scores, dim=-1)
         # [B,H,T,T] @ [B,H,T,d] → [B,H,T,d] → [B,T,H,d] → [B,T,H×d]: head 출력 이어 붙이기
         _context = (attention_probabilities @ value_heads).transpose(1, 2).reshape(_b, _t, -1)
-        manual_attention = attn.o_proj(_context)
-        if use_causal_mask:
-            _actual, _ = attn(normalized, position_embeddings)
-            torch.testing.assert_close(manual_attention, _actual)
-            assert attention_probabilities.masked_select(causal_mask[None, None]).eq(0).all()
-    future_attention = attention_probabilities.masked_select(causal_mask[None, None]).sum().item()
-    return (
-        attention_probabilities,
-        future_attention,
-        manual_attention,
-        use_causal_mask,
-    )
+        attention_output = attn.o_proj(_context)
+    return attention_output, attention_probabilities, use_causal_mask
 
 
 @app.cell(hide_code=True)
 def _(
+    attention_output,
     attention_probabilities,
-    future_attention,
-    manual_attention,
     mo,
     normalized,
     use_causal_mask,
 ):
     # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
+    _future = float(attention_probabilities.triu(1).sum())  # 미래 위치(대각선 위)로 간 확률의 합
     _note = (
-        "직접 계산한 Attention과 원본 출력이 같습니다. 각 행의 미래 위치 확률은 0입니다."
+        f"미래 위치로 간 확률의 합 = `{_future:.3f}`. 각 위치는 자신과 앞 토큰만 봅니다."
         if use_causal_mask
-        else f"**마스크 꺼짐:** 미래 위치로 간 확률의 합 = `{future_attention:.3f}`. 각 위치가 뒤 토큰, 즉 맞혀야 할 정답을 봅니다."
+        else f"**마스크 꺼짐:** 미래 위치로 간 확률의 합 = `{_future:.3f}`. 각 위치가 뒤 토큰, 즉 맞혀야 할 정답을 봅니다."
     )
     mo.vstack([
         mo.ui.table([
             {"단계": "Embedding / RMSNorm", "shape": str(tuple(normalized.shape)), "축 의미": "[B, T, D]"},
             {"단계": "Attention 확률", "shape": str(tuple(attention_probabilities.shape)), "축 의미": "[B, H, query T, key T]"},
-            {"단계": "출력", "shape": str(tuple(manual_attention.shape)), "축 의미": "[B, T, D]"},
+            {"단계": "출력", "shape": str(tuple(attention_output.shape)), "축 의미": "[B, T, D]"},
         ], selection=None),
         mo.md(_note),
     ])
@@ -631,10 +695,19 @@ def _(mo):
     scores += (1.0 - attention_mask.unsqueeze(1).unsqueeze(2)) * -1e9   # [B,T] → [B,1,1,T]
     ```
 
+    `1.0 - attention_mask`로 1과 0을 뒤집으면, 가릴 칸(패딩)이 1이 됩니다. 여기에 `-1e9`를 곱합니다.
+
+    ```text
+    attention_mask         = [1, 1, 1, 0, 0]          # 뒤 두 칸이 패딩
+    1.0 - attention_mask   = [0, 0, 0, 1, 1]
+    × -1e9                 = [0, 0, 0, -1e9, -1e9]    # 점수에 더할 값
+    ```
+
+    실제 토큰 자리는 0을 더하므로 점수가 그대로이고, 패딩 자리만 아주 큰 음수가 됩니다.
+
     - 마지막 축이 **key 축**입니다. 그래서 패딩인 **key 열**을 가립니다. 어떤 query도 패딩을 보지 않습니다.
     - `-1e9`는 사실상 `-inf`입니다. softmax 뒤 확률이 0이 됩니다.
     - 패딩인 **query 행**은 가리지 않습니다. 계산은 되지만, 그 위치의 정답이 `-100`이라 손실에서 빠집니다(4절).
-    - 패딩이 있으면 원본은 빠른 flash 경로 대신 이 수동 경로를 씁니다.
 
     아래 `attention_forward`는 3-1 ~ 3-4절의 계산을 한 함수로 묶은 것입니다. 5-3절에서도 씁니다.
     """)
@@ -670,40 +743,6 @@ def _(F, apply_rotary_pos_emb, math, repeat_kv, torch):
     return (attention_forward,)
 
 
-@app.cell
-def _(attention_forward, initial_model, make_batch, torch):
-    with torch.no_grad():
-        # 두 번째 문장은 짧아서 뒤에 <pad>가 붙습니다.
-        mask_demo_ids, mask_demo_mask, _ = make_batch(["고양이 는 야옹 한다 .", "강아지 는"])
-        mask_demo_probs, _output, _reference = attention_forward(
-            initial_model, mask_demo_ids, attention_mask=mask_demo_mask,
-        )
-        torch.testing.assert_close(_output, _reference)
-        # 패딩인 key 열(마지막 축)로 간 확률은 모든 query·head에서 0입니다.
-        _pad_keys = mask_demo_mask[:, None, None, :] == 0                    # [B,1,1,T]
-        assert mask_demo_probs.masked_select(_pad_keys.expand_as(mask_demo_probs)).max() < 1e-6
-    return mask_demo_ids, mask_demo_mask, mask_demo_probs
-
-
-@app.cell(hide_code=True)
-def _(mask_demo_ids, mask_demo_mask, mask_demo_probs, mo, vocabulary):
-    # ▸ 결과 표시 — 실행하면 표·그림이 나타납니다 (marimo 표시 코드)
-    _row = 1   # 패딩이 있는 두 번째 문장
-    _words = [vocabulary[int(i)] for i in mask_demo_ids[_row]]
-    _is_pad = mask_demo_mask[_row] == 0
-    mo.vstack([
-        mo.md(f"두 번째 문장: `{' '.join(_words)}` · mask: `{mask_demo_mask[_row].tolist()}`"),
-        mo.ui.table([
-            {"query 위치": _i, "query": _words[_i], "query가 패딩인가": bool(_is_pad[_i]),
-             "실제 토큰으로 간 확률": float(mask_demo_probs[_row, 0, _i][~_is_pad].sum()),
-             "패딩 key로 간 확률": float(mask_demo_probs[_row, 0, _i][_is_pad].sum())}
-            for _i in range(len(_words))
-        ], selection=None),
-        mo.md("**관찰:** 모든 행에서 패딩 key로 간 확률은 0입니다. 패딩인 query 행도 계산은 됩니다. 이 행의 결과는 손실의 `-100`이 버립니다. 직접 계산한 결과는 원본과 같습니다. 그림은 head 0입니다."),
-    ])
-    return
-
-
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
@@ -736,34 +775,47 @@ def _(mo):
 
 
 @app.cell
-def _(
-    F,
-    embeddings,
-    first_block,
-    manual_attention,
-    position_embeddings,
-    torch,
-    use_causal_mask,
-):
-    # ① 블록 하나를 직접 계산해 원본 블록과 비교합니다.
+def _(F, attention_output, embeddings, first_block, torch):
+    # ① 블록 하나를 직접 계산합니다.
     with torch.no_grad():
-        _h = embeddings + manual_attention                        # h = x + Attention(norm(x))
+        _h = embeddings + attention_output                        # h = x + Attention(norm(x))
         _mlp_input = first_block.post_attention_layernorm(_h)     # MLP 앞 정규화
         _ff = first_block.mlp
         _gate = F.silu(_ff.gate_proj(_mlp_input))                 # 문을 얼마나 열지
         _up = _ff.up_proj(_mlp_input)                             # 전달할 값
-        _manual_block = _h + _ff.down_proj(_gate * _up)           # out = h + MLP(norm(h))
+        block_manual_output = _h + _ff.down_proj(_gate * _up)     # out = h + MLP(norm(h))
+    return (block_manual_output,)
+
+
+@app.cell
+def _(
+    block_manual_output,
+    embeddings,
+    first_block,
+    position_embeddings,
+    torch,
+    use_causal_mask,
+):
+    # 원본 블록으로 계산해 직접 계산과 비교합니다.
+    with torch.no_grad():
         _actual_block, _ = first_block(embeddings, position_embeddings)
-        if use_causal_mask:
-            torch.testing.assert_close(_manual_block, _actual_block)
+    if use_causal_mask:
+        torch.testing.assert_close(block_manual_output, _actual_block)
     return
 
 
 @app.cell
-def _(F, attention_mask, initial_model, input_ids, labels, torch, vocabulary):
-    # ② 원본 손실 = 직접 shift한 cross entropy
+def _(attention_mask, initial_model, input_ids, labels, torch):
+    # ② 원본 모델이 logits와 손실을 함께 계산합니다.
     with torch.no_grad():
         initial_out = initial_model(input_ids, attention_mask=attention_mask, labels=labels)
+    return (initial_out,)
+
+
+@app.cell
+def _(F, initial_out, labels, torch, vocabulary):
+    # 같은 logits로 손실을 직접 계산해 원본 손실과 비교합니다.
+    with torch.no_grad():
         # forward 안의 shift를 똑같이 따라 합니다: 위치 t의 logits ↔ 위치 t+1의 정답
         _logits_t = initial_out.logits[:, :-1]     # 마지막 위치는 맞힐 다음 토큰이 없음
         _labels_next = labels[:, 1:]               # 첫 토큰 <bos>는 맞힐 대상이 아님
@@ -771,26 +823,32 @@ def _(F, attention_mask, initial_model, input_ids, labels, torch, vocabulary):
             _logits_t.reshape(-1, len(vocabulary)), _labels_next.reshape(-1),
             ignore_index=-100,
         )
-        torch.testing.assert_close(_manual_loss, initial_out.loss)
-    return (initial_out,)
+    torch.testing.assert_close(_manual_loss, initial_out.loss)
+    return
 
 
 @app.cell
-def _(F, initial_model, make_batch, torch):
-    # ③ 길이가 다른 문장: 패딩 위치(-100)는 손실에서 빠집니다.
+def _(initial_model, make_batch, torch):
+    # ③ 길이가 다른 문장: 패딩 위치(-100)는 손실에서 빠집니다. 먼저 원본 모델로 계산합니다.
     with torch.no_grad():
         _pad_ids, pad_mask, pad_labels = make_batch([
             "고양이 는 야옹 한다 .", "강아지 는",
         ])
         assert (pad_labels == -100).any()
-        _pad_out = initial_model(_pad_ids, attention_mask=pad_mask, labels=pad_labels)
-        # -100이 아닌 정답 위치만 골라 직접 평균을 냅니다.
-        _logits_t = _pad_out.logits[:, :-1]
+        pad_out = initial_model(_pad_ids, attention_mask=pad_mask, labels=pad_labels)
+    return pad_labels, pad_mask, pad_out
+
+
+@app.cell
+def _(F, pad_labels, pad_out, torch):
+    # -100이 아닌 정답 위치만 골라 직접 평균을 내고, 원본 손실과 비교합니다.
+    with torch.no_grad():
+        _logits_t = pad_out.logits[:, :-1]
         _labels_next = pad_labels[:, 1:]
         _valid = _labels_next != -100              # [B, T-1] True/False
         _pad_loss = F.cross_entropy(_logits_t[_valid], _labels_next[_valid])
-        torch.testing.assert_close(_pad_loss, _pad_out.loss)
-    return pad_labels, pad_mask
+    torch.testing.assert_close(_pad_loss, pad_out.loss)
+    return
 
 
 @app.cell(hide_code=True)
@@ -958,19 +1016,28 @@ def _(mo):
 
 
 @app.cell
-def _(F, encode, initial_model, token_to_id, torch, trained_model, vocabulary):
-    _prefix = torch.tensor([encode("고양이 는", add_eos=False)])
+def _(encode, initial_model, torch, trained_model):
+    # 원본 모델로 "고양이 는" 다음 위치를 계산합니다. (마지막 벡터와 logits)
+    lm_head_prefix = torch.tensor([encode("고양이 는", add_eos=False)])
+    lm_head_models = {"학습 전": initial_model, "학습 후": trained_model}
+    with torch.no_grad():
+        lm_head_outputs = {_name: _model(lm_head_prefix) for _name, _model in lm_head_models.items()}
+    return lm_head_models, lm_head_outputs
+
+
+@app.cell
+def _(F, lm_head_models, lm_head_outputs, token_to_id, torch, vocabulary):
+    # 마지막 벡터 → 어휘 점수 → 확률 → 손실을 직접 계산하고, 원본 logits와 비교합니다.
     _target = token_to_id["야옹"]
     probability_rows = []
     target_losses = {}
     with torch.no_grad():
-        for _name, _model in [("학습 전", initial_model), ("학습 후", trained_model)]:
-            _out = _model(_prefix)
+        for _name, _out in lm_head_outputs.items():
             _h = _out.hidden_states[0, -1]
-            _logits = _h @ _model.lm_head.weight.T
-            torch.testing.assert_close(_logits, _out.logits[0, -1])
+            _logits = _h @ lm_head_models[_name].lm_head.weight.T
             _probabilities = _logits.softmax(-1)
             _single_loss = -_logits.log_softmax(-1)[_target]
+            torch.testing.assert_close(_logits, _out.logits[0, -1])
             torch.testing.assert_close(_single_loss, F.cross_entropy(_logits[None], torch.tensor([_target])))
             target_losses[_name] = float(_single_loss)
             for _i, _word in enumerate(vocabulary):
@@ -1194,20 +1261,13 @@ def _(mo):
 
 
 @app.cell
-def _(
-    F,
-    apply_rotary_pos_emb,
-    cache_prefix,
-    input_ids,
-    math,
-    repeat_kv,
-    torch,
-    trained_model,
-):
+def _(F, apply_rotary_pos_emb, input_ids, math, repeat_kv, torch, trained_model):
+    # 직접 계산: 앞부분의 K/V(캐시에 들어갈 값)와 새 토큰 하나의 Attention
     with torch.no_grad():
         _block = trained_model.model.layers[0]
         _a = _block.self_attn
-        _x = _block.input_layernorm(trained_model.model.embed_tokens(input_ids))   # [B, T, D]
+        cache_layer_input = _block.input_layernorm(trained_model.model.embed_tokens(input_ids))   # [B, T, D]
+        _x = cache_layer_input
         _b, _t, _ = _x.shape
         cache_start_pos = _t - 1          # 캐시 길이 = 새 토큰의 위치
 
@@ -1222,29 +1282,57 @@ def _(
             q, k = apply_rotary_pos_emb(q, k, cos, sin)
             return q, k, v
 
-        # ① 캐시 = 앞부분(위치 0..T-2)의 회전된 K와 V, 펼치기 전
-        _cache_k, _cache_v = cache_prefix.past_key_values[0]
-        _, _k_prefix, _v_prefix = rotated_qkv(_x[:, :cache_start_pos], 0)
-        torch.testing.assert_close(_cache_k, _k_prefix)
-        torch.testing.assert_close(_cache_v, _v_prefix)
+        # ① 캐시에 들어갈 값 = 앞부분(위치 0..T-2)의 회전된 K와 V, 펼치기 전
+        _, cache_manual_k, cache_manual_v = rotated_qkv(_x[:, :cache_start_pos], 0)
 
         def last_token_attention(start_pos):
-            # ② 새 토큰 하나만 계산하고, 과거 K/V는 캐시에서 이어 붙입니다.
+            # ② 새 토큰 하나만 계산하고, 과거 K/V를 이어 붙입니다.
             q_new, k_new, v_new = rotated_qkv(_x[:, cache_start_pos:], start_pos)
-            k_all = repeat_kv(torch.cat([_cache_k, k_new], dim=1), _a.n_rep).transpose(1, 2)
-            v_all = repeat_kv(torch.cat([_cache_v, v_new], dim=1), _a.n_rep).transpose(1, 2)
+            k_all = repeat_kv(torch.cat([cache_manual_k, k_new], dim=1), _a.n_rep).transpose(1, 2)
+            v_all = repeat_kv(torch.cat([cache_manual_v, v_new], dim=1), _a.n_rep).transpose(1, 2)
             scores = q_new.transpose(1, 2) @ k_all.transpose(-2, -1) / math.sqrt(_a.head_dim)
             # ③ query 1개 × key T개. 새 토큰보다 뒤인 key가 없으므로 가릴 칸이 없습니다.
             probs = F.softmax(scores, dim=-1)
             return _a.o_proj((probs @ v_all).transpose(1, 2).reshape(_b, 1, -1))
 
-        _full, _ = _a(_x, (trained_model.model.freqs_cos[:_t], trained_model.model.freqs_sin[:_t]))
-        cache_right_error = (last_token_attention(cache_start_pos) - _full[:, -1:]).abs().max().item()
-        cache_wrong_error = (last_token_attention(0) - _full[:, -1:]).abs().max().item()
-        assert cache_right_error < 1e-5
-        assert cache_wrong_error > 100 * cache_right_error
-        cache_k_shape = tuple(_cache_k.shape)
-    return cache_k_shape, cache_right_error, cache_start_pos, cache_wrong_error
+        cache_right_output = last_token_attention(cache_start_pos)   # 올바른 위치로 회전
+        cache_wrong_output = last_token_attention(0)                 # 위치 0으로 잘못 회전
+    return (
+        cache_layer_input,
+        cache_manual_k,
+        cache_manual_v,
+        cache_right_output,
+        cache_start_pos,
+        cache_wrong_output,
+    )
+
+
+@app.cell
+def _(
+    cache_layer_input,
+    cache_manual_k,
+    cache_manual_v,
+    cache_prefix,
+    cache_right_output,
+    cache_wrong_output,
+    torch,
+    trained_model,
+):
+    # 원본과 비교: 모델 캐시의 K/V, 원본 Attention의 마지막 위치 출력
+    with torch.no_grad():
+        _cache_k, _cache_v = cache_prefix.past_key_values[0]
+        torch.testing.assert_close(_cache_k, cache_manual_k)
+        torch.testing.assert_close(_cache_v, cache_manual_v)
+        _t = cache_layer_input.shape[1]
+        _full, _ = trained_model.model.layers[0].self_attn(
+            cache_layer_input, (trained_model.model.freqs_cos[:_t], trained_model.model.freqs_sin[:_t]),
+        )
+        cache_right_error = (cache_right_output - _full[:, -1:]).abs().max().item()
+        cache_wrong_error = (cache_wrong_output - _full[:, -1:]).abs().max().item()
+    assert cache_right_error < 1e-5
+    assert cache_wrong_error > 100 * cache_right_error
+    cache_k_shape = tuple(_cache_k.shape)
+    return cache_k_shape, cache_right_error, cache_wrong_error
 
 
 @app.cell(hide_code=True)

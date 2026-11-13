@@ -182,7 +182,7 @@ def _(
         """시각 특징을 언어 모델의 임베딩 공간으로 투영합니다.
         """
     
-        def __init__(self, vision_dim: int, language_dim: int):
+        def __init__(self, vision_dim, language_dim):
             super().__init__()
             self.projection = nn.Sequential(
                 nn.Linear(vision_dim, language_dim),
@@ -191,7 +191,7 @@ def _(
                 nn.Linear(language_dim, language_dim),
             )
     
-        def forward(self, vision_features: torch.Tensor) -> torch.Tensor:
+        def forward(self, vision_features):
             return self.projection(vision_features)
 
 
@@ -201,10 +201,10 @@ def _(
     
         def __init__(
             self,
-            vision_encoder: ViTModel,
-            language_model: AutoModelForCausalLM,
-            projector: VisionProjector,
-            tokenizer: AutoTokenizer,
+            vision_encoder,
+            language_model,
+            projector,
+            tokenizer,
         ):
             super().__init__()
             self.vision_encoder = vision_encoder
@@ -215,7 +215,7 @@ def _(
             for param in self.vision_encoder.parameters():
                 param.requires_grad = False
     
-        def encode_image(self, pixel_values: torch.Tensor) -> torch.Tensor:
+        def encode_image(self, pixel_values):
             with torch.no_grad():
                 vision_outputs = self.vision_encoder(pixel_values=pixel_values)
             image_features = vision_outputs.last_hidden_state
@@ -224,10 +224,10 @@ def _(
     
         def forward(
             self,
-            pixel_values: torch.Tensor,
-            input_ids: torch.Tensor,
-            attention_mask: torch.Tensor,
-            labels: torch.Tensor = None,
+            pixel_values,
+            input_ids,
+            attention_mask,
+            labels = None,
         ):
             batch_size = pixel_values.shape[0]
             image_embeds = self.encode_image(pixel_values)
@@ -266,12 +266,12 @@ def _(
         @torch.no_grad()
         def generate(
             self,
-            pixel_values: torch.Tensor,
-            prompt: str = "What objects are in this image?",
-            max_new_tokens: int = 150,
-            temperature: float = 0.3,
-            do_sample: bool = True,
-        ) -> str:
+            pixel_values,
+            prompt = "What objects are in this image?",
+            max_new_tokens = 150,
+            temperature = 0.3,
+            do_sample = True,
+        ):
             """주어진 프롬프트에 따라 이미지 응답을 생성합니다.
             """
             self.eval()

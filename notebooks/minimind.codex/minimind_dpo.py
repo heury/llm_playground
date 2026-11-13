@@ -267,13 +267,20 @@ def _(mo):
 
 
 @app.cell
-def _(F, logits_to_log_probs, torch):
-    _logits = torch.tensor([[[2., 0., -1.], [0., 1., 2.]]])
+def _(logits_to_log_probs, torch):
+    # 원본 함수로 정답 토큰의 log 확률을 구합니다.
+    demo_logits = torch.tensor([[[2., 0., -1.], [0., 1., 2.]]])
     demo_labels = torch.tensor([[0, 2]])
-    demo_logps = logits_to_log_probs(_logits, demo_labels)
-    _manual = torch.stack([F.log_softmax(_logits[0, t], dim=0)[demo_labels[0, t]] for t in range(2)])
+    demo_logps = logits_to_log_probs(demo_logits, demo_labels)
+    return demo_labels, demo_logits, demo_logps
+
+
+@app.cell
+def _(F, demo_labels, demo_logits, demo_logps, torch):
+    # 직접 계산: 위치마다 log_softmax를 하고 정답 칸을 골라, 원본 결과와 비교합니다.
+    _manual = torch.stack([F.log_softmax(demo_logits[0, t], dim=0)[demo_labels[0, t]] for t in range(2)])
     torch.testing.assert_close(demo_logps[0], _manual)
-    return (demo_labels, demo_logps,)
+    return
 
 
 @app.cell(hide_code=True)

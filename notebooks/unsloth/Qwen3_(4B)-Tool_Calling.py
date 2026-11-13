@@ -303,10 +303,10 @@ def _(execution_step_12, json, re, tokenizer_1):
     execution_step_13 = execution_step_12 + 1
     _tool_call_regex = re.compile('<tool_call>\\s*(.*?)\\s*</tool_call>', re.DOTALL)
 
-    def run_tools(messages, tools, generate, max_rounds=5):
+    def run_tools(messages, tools, generate, tool_schemas, max_rounds=5):
         available = {tool.__name__: tool for tool in tools}
         for _ in range(max_rounds):
-            text = tokenizer_1.apply_chat_template(messages, tools=tools, add_generation_prompt=True, tokenize=False)
+            text = tokenizer_1.apply_chat_template(messages, tools=tool_schemas, add_generation_prompt=True, tokenize=False)
             reply = generate(text)
             calls = []
             for raw in _tool_call_regex.findall(reply):
@@ -336,7 +336,7 @@ def _(execution_step_13, model_1, run_tools, tokenizer_1):
     # 원본 코드 셀 순서와 부수 효과를 보존합니다.
     execution_step_14 = execution_step_13 + 1
 
-    def get_stock_price(ticker: str) -> dict:
+    def get_stock_price(ticker):
         """
         Get the latest stock price for a ticker symbol.
 
@@ -353,7 +353,23 @@ def _(execution_step_13, model_1, run_tools, tokenizer_1):
         inputs = tokenizer_1(text, return_tensors='pt').to('cuda')
         outputs = model_1.generate(**inputs, max_new_tokens=512, temperature=0.7, top_p=0.8, top_k=20)
         return tokenizer_1.decode(outputs[0][inputs['input_ids'].shape[1]:], skip_special_tokens=False)
-    messages = run_tools([{'role': 'user', 'content': 'How much would 10 shares of NVDA and 5 shares of AAPL cost right now?'}], [get_stock_price], generate)  # 비추론 모드용
+    # 함수 타입 힌트 대신 모델에 전달할 도구의 입력 형식을 직접 명시합니다.
+    tool_schemas = [{
+        'type': 'function',
+        'function': {
+            'name': 'get_stock_price',
+            'description': 'Get the latest stock price for a ticker symbol.',
+            'parameters': {
+                'type': 'object',
+                'properties': {
+                    'ticker': {'type': 'string', 'description': 'The stock ticker symbol, for example AAPL.'},
+                },
+                'required': ['ticker'],
+            },
+            'return': {'type': 'object', 'description': 'The ticker and its latest price in US dollars.'},
+        },
+    }]
+    messages = run_tools([{'role': 'user', 'content': 'How much would 10 shares of NVDA and 5 shares of AAPL cost right now?'}], [get_stock_price], generate, tool_schemas)  # 비추론 모드용
     print(messages[-1]['content'])
     return (execution_step_14,)
 

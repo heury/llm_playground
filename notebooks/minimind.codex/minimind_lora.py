@@ -214,23 +214,56 @@ def _(mo):
 def _(LoRA, torch):
     with torch.random.fork_rng(devices=[]):
         torch.manual_seed(11)
-        _linear = torch.nn.Linear(4, 3, bias=False)
-        _adapter = LoRA(4, 3, rank=2)
-    _x = torch.tensor([[1., 2., 0., -1.]])
+        lora_demo_linear = torch.nn.Linear(4, 3, bias=False)
+        lora_demo_adapter = LoRA(4, 3, rank=2)
+    lora_demo_x = torch.tensor([[1., 2., 0., -1.]])
+    # 직접 계산: A로 줄이고 B로 늘립니다. 처음 B는 0이라 변화량도 0입니다.
     with torch.no_grad():
-        demo_wx = _linear(_x)
-        demo_ax = _x @ _adapter.A.weight.T
-        demo_lora_delta_initial = demo_ax @ _adapter.B.weight.T
-        torch.testing.assert_close(_adapter(_x), demo_lora_delta_initial)
+        demo_wx = lora_demo_linear(lora_demo_x)
+        demo_ax = lora_demo_x @ lora_demo_adapter.A.weight.T
+        demo_lora_delta_initial = demo_ax @ lora_demo_adapter.B.weight.T
         torch.testing.assert_close(demo_wx + demo_lora_delta_initial, demo_wx)
-        # 0이 아닌 변화량도 관찰하도록 B에 직접 값을 넣습니다.
-        _adapter.B.weight.fill_(0.2)
-        demo_lora_delta = _adapter(_x)
-        _merged_weight = _linear.weight + _adapter.B.weight @ _adapter.A.weight
-        torch.testing.assert_close(demo_wx + demo_lora_delta, _x @ _merged_weight.T)
-        demo_rank = int(torch.linalg.matrix_rank(_adapter.B.weight @ _adapter.A.weight))
-        assert demo_rank <= 2
-    return (demo_ax, demo_lora_delta, demo_lora_delta_initial, demo_rank, demo_wx,)
+        # 0이 아닌 변화량도 관찰하도록 B를 0.2로 채운 경우를 계산합니다.
+        lora_demo_b = torch.full_like(lora_demo_adapter.B.weight, 0.2)
+        lora_manual_delta = demo_ax @ lora_demo_b.T
+        lora_merged_weight = lora_demo_linear.weight + lora_demo_b @ lora_demo_adapter.A.weight   # W + BA
+        demo_rank = int(torch.linalg.matrix_rank(lora_demo_b @ lora_demo_adapter.A.weight))
+    assert demo_rank <= 2
+    return (
+        demo_ax,
+        demo_lora_delta_initial,
+        demo_rank,
+        demo_wx,
+        lora_demo_adapter,
+        lora_demo_b,
+        lora_demo_x,
+        lora_manual_delta,
+        lora_merged_weight,
+    )
+
+
+@app.cell
+def _(
+    copy,
+    demo_lora_delta_initial,
+    demo_wx,
+    lora_demo_adapter,
+    lora_demo_b,
+    lora_demo_x,
+    lora_manual_delta,
+    lora_merged_weight,
+    torch,
+):
+    # 원본 LoRA 모듈로 계산해 직접 계산과 비교합니다.
+    with torch.no_grad():
+        torch.testing.assert_close(lora_demo_adapter(lora_demo_x), demo_lora_delta_initial)
+        # B를 바꾼 복사본을 씁니다. 원본 어댑터는 그대로 둡니다.
+        _adapter = copy.deepcopy(lora_demo_adapter)
+        _adapter.B.weight.copy_(lora_demo_b)
+        demo_lora_delta = _adapter(lora_demo_x)
+    torch.testing.assert_close(demo_lora_delta, lora_manual_delta)
+    torch.testing.assert_close(demo_wx + demo_lora_delta, lora_demo_x @ lora_merged_weight.T)
+    return (demo_lora_delta,)
 
 
 @app.cell(hide_code=True)
@@ -244,7 +277,7 @@ def _(demo_ax, demo_lora_delta, demo_lora_delta_initial, demo_rank, demo_wx, mo)
             {"단계": "B에 0.2를 넣은 B(Ax)", "값": str(demo_lora_delta.tolist())},
             {"단계": "원본 + 변화량", "값": str((demo_wx + demo_lora_delta).tolist())},
         ], selection=None),
-        mo.md(f"**관찰:** 처음 변화량은 0입니다. B에 값을 넣으면 출력이 바뀝니다. A/B 경로를 더한 출력은 W+BA로 병합한 출력과 같습니다. 실제 rank는 {demo_rank}로, 상한 2보다 작습니다. 바꾼 B는 이 셀에서만 씁니다. 다음 셀은 새로 시작합니다."),
+        mo.md(f"**관찰:** 처음 변화량은 0입니다. B에 값을 넣으면 출력이 바뀝니다. A/B 경로를 더한 출력은 W+BA로 병합한 출력과 같습니다. 실제 rank는 {demo_rank}로, 상한 2보다 작습니다. B를 바꾼 것은 복사본이라 원본 어댑터는 그대로입니다."),
     ])
     return
 
