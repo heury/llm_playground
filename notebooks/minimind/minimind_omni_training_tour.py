@@ -38,8 +38,8 @@ def _(mo):
     | 10 | 실제 규모로 | `train.sh`, DDP |
 
     **준비물**
-    - CUDA GPU (VRAM 8GB 이상 권장), 디스크 약 4.5GB (체크포인트)
-    - 전체 실행 약 12분 (RTX 3080 Ti 기준). 원본 스크립트로 학습을 4번(full 약 5분, frozen 약 3분, 재개 실습 2회) 실행합니다.
+    - CUDA GPU (VRAM 8GB 이상 권장), 디스크: 실행 중 최대 약 4.7GB, 정리 후 약 0.8GB (7-3절)
+    - 전체 실행 약 12~14분 (RTX 3080 Ti 기준). 원본 스크립트로 학습을 4번(full 약 5분, frozen 약 3~4분, 재개 실습 2회) 실행합니다.
     - 처음 실행할 때 약 1.3GB 다운로드 (데이터 881MB, SigLIP2, Mimi, Whisper-tiny, 베이스 모델)
     - 실행 산출물은 저장소 루트의 `outputs/notebooks/<실행 ID>/`에 저장됩니다.
 
@@ -890,6 +890,48 @@ def _(WS, mo, resume_summary, run_script, torch):
     ```
     """
     )
+    return (run_resumed,)
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### 7-3. 디스크 정리
+
+    이 노트북은 원본 스크립트를 4번 실행하므로 `workspace/`에 약 4.7GB가 쌓입니다. 대부분은 재개 파일입니다.
+
+    | 파일 | 크기 | 이유 |
+    |---|---|---|
+    | `checkpoints/*_resume.pth` | 0.9~1.4GB씩 | fp32 가중치 + AdamW 모멘트 2벌 (학습 파라미터가 많을수록 큼) |
+    | `checkpoints/*_768.pth` | 236MB씩 | `train_epoch`이 `out/`에 쓴 fp16 가중치를 `omni_checkpoint`가 한 번 더 저장한 **중복본** |
+    | `out/*_768.pth` | 130~236MB씩 | 8~9절 평가에 쓰는 가중치 → **남김** |
+
+    재개 실습(7-2)과 파일 확인(7-1)이 끝나면 `checkpoints/`는 더 쓰지 않으므로, 아래 체크박스가 켜져 있으면 지웁니다.
+    지우는 대상은 **이번 실행의 작업 공간 안에 있는 `.pth` 파일**뿐입니다. 재개 파일을 직접 열어 보고 싶다면 실행 전에 끄세요.
+    """)
+    return
+
+
+@app.cell
+def _(mo):
+    cleanup_ui = mo.ui.checkbox(value=True, label="재개 실습이 끝나면 checkpoints/의 .pth 삭제 (평가용 out/ 가중치는 남김)")
+    cleanup_ui
+    return (cleanup_ui,)
+
+
+@app.cell
+def _(WS, cleanup_ui, mo, resume_summary, run_resumed):
+    _ = (resume_summary, run_resumed)  # 7-1, 7-2가 끝난 뒤에 실행
+    _targets = sorted((WS / "checkpoints").glob("*.pth"))
+    _size = sum(f.stat().st_size for f in _targets)
+    if cleanup_ui.value:
+        for _f in _targets:
+            _f.unlink()
+        _msg = f"`checkpoints/`의 파일 {len(_targets)}개, **{_size / 1e9:.2f}GB**를 지웠습니다."
+    else:
+        _msg = f"정리를 건너뛰었습니다. `checkpoints/`에 {len(_targets)}개, {_size / 1e9:.2f}GB가 남아 있습니다."
+    _remaining = sum(f.stat().st_size for f in WS.rglob("*") if f.is_file() and not f.is_symlink())
+    mo.md(f"{_msg} 작업 공간에 남은 파일 크기: {_remaining / 1e9:.2f}GB")
     return
 
 
@@ -1355,7 +1397,7 @@ def _(
         "adam_single_event_ratio": {f"t={k[0]},g={k[1]}": v for k, v in adam_ratio.items()},
     }
     (RUN_DIR / "summary.json").write_text(json.dumps(_summary, ensure_ascii=False, indent=1, default=str))
-    mo.md(f"요약을 `{RUN_DIR.name}/summary.json`에 저장했습니다. 학습 로그와 체크포인트는 `{RUN_DIR.name}/workspace/`에 있습니다 (약 5GB).")
+    mo.md(f"요약을 `{RUN_DIR.name}/summary.json`에 저장했습니다. 학습 로그와 평가용 가중치는 `{RUN_DIR.name}/workspace/`에 있습니다.")
     return
 
 
