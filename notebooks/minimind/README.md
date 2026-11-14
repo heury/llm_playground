@@ -32,6 +32,7 @@ GPU가 없거나 자원이 부족하면 학습 셀을 실행하지 않고 설명
 | [모델 구조](minimind_model_tour.py) | RMSNorm·RoPE·GQA·MLP·CE·생성의 shape와 원본 연산 | 기본 텐서 연산 |
 | [사전 학습](minimind_pretrain_tour.py) | 다음 토큰 라벨·누적·스케줄·체크포인트 | 모델 구조 |
 | [SFT](minimind_sft_tour.py) | assistant 마스크·정체성 학습·망각 | 사전 학습 |
+| [샘플링](minimind_sampling_tour.py) | greedy·temperature·top-k·top-p·repetition penalty, 원본 `generate` 재현 (GPU 필요) | 모델 구조 |
 | [LoRA](minimind_lora_tour.py) | 저랭크 갱신·동결·저장·병합 | 모델 구조, SFT |
 | [DPO](minimind_dpo_tour.py) | 선호 쌍·로그 확률비·reference | SFT |
 | [GRPO](minimind_grpo_tour.py) | rollout·보상·advantage·GRPO/CISPO | SFT, 로그 확률 |
