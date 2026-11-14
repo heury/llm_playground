@@ -274,7 +274,7 @@ def _(mo):
 
     ## 2-4. SO-101 로봇팔 불러오기
 
-    [MuJoCo Menagerie](https://github.com/google-deepmind/mujoco_menagerie)의 `robotstudio_so101` 모델을 씁니다.
+    [MuJoCo Menagerie](https://github.com/google-deepmind/mujoco_menagerie)의 [`robotstudio_so101`](https://live.mujoco.org/?model=github:google-deepmind/mujoco_menagerie/main/robotstudio_so101/scene.xml) 모델을 씁니다.
     처음 실행하면 SO-101 폴더만 `notebooks/physicalai/third_party/`에 내려받습니다(수십 MB).
     SO-101은 오픈소스 저가형 로봇팔이며 LeRobot 커뮤니티가 많이 씁니다.
 

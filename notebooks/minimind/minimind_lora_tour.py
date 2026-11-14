@@ -332,7 +332,7 @@ def _(
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ### 2-2. 정사각형 Linear에만
+    ### 2-2. MiniMind는 정사각형 Linear만 대상으로 선택
 
     ```python
     for name, module in model.named_modules():
@@ -340,8 +340,8 @@ def _(mo):
             ...  # 이 Linear에만 LoRA를 붙입니다
     ```
 
-    조건은 하나입니다. **입력과 출력 크기가 같은(정사각형) `nn.Linear`** 에만 붙입니다.
-    베이스 모델의 Linear를 나열하고, 비교를 위해 GQA를 쓰지 않는 설정(KV head = Query head = 8)으로 만든 같은 크기의 모델도 봅니다.
+    LoRA는 직사각형 Linear에도 적용할 수 있지만, **MiniMind의 `apply_lora`는 정사각형 Linear만 선택**합니다.
+    아래에서 베이스 모델과 GQA를 끈 모델(KV·Query head 모두 8)의 적용 대상을 비교합니다.
     """)
     return
 
@@ -362,7 +362,7 @@ def _(
     def list_linears(model):
         return [
             {"이름": n, "in": m.in_features, "out": m.out_features,
-             "정사각형 → LoRA": "✅" if m.in_features == m.out_features else ""}
+             "MiniMind 적용 대상": "✅" if m.in_features == m.out_features else ""}
             for n, m in model.named_modules()
             if isinstance(m, nn.Linear) and n.startswith(("model.layers.0.", "lm_head"))
         ]
@@ -403,6 +403,12 @@ def _(mo):
     2. `module.forward`를 "원래 결과 + LoRA 결과"를 돌려주는 함수로 **바꿔 끼웁니다**(3절).
 
     LoRA는 `.to(model.device)`로 모델과 같은 장치(GPU)에 만들어집니다. B가 0이므로 LoRA를 붙이기 전과 후의 출력은 **완전히 같아야** 합니다.
+
+    **노트북에서 모델을 복사하는 이유:** 비교·반복 실험에 쓸 베이스 모델을 보존하기 위해
+    `copy.deepcopy(base_model)`로 독립적인 복사본을 만듭니다. 실제 `train_lora.py`는 모델을 새로 로딩한 뒤
+    바로 LoRA를 붙이고 베이스 가중치를 동결하므로 `deepcopy`가 필요 없습니다.
+    복사는 모델을 분리하고, `requires_grad=False`는 파라미터의 기울기 계산을 끕니다.
+    현재 `apply_lora`가 교체한 `forward`는 원본 층을 참조하므로, 이 노트북에서는 **LoRA를 붙이기 전에 복사**합니다.
     """)
     return
 
@@ -419,7 +425,7 @@ def _(
     tokenizer,
     torch,
 ):
-    probe_model = copy.deepcopy(base_model)  # LoRA를 붙이기 "전"에 복사 (3-1절)
+    probe_model = copy.deepcopy(base_model)  # 베이스 모델 보존: 복사본에 LoRA 적용
     probe_ids = tokenizer("The cat sat on the mat.", return_tensors="pt").input_ids.to(device)
 
     with torch.no_grad():
@@ -499,96 +505,9 @@ def _(mo):
     - `module(x)`를 부르면 `nn.Module.__call__`이 `self.forward(x)`를 부릅니다.
       **인스턴스에 넣은 `forward`가 클래스의 `nn.Linear.forward`보다 먼저** 찾아지므로, 이 Linear 하나만 동작이 바뀝니다.
     - 원래 Linear 클래스나 MiniMind 코드를 고치지 않고 LoRA를 끼워 넣는 방법(monkey patching)입니다.
-    - 주석의 "명시적으로 바인딩"이 중요합니다. `layer1=original_forward`처럼 **기본 인자**로 받아야
-      함수를 만드는 순간의 값이 고정됩니다. 기본 인자 없이 바깥 변수를 쓰면 Python은 **호출할 때** 변수를 찾으므로,
-      반복문이 끝난 뒤의 값, 즉 **마지막 Linear**의 것을 모든 층이 쓰게 됩니다.
-
-    작은 2층 모델로 올바른 버전과 잘못된 버전을 비교합니다. (`apply_lora`는 `model.device`를 쓰므로
-    Hugging Face 모델처럼 `device` 속성을 만들어 둡니다.)
+    - `layer1=original_forward`, `layer2=lora`라는 **기본 인자**에 각 층의 원래 `forward`와 LoRA 참조를 저장합니다.
+      그래서 각 Linear가 자기 가중치와 자기 LoRA로 계산합니다. 참조를 저장하는 것이므로 이후 LoRA 가중치의 학습도 반영됩니다.
     """)
-    return
-
-
-@app.cell
-def _(F, LoRA, apply_lora, nn, torch):
-    class TwoLinear(nn.Module):
-        def __init__(self):
-            super().__init__()
-            self.first = nn.Linear(8, 8, bias=False)
-            self.second = nn.Linear(8, 8, bias=False)
-
-        @property
-        def device(self):  # apply_lora가 model.device를 사용합니다.
-            return self.first.weight.device
-
-    def apply_lora_late_binding(model, rank):
-        """원본에서 기본 인자만 뺀 잘못된 버전"""
-        for name, module in model.named_modules():
-            if isinstance(module, nn.Linear) and module.in_features == module.out_features:
-                lora = LoRA(module.in_features, module.out_features, rank=rank)
-                setattr(module, "lora", lora)
-                original_forward = module.forward
-
-                def forward_with_lora(x):
-                    return original_forward(x) + lora(x)  # 호출할 때 변수를 찾음
-
-                module.forward = forward_with_lora
-
-    def lora_expected(linear, x):
-        """Wx + B(A(x))를 원래 정의대로 계산합니다."""
-        return F.linear(x, linear.weight) + linear.lora.B(linear.lora.A(x))
-
-    with torch.random.fork_rng(devices=[]):
-        torch.manual_seed(0)
-        patched_ok, patched_bad = TwoLinear(), TwoLinear()
-        apply_lora(patched_ok, rank=2)
-        apply_lora_late_binding(patched_bad, rank=2)
-        for _m in (patched_ok, patched_bad):  # 학습된 것처럼 B에 값을 넣습니다.
-            for _layer in (_m.first, _m.second):
-                _layer.lora.B.weight.data.normal_(0.0, 0.1)
-        patch_x = torch.randn(1, 8)
-
-    with torch.no_grad():
-        assert "forward" in patched_ok.first.__dict__            # 인스턴스에 새 forward가 들어감
-        assert torch.allclose(patched_ok.first(patch_x), lora_expected(patched_ok.first, patch_x))
-        assert torch.allclose(patched_ok.second(patch_x), lora_expected(patched_ok.second, patch_x))
-
-        # 잘못된 버전: first를 불렀는데 second의 W와 LoRA로 계산됩니다.
-        late_binding_first = patched_bad.first(patch_x)
-        assert torch.allclose(late_binding_first, lora_expected(patched_bad.second, patch_x))
-        assert not torch.allclose(late_binding_first, lora_expected(patched_bad.first, patch_x))
-    return TwoLinear, lora_expected
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    **결과:** 원본 `apply_lora`는 각 Linear가 자기 `W`와 자기 LoRA를 씁니다.
-    기본 인자를 뺀 버전에서는 `first`를 불러도 **`second`의 W와 LoRA로 계산**됩니다(오류 없이 조용히 틀림).
-
-    ### 3-1. 이 방식의 주의점: `deepcopy`
-
-    교체된 `forward`는 **원래 모듈의 메서드와 LoRA를 기본 인자로 붙잡고 있는 함수**입니다.
-    `copy.deepcopy`는 함수를 복사하지 않고 그대로 공유하므로, 복사본의 `forward`도 **원본 모델의 가중치와 LoRA**를 씁니다.
-    그래서 이 노트북은 LoRA를 붙이기 **전**의 모델만 복사합니다.
-    """)
-    return
-
-
-@app.cell
-def _(TwoLinear, apply_lora, copy, lora_expected, torch):
-    with torch.random.fork_rng(devices=[]):
-        torch.manual_seed(0)
-        copy_source = TwoLinear()
-        apply_lora(copy_source, rank=2)
-        copy_after_lora = copy.deepcopy(copy_source)
-        copy_after_lora.first.lora.B.weight.data.normal_(0.0, 0.1)  # 복사본의 LoRA만 바꿈
-        copy_x = torch.randn(1, 8)
-
-    with torch.no_grad():
-        # 복사본을 호출했는데 원본(B = 0)의 결과가 나옵니다.
-        assert torch.equal(copy_after_lora.first(copy_x), copy_source.first(copy_x))
-        assert not torch.allclose(copy_after_lora.first(copy_x), lora_expected(copy_after_lora.first, copy_x))
     return
 
 
@@ -1122,8 +1041,8 @@ def _(mo):
     | 단계 | 원본 | 핵심 |
     | --- | --- | --- |
     | 구조 | `LoRA` | $\Delta W=BA$, rank ≤ r, B=0으로 시작해 처음 출력은 그대로 |
-    | 붙이기 | `apply_lora` | **정사각형 `nn.Linear`만** → 이 모델에서는 `q_proj`, `o_proj` (rank 16: 393,216개, 0.6%) |
-    | 끼워 넣기 | `module.forward` 교체 | $Wx+B(Ax)$, 기본 인자로 층마다 값 고정, LoRA 적용 후 `deepcopy` 금지 |
+    | 붙이기 | `apply_lora` | **MiniMind 구현은 정사각형 `nn.Linear`만 선택** → 이 모델에서는 `q_proj`, `o_proj` (rank 16: 393,216개, 0.6%) |
+    | 끼워 넣기 | `module.forward` 교체 | $Wx+B(Ax)$, 기본 인자로 층마다 값 고정 |
     | 학습 | `train_lora.py` | 이름에 `lora`가 있는 매개변수만 학습, 나머지 고정 |
     | 저장·복원 | `save_lora`, `load_lora` | LoRA 키만 float16 저장(약 1MB), 복원 전 같은 rank로 `apply_lora` |
     | 병합 | `merge_lora` | $W\leftarrow W+BA$, LoRA 없는 일반 모델 |
@@ -1169,6 +1088,122 @@ def _(mo):
 
     *해설:* 이 과제에서는 Full SFT(1e-5)와 LoRA(rank 16, 1e-3) 모두 정체성을 배우고 일반 능력을 대부분 유지합니다.
     LoRA의 장점은 성능보다 **학습·저장 비용**(0.6%의 매개변수, 약 1MB 파일)과 **교체 가능성**에 있습니다.
+    """),
+    })
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ## 9. 심화: 기본 인자와 모델 복사
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(F, LoRA, apply_lora, mo, nn, torch):
+    class TwoLinear(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.first = nn.Linear(8, 8, bias=False)
+            self.second = nn.Linear(8, 8, bias=False)
+
+        @property
+        def device(self):  # apply_lora가 model.device를 사용합니다.
+            return self.first.weight.device
+
+    def apply_lora_late_binding(model, rank):
+        """원본에서 기본 인자만 뺀 잘못된 버전"""
+        for name, module in model.named_modules():
+            if isinstance(module, nn.Linear) and module.in_features == module.out_features:
+                lora = LoRA(module.in_features, module.out_features, rank=rank)
+                setattr(module, "lora", lora)
+                original_forward = module.forward
+
+                def forward_with_lora(x):
+                    return original_forward(x) + lora(x)  # 호출할 때 변수를 찾음
+
+                module.forward = forward_with_lora
+
+    def lora_expected(linear, x):
+        """Wx + B(A(x))를 원래 정의대로 계산합니다."""
+        return F.linear(x, linear.weight) + linear.lora.B(linear.lora.A(x))
+
+    with torch.random.fork_rng(devices=[]):
+        torch.manual_seed(0)
+        patched_ok, patched_bad = TwoLinear(), TwoLinear()
+        apply_lora(patched_ok, rank=2)
+        apply_lora_late_binding(patched_bad, rank=2)
+        for _m in (patched_ok, patched_bad):  # 학습된 것처럼 B에 값을 넣습니다.
+            for _layer in (_m.first, _m.second):
+                _layer.lora.B.weight.data.normal_(0.0, 0.1)
+        patch_x = torch.randn(1, 8)
+
+    with torch.no_grad():
+        assert "forward" in patched_ok.first.__dict__            # 인스턴스에 새 forward가 들어감
+        assert torch.allclose(patched_ok.first(patch_x), lora_expected(patched_ok.first, patch_x))
+        assert torch.allclose(patched_ok.second(patch_x), lora_expected(patched_ok.second, patch_x))
+
+        # 잘못된 버전: first를 불렀는데 second의 W와 LoRA로 계산됩니다.
+        late_binding_first = patched_bad.first(patch_x)
+        assert torch.allclose(late_binding_first, lora_expected(patched_bad.second, patch_x))
+        assert not torch.allclose(late_binding_first, lora_expected(patched_bad.first, patch_x))
+    mo.accordion({
+        "심화: 기본 인자가 없으면 어떤 문제가 생길까? — 두 Linear로 검증": mo.show_code(mo.md(r"""
+    이 예제는 **각 Linear가 자기 가중치와 자기 LoRA로 계산하는지** 확인합니다.
+    LoRA의 학습 성능을 검증하는 코드는 아닙니다.
+
+    `TwoLinear`는 `first`, `second` 두 층을 담습니다. `apply_lora`가 `model.device`를 사용하므로
+    이 예제에도 `device` 속성을 둡니다. `lora_expected`는 교체된 `forward`를 거치지 않고
+    각 층의 가중치와 LoRA로 기대 출력을 직접 계산합니다.
+
+    - **올바른 버전:** 원본 `apply_lora`의 기본 인자가 함수 정의 시 각 층의 참조를 저장합니다.
+      `first`, `second` 모두 자신의 기대 출력과 같습니다.
+    - **잘못된 버전:** 기본 인자를 빼면 호출 시 바깥의 `original_forward`, `lora`를 확인합니다.
+      반복문이 끝난 뒤에는 마지막 층의 값이 남아, `first`도 `second`의 가중치와 LoRA로 계산합니다.
+      두 층의 크기가 같으므로 shape 오류 없이 잘못된 계산이 진행됩니다.
+
+    아래 코드는 `forward` 교체와 위 두 결과를 `assert`로 확인합니다.
+    처음에는 B가 0이므로, LoRA 경로도 검증할 수 있도록 B에 난수를 넣습니다.
+    """)),
+    })
+    return TwoLinear, lora_expected
+
+
+@app.cell(hide_code=True)
+def _(TwoLinear, apply_lora, copy, lora_expected, mo, torch):
+    with torch.random.fork_rng(devices=[]):
+        torch.manual_seed(0)
+        copy_source = TwoLinear()
+        apply_lora(copy_source, rank=2)
+        copy_after_lora = copy.deepcopy(copy_source)
+        copy_after_lora.first.lora.B.weight.data.normal_(0.0, 0.1)  # 복사본의 LoRA만 바꿈
+        copy_x = torch.randn(1, 8)
+
+    with torch.no_grad():
+        # 복사본을 호출했는데 원본(B = 0)의 결과가 나옵니다.
+        assert torch.equal(copy_after_lora.first(copy_x), copy_source.first(copy_x))
+        assert not torch.allclose(copy_after_lora.first(copy_x), lora_expected(copy_after_lora.first, copy_x))
+
+    mo.accordion({
+        "심화: 현재 apply_lora 구현에서 적용 후 deepcopy가 잘못 동작하는 이유": mo.md(r"""
+    교체된 `forward`는 원래 층의 메서드와 LoRA를 **함수의 기본 인자**로 참조합니다.
+    `deepcopy`는 이 함수를 복제하지 않으므로, 복사본의 `forward`도 원본 층을 참조합니다.
+    가중치 객체는 복사되어도 계산은 원본 가중치와 LoRA를 사용하는 것입니다.
+    이는 현재 MiniMind의 `forward` 교체 방식에서 생기는 제약입니다.
+
+    앞의 `TwoLinear`로 확인할 수 있습니다.
+
+    ```python
+    copy_source = TwoLinear()
+    apply_lora(copy_source, rank=2)
+    copy_after_lora = copy.deepcopy(copy_source)
+    copy_after_lora.first.lora.B.weight.data.normal_(0.0, 0.1)
+    ```
+
+    복사본의 LoRA를 바꿔도 `copy_after_lora.first(x)`는 여전히 원본의 출력을 냅니다.
+    이 셀은 출력이 원본과 같고, 복사본 자신의 가중치로 계산한 결과와는 다른지 `assert`로 확인합니다.
     """),
     })
     return

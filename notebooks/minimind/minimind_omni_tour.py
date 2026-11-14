@@ -50,7 +50,7 @@ def _(mo):
     | 2 | 소리를 토큰으로 바꾸기 (Mimi) | 코드북 8개가 각각 무엇을 담당하는가 |
     | 3 | 학습 샘플 만들기 | 9줄짜리 입력과 계단 모양 지연(delay) |
     | 4 | Talker 순전파 해부 | bridge 은닉 상태가 어떻게 Talker로 넘어가는가 |
-    | 5 | GPU 학습 (실험 3개) | Talker만 / 눈 가린 Talker / 전체 학습 |
+    | 5 | GPU 학습 (실험 3개) | Talker만 / 텍스트 정보 차단 / 전체 학습 |
     | 6 | 평가 | 받아 읽기 WER, 자유 대화, 텍스트 능력 보존 |
     | 7 | 스트리밍 | 첫 음성이 나오기까지 몇 단계가 걸리는가 |
     | 8~9 | 스케일 값, 음성 입력 경로 | `text_scale`, `inject_audio_features` |
@@ -756,7 +756,7 @@ def _(STOP, answer_start, np, plt, sample_audio_labels, sample_text_labels):
     _a1.imshow(_img[:, _lo:_end], aspect="auto", cmap="magma", vmin=0, vmax=2.2, interpolation="nearest")
     _a1.set_yticks(range(8), [f"cb{i}" for i in range(8)])
     _a1.set_xticks(range(0, _end - _lo, 10), range(_lo, _end, 10))
-    _a1.set_xlabel("position (labels): dark = no loss, orange = audio code, bright = STOP")
+    _a1.set_xlabel("position (labels): dark = no loss, purple = audio code, bright = STOP")
     _a0.set_title("Loss targets: text labels on top, delayed audio codebooks below")
     _fig.tight_layout()
     _fig
@@ -932,7 +932,7 @@ def _(mo):
     | 실험 | 학습하는 파라미터 | 목적 |
     |---|---|---|
     | **A. Talker만** | `talker.*` (Thinker 고정) | Thinker의 텍스트 능력을 지키면서 목소리만 붙일 수 있는가 |
-    | **B. 눈 가린 Talker** | `talker.*`, 단 `text_scale = 0` 고정 | Thinker 정보 없이 이전 오디오 코드만 보고도 말할 수 있는가 (대조군) |
+    | **B. 텍스트 정보 차단** | `talker.*`, 단 `text_scale = 0` 고정 | Thinker의 텍스트 정보를 차단하고 이전 오디오 코드만으로 예측 (대조군) |
     | **C. 전체** | 모든 파라미터 (원본 `--freeze_backbone none` 기본값) | 텍스트와 음성을 함께 학습할 때 무엇을 얻고 무엇을 잃는가 |
 
     손실은 원본 `train_sft_omni.py`와 같습니다.
@@ -1060,7 +1060,7 @@ def _(base_model, mo, run_training, steps_ui, train_summary):
 
 @app.cell(hide_code=True)
 def _(base_model, mo, run_training, steps_ui, train_summary):
-    with mo.status.spinner("실험 B: 눈 가린 Talker 학습 중..."):
+    with mo.status.spinner("실험 B: 텍스트 정보 차단 학습 중..."):
         model_b, hist_b, info_b = run_training(base_model, "blind", int(steps_ui.value))
     mo.md(train_summary(info_b))
     return hist_b, model_b
@@ -1081,7 +1081,7 @@ def _(hist_a, hist_b, hist_c, np, plt):
         return np.convolve(v, np.ones(w) / w, mode="valid") if len(v) > w else v
 
     _fig, _axes = plt.subplots(1, 3, figsize=(13, 3.4))
-    for _name, _h, _col in [("A talker", hist_a, "C0"), ("B blind", hist_b, "C1"), ("C all", hist_c, "C2")]:
+    for _name, _h, _col in [("A talker", hist_a, "C0"), ("B text blocked", hist_b, "C1"), ("C all", hist_c, "C2")]:
         _axes[0].plot(_smooth(_h["audio"]), label=_name, color=_col)
         _axes[1].plot(_smooth(_h["text"]), label=_name, color=_col)
     _axes[0].set_title("audio loss (mean of 8 codebooks)")
@@ -1109,7 +1109,7 @@ def _(mo):
 
     - A와 B는 Thinker를 고정했으므로 **텍스트 손실이 그대로**입니다. 베이스 모델이 이 답변들을 처음 보는
       문장으로서 예측할 때의 손실입니다. C만 텍스트 손실이 0 가까이 떨어집니다. 학습 문장을 **외운** 것입니다.
-    - B(눈 가림)도 오디오 손실이 꽤 낮아집니다. 학습할 때는 정답 코드가 입력으로 들어오므로(teacher forcing),
+    - B(텍스트 정보 차단)도 오디오 손실이 꽤 낮아집니다. 학습할 때는 정답 코드가 입력으로 들어오므로(teacher forcing),
       처음 몇 프레임만 지나면 이전 소리만 보고도 어느 문장인지 알 수 있기 때문입니다.
       **손실이 낮다고 생성이 잘 되는 것은 아닙니다.** 6절에서 확인합니다.
     """)
@@ -1203,7 +1203,7 @@ def _(
     wer,
 ):
     N_EVAL = 16
-    _models = {"A talker": model_a, "B blind": model_b, "C all": model_c}
+    _models = {"A talker": model_a, "B text blocked": model_b, "C all": model_c}
     read_results = {}
     with mo.status.progress_bar(total=len(_models) * 2 * N_EVAL, title="받아 읽기 평가") as _bar:
         for _name, _m in _models.items():
@@ -1228,7 +1228,7 @@ def _(
 @app.cell(hide_code=True)
 def _(mo, player, read_results):
     def _example(split, idx):
-        items = {n: read_results[(n, split)][idx] for n in ["A talker", "B blind", "C all"]}
+        items = {n: read_results[(n, split)][idx] for n in ["A talker", "B text blocked", "C all"]}
         ref = items["A talker"]["ref"]
         rows = "\n".join(f"| {n} | {it['hyp'] or '(없음)'} | {it['wer']:.2f} |" for n, it in items.items())
         return mo.vstack(
@@ -1452,7 +1452,7 @@ def _(mo):
 def _(base_model, mo, model_a, model_b, model_c, probe_batch, talker_by_hand):
     _rows = []
     scale_stats = {}
-    for _name, _m in [("학습 전", base_model), ("A talker", model_a), ("B blind", model_b), ("C all", model_c)]:
+    for _name, _m in [("학습 전", base_model), ("A talker", model_a), ("B text blocked", model_b), ("C all", model_c)]:
         _parts = talker_by_hand(_m, probe_batch)
         _tn = _parts["text_part"].norm(dim=-1).mean().item()
         _an = _parts["audio_part"].norm(dim=-1).mean().item()
