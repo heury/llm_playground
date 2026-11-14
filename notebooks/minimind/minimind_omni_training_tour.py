@@ -6,6 +6,29 @@ app = marimo.App(width="medium")
 
 @app.cell
 def _():
+    import sys as _display_sys
+    from pathlib import Path as _DisplayPath
+
+    _display_dir = str(_DisplayPath(__file__).resolve().parent)
+    if _display_dir not in _display_sys.path:
+        _display_sys.path.insert(0, _display_dir)
+    from notebook_display import result_table
+
+    return (result_table,)
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    **실행 안내:** 저장소 루트에서 `cd notebooks/minimind` → `uv sync --locked` →
+    `uv run marimo edit minimind_omni_training_tour.py`. 환경·준비물과 권장 순서는 [공통 README](README.md)를 참고하세요.
+    위젯 변경 시 의존 셀이 다시 실행됩니다. 모델 크기·데이터·학습 설정 변경 전에는 해당 절의 재실행 범위를 확인하세요.
+    """)
+    return
+
+
+@app.cell
+def _():
     import marimo as mo
 
     return (mo,)
@@ -45,6 +68,15 @@ def _(mo):
 
     > 원본 코드: [jingyaogong/minimind-o](https://github.com/jingyaogong/minimind-o) (Apache-2.0).
     > 베이스 모델의 라이선스와 학습 데이터 출처는 각 모델 카드를 따릅니다.
+
+
+    **사전 지식:** [Omni 구조](minimind_omni_tour.py)의 9줄 입력·코드북 지연·Thinker/Talker와 [VLM에서 Omni로](minimind_omni_vlm_tour.py)의 능력 보존 실험을 먼저 확인하세요. SFT의 라벨 마스크와 학습 루프를 알고 있다고 가정합니다.
+
+
+    **지표 정의:** 이후 표·해설의 WER은 $\min(1,(S+D+I)/\max(1,N))$로 상한을 1로 제한한 값입니다.
+    $S,D,I$는 단어 대치·삭제·삽입 수, $N$은 정답 단어 수입니다. 일반 WER은 삽입 때문에 1을 넘을 수 있습니다.
+    이 표시에서 1은 원래 오류율이 100% 이상이라는 뜻이며, 모든 단어가 다르다는 뜻은 아닙니다.
+    Whisper의 전사 오류도 섞이므로 발음·음질·화자 유사도를 모두 대변하지 않습니다.
     """)
     return
 
@@ -102,7 +134,6 @@ def _():
         OMNI_DIR,
         OmniConfig,
         OmniDataset,
-        Path,
         REPO_ROOT,
         SiglipImageProcessor,
         SkipBatchSampler,
@@ -135,7 +166,7 @@ def _():
     )
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(mo, torch):
     mo.stop(
         not torch.cuda.is_available(),
@@ -197,7 +228,7 @@ def _(mo):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(
     BASE_REPO,
     BASE_REV,
@@ -258,8 +289,19 @@ def _(mo):
     return
 
 
-@app.cell
-def _(DATA_FILE, DATA_REPO, DATA_REV, WS, hf_hub_download, json, mo, pa, pq, random):
+@app.cell(hide_code=True)
+def _(
+    DATA_FILE,
+    DATA_REPO,
+    DATA_REV,
+    WS,
+    hf_hub_download,
+    json,
+    mo,
+    pa,
+    pq,
+    random,
+):
     N_TRAIN, N_HELDOUT, REPEAT = 64, 16, 16
     _table = pq.read_table(
         hf_hub_download(DATA_REPO, DATA_FILE, repo_type="dataset", revision=DATA_REV),
@@ -291,7 +333,7 @@ def _(DATA_FILE, DATA_REPO, DATA_REV, WS, hf_hub_download, json, mo, pa, pq, ran
         f"필터 통과 {len(_rows):,}개 중 학습 문장 **{N_TRAIN}개 × {REPEAT}회 = {N_TRAIN * REPEAT}행**을 "
         f"`dataset/train_t2a.parquet`로 저장, 확인용 문장 {N_HELDOUT}개는 학습에 쓰지 않습니다."
     )
-    return REPEAT, TRAIN_PARQUET, heldout_rows, train_rows
+    return TRAIN_PARQUET, heldout_rows, train_rows
 
 
 @app.cell(hide_code=True)
@@ -306,7 +348,7 @@ def _(mo):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(
     DataLoader,
     OmniDataset,
@@ -357,7 +399,7 @@ def _(
         + f"\n\n가짜 이미지의 값이 모두 0인가: **{bool((probe_batch[5]['pixel_values'] == 0).all())}**, "
         f"텍스트 줄에 `<|image_pad|>`(12) 개수: **{int((probe_batch[0][:, 8] == 12).sum())}** → 그림 특징이 끼어들 자리가 없습니다."
     )
-    return MAX_SEQ_LEN, probe_batch, script_ds, tokenizer
+    return MAX_SEQ_LEN, probe_batch, tokenizer
 
 
 @app.cell(hide_code=True)
@@ -397,8 +439,8 @@ def _(DEVICE, OmniConfig, SIGLIP_DIR, WS, init_omni_model, warnings):
     return (probe_model,)
 
 
-@app.cell
-def _(mo, probe_model):
+@app.cell(hide_code=True)
+def _(mo, probe_model, result_table):
     def apply_freeze_and_mode(model, freeze_backbone, mode):
         """init_omni_model의 고정 전략 + 스크립트 본문의 --mode 처리를 같은 순서로 재현합니다."""
         for p in model.parameters():
@@ -443,7 +485,7 @@ def _(mo, probe_model):
 
     mo.vstack(
         [
-            mo.ui.table(_rows, selection=None),
+            result_table(_rows, selection=None),
             mo.md(
                 """
     - 임베딩은 `lm_head`와 같은 텐서이므로 `named_parameters()`에는 `model.embed_tokens.weight`로 한 번만 나옵니다.
@@ -469,7 +511,7 @@ def _(mo):
     ```
 
     - `text_loss`: 라벨이 −100이 아닌 텍스트 위치의 평균 CE
-    - `audio_loss`: 코드북마다 `CE × (1 + 9·[정답==STOP])`를 유효 위치 수로 나누고, 8개 코드북 평균
+    - `audio_loss`: 코드북마다 $\mathrm{CE}\,(1+9\,\mathbf{1}[y=\mathrm{STOP}])$를 유효 위치 수로 나누고, 8개 코드북 평균
     - `aux_loss`: MoE 균형 손실(Dense라 0) **+ 쓰이지 않는 모듈 파라미터 합 × 0**
       (`audio_proj`, `vision_proj`, `TalkerHead.adapters`, `spk_proj`). DDP에서 모든 파라미터가 기울기를 받도록 하는 장치입니다.
     """)
@@ -515,7 +557,7 @@ def _(DEVICE, nn, torch):
     return forward_batch, omni_losses
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(forward_batch, mo, omni_losses, probe_batch, probe_model, torch):
     probe_model.train()
     probe_model.zero_grad(set_to_none=True)
@@ -610,7 +652,7 @@ def _(mo):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(forward_batch, mo, omni_losses, probe_batch, probe_model, torch):
     def _talker_grad(batches, scale):
         probe_model.zero_grad(set_to_none=True)
@@ -713,7 +755,7 @@ def _(MAX_SEQ_LEN, TRAIN_SCRIPT, WS, os, re, subprocess, sys, time):
     return log_head, run_script
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(REPO_ROOT, TRAIN_SCRIPT, WS, mo, run_script):
     with mo.status.spinner("full: 전체 학습 중 (원본 스크립트)..."):
         run_full = run_script("sft_full", ["--learning_rate", "2e-4", "--freeze_backbone", "none"], 12)
@@ -727,13 +769,13 @@ def _(REPO_ROOT, TRAIN_SCRIPT, WS, mo, run_script):
     return (run_full,)
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(log_head, mo, run_full):
     mo.md(f"```text\n{log_head(run_full)}\n```")
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(mo, run_script):
     with mo.status.spinner("frozen: Thinker 고정 학습 중 (원본 스크립트)..."):
         run_frozen = run_script("sft_frozen", ["--learning_rate", "5e-4", "--freeze_backbone", "all"], 12)
@@ -742,7 +784,7 @@ def _(mo, run_script):
     return (run_frozen,)
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(log_head, mo, run_frozen):
     mo.md(f"```text\n{log_head(run_frozen)}\n```")
     return
@@ -794,8 +836,8 @@ def _(mo):
     return
 
 
-@app.cell
-def _(WS, mo, run_frozen, run_full, torch):
+@app.cell(hide_code=True)
+def _(WS, mo, result_table, run_frozen, run_full, torch):
     _files = sorted([*(WS / "out").glob("*.pth"), *(WS / "checkpoints").glob("*.pth")])
     _rows = [{"파일": str(f.relative_to(WS)), "크기(MB)": round(f.stat().st_size / 1e6)} for f in _files]
     _resume = torch.load(WS / "checkpoints" / "sft_frozen_768_resume.pth", map_location="cpu", weights_only=False)
@@ -815,7 +857,7 @@ def _(WS, mo, run_frozen, run_full, torch):
     _ = (run_full, run_frozen)  # 학습이 끝난 뒤에 실행되도록 의존성 표시
     mo.vstack(
         [
-            mo.ui.table(_rows, selection=None),
+            result_table(_rows, selection=None),
             mo.md(
                 f"""
     `sft_frozen_768_resume.pth` 내용: 키 `{resume_summary['keys']}`
@@ -850,7 +892,7 @@ def _(mo):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(SkipBatchSampler, mo):
     _demo = list(SkipBatchSampler(list(range(10)), batch_size=3, skip_batches=2))
     mo.md(
@@ -860,7 +902,7 @@ def _(SkipBatchSampler, mo):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(WS, mo, resume_summary, run_script, torch):
     _ = resume_summary  # 6절 체크포인트 확인 뒤에 실행
     _resume_file = WS / "checkpoints" / "sft_resume_768_resume.pth"
@@ -912,14 +954,14 @@ def _(mo):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(mo):
     cleanup_ui = mo.ui.checkbox(value=True, label="재개 실습이 끝나면 checkpoints/의 .pth 삭제 (평가용 out/ 가중치는 남김)")
     cleanup_ui
     return (cleanup_ui,)
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(WS, cleanup_ui, mo, resume_summary, run_resumed):
     _ = (resume_summary, run_resumed)  # 7-1, 7-2가 끝난 뒤에 실행
     _targets = sorted((WS / "checkpoints").glob("*.pth"))
@@ -1110,8 +1152,19 @@ def _(DEVICE, codes_to_wav, tokenizer, torch):
     return chat, read_aloud
 
 
-@app.cell
-def _(eval_models, heldout_rows, json, mo, np, read_aloud, train_rows, transcribe, wer):
+@app.cell(hide_code=True)
+def _(
+    eval_models,
+    heldout_rows,
+    json,
+    mo,
+    np,
+    read_aloud,
+    result_table,
+    train_rows,
+    transcribe,
+    wer,
+):
     N_EVAL = 16
     read_results = {}
     with mo.status.progress_bar(total=len(eval_models) * 2 * N_EVAL, title="받아 읽기 평가") as _bar:
@@ -1132,7 +1185,7 @@ def _(eval_models, heldout_rows, json, mo, np, read_aloud, train_rows, transcrib
                 "| 모델 | WER 학습 문장 | WER 확인용 문장 |\n|---|---|---|\n"
                 + "\n".join(f"| {n} | {read_wer[n + '|train']:.2f} | {read_wer[n + '|heldout']:.2f} |" for n in eval_models)
             ),
-            mo.ui.table(
+            result_table(
                 [
                     {"모델": n, "정답": read_results[(n, "train")][i]["ref"], "Whisper": read_results[(n, "train")][i]["hyp"]}
                     for i in range(3)
@@ -1145,7 +1198,7 @@ def _(eval_models, heldout_rows, json, mo, np, read_aloud, train_rows, transcrib
     return read_results, read_wer
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(mo, read_results):
     _players = []
     for _n in ["base", "full", "frozen"]:
@@ -1159,8 +1212,8 @@ def _(mo, read_results):
     return
 
 
-@app.cell
-def _(Image, OMNI_DIR, chat, eval_models, io, mo):
+@app.cell(hide_code=True)
+def _(Image, OMNI_DIR, chat, eval_models, io, mo, result_table):
     GENERAL_QUESTIONS = ["What is the capital of France?", "Give me one tip for better sleep.", "Name three primary colors."]
     _img_dir = OMNI_DIR.parent / "minimind-v" / "dataset" / "eval_images"
     probe_images = {n: Image.open(_img_dir / n).convert("RGB") for n in ["image-04-yellow-car.jpg", "image-01-golden-dog-balloons.jpg"]}
@@ -1188,9 +1241,9 @@ def _(Image, OMNI_DIR, chat, eval_models, io, mo):
                 f"frozen {ability_same['text']['frozen']} / 그림 질문 {len(probe_images)}개: full {ability_same['image']['full']}, "
                 f"frozen {ability_same['image']['frozen']}"
             ),
-            mo.ui.table([{"질문": q, **{k: v[:90] for k, v in a.items()}} for q, a in ability["text"].items()], selection=None),
+            result_table([{"질문": q, **{k: v[:90] for k, v in a.items()}} for q, a in ability["text"].items()], selection=None),
             mo.hstack([mo.image(_png(img), width=150) for img in probe_images.values()]),
-            mo.ui.table([{"그림": f, **{k: v[:90] for k, v in a.items()}} for f, a in ability["image"].items()], selection=None),
+            result_table([{"그림": f, **{k: v[:90] for k, v in a.items()}} for f, a in ability["image"].items()], selection=None),
         ]
     )
     return (ability_same,)
@@ -1225,8 +1278,8 @@ def _(mo):
     return
 
 
-@app.cell
-def _(WS, mo, run_frozen, run_full, torch):
+@app.cell(hide_code=True)
+def _(WS, mo, result_table, run_frozen, run_full, torch):
     _ = (run_full, run_frozen)
     _base = torch.load(WS / "out" / "llm_768.pth", map_location="cpu")
     _groups = ["model.embed_tokens", "model.layers", "vision_proj"]
@@ -1245,7 +1298,7 @@ def _(WS, mo, run_frozen, run_full, torch):
     assert drift[("sft_frozen", "model.layers")] == 0 and drift[("sft_frozen", "model.embed_tokens")] == 0
     mo.vstack(
         [
-            mo.ui.table(_rows, selection=None),
+            result_table(_rows, selection=None),
             mo.md(
                 "frozen은 Thinker(층, 임베딩)가 **정확히 0**만큼 바뀌었지만 `vision_proj`는 바뀌었습니다. "
                 "그림 특징은 `vision_proj`를 거쳐 Thinker에 들어가므로 그림 답이 달라질 수 있습니다."
@@ -1261,8 +1314,8 @@ def _(mo):
     ### 9-2. 단서 1: 평소 배치에서 `vision_proj`의 기울기는 0이다
 
     4절에서 본 것처럼 이 데이터에는 `<|image_pad|>` 토큰이 없어 그림 특징이 쓰이지 않고, `vision_proj`는 `× 0` 장치로
-    **0 기울기**만 받습니다. AdamW는 0 기울기에 대해 모멘트가 0이면 움직이지 않습니다(가중치 감쇠는 크기를 0.4% 정도 줄일 뿐,
-    늘리지는 못함). 그렇다면 0이 아닌 기울기가 **어딘가에서 가끔** 들어왔다는 뜻입니다.
+    **0 기울기**만 받습니다. 모멘트와 기울기가 모두 0이면 AdamW의 모멘트 갱신 항은 0이지만, weight decay는 여전히 가중치를 줄일 수 있습니다.
+    `grad=None`으로 optimizer에서 제외된 경우와 구분해야 합니다. 이 실행의 감쇠는 크기를 약 0.4% 줄이는 방향입니다. 그렇다면 0이 아닌 기울기가 **어딘가에서 가끔** 들어왔다는 뜻입니다.
 
     ### 9-3. 단서 2: scheduled sampling이 가끔 `<|image_pad|>`를 만든다
 
@@ -1273,8 +1326,8 @@ def _(mo):
     return
 
 
-@app.cell
-def _(OmniDataset, TRAIN_PARQUET, MAX_SEQ_LEN, mo, np, setup_seed, tokenizer):
+@app.cell(hide_code=True)
+def _(MAX_SEQ_LEN, OmniDataset, TRAIN_PARQUET, mo, np, setup_seed, tokenizer):
     _ds = OmniDataset(str(TRAIN_PARQUET), tokenizer, max_length=MAX_SEQ_LEN, image_token_len=64)
     _hits, _label_tokens = 0, []
     for _ep in range(12):
@@ -1300,14 +1353,20 @@ def _(mo):
     ### 9-4. 단서 3: Adam은 드문 기울기를 크게 반영한다
 
     768 step 중 몇 번뿐인 기울기가 정말 눈에 띄는 변화를 만들까요? Adam의 업데이트는 $\hat m / (\sqrt{\hat v} + \epsilon)$이라
-    **기울기의 크기와 무관하게** 원소마다 약 lr 단위로 움직입니다. 한 번 들어온 기울기는 1차 모멘트(감쇠 0.9)로 수십 step 동안
+    epsilon이 작고 모멘트 상태가 비슷한 구간에서는 기울기 크기 변화가 일부 상쇄됩니다.
+    원소별 이동이 항상 lr과 같거나 기울기 크기에 완전히 독립적이라는 뜻은 아닙니다. 한 번 들어온 기울기는 1차 모멘트(감쇠 0.9)로 수십 step 동안
     계속 반영되고, 2차 모멘트(감쇠 0.999)는 천천히 줄어 나눗셈의 분모가 작아집니다. 768 step 중 한 번만 기울기를 주는 실험을 합니다.
+
+
+    AdamW의 원소별 갱신은 $\Delta\theta=-\eta\hat m/(\sqrt{\hat v}+\epsilon)-\eta\lambda\theta$입니다.
+    $\eta$는 학습률, $\hat m,\hat v$는 편향 보정한 1·2차 모멘트, $\epsilon$은 분모 안정화 상수,
+    $\lambda$는 weight decay 계수입니다. 현재 기울기뿐 아니라 누적 상태와 원래 가중치에도 의존합니다.
     """)
     return
 
 
-@app.cell
-def _(drift, mo, torch):
+@app.cell(hide_code=True)
+def _(drift, mo, result_table, torch):
     _rows = []
     adam_ratio = {}
     for _t in [50, 200, 500, 700]:
@@ -1321,7 +1380,7 @@ def _(drift, mo, torch):
             _rows.append({"기울기가 들어온 step": _t, "기울기 크기": _g, "최종 이동량 / lr": f"{adam_ratio[(_t, _g)]:.1f}"})
     mo.vstack(
         [
-            mo.ui.table(_rows, selection=None),
+            result_table(_rows, selection=None),
             mo.md(
                 f"""
     기울기가 **0.001이든 5이든** 단 한 번으로 lr의 약 8~23배만큼 움직입니다.
@@ -1363,7 +1422,7 @@ def _(mo):
 
     알아 둘 점
     - **DDP**: `torchrun`이 `RANK` 환경 변수를 주면 `init_distributed_mode`가 NCCL 그룹을 만들고, `DistributedSampler`로 데이터를 나눕니다.
-      재개 시 GPU 수가 바뀌면 `omni_checkpoint`가 step을 `step × 이전 GPU 수 ÷ 현재 GPU 수`로 환산합니다.
+      재개 시 GPU 수가 바뀌면 `omni_checkpoint`가 step을 $s_{\mathrm{new}}=s_{\mathrm{old}}N_{\mathrm{old}}/N_{\mathrm{new}}$로 환산합니다.
     - `--dtype float16`이면 `GradScaler`가 켜집니다. bfloat16(기본)은 지수 범위가 넓어 스케일러가 필요 없습니다.
     - `--use_compile 1`은 `torch.compile`을 씁니다. 저장할 때 `_orig_mod`를 벗겨 원래 이름으로 저장합니다.
     - `--use_wandb`는 실제로는 `swanlab`을 import합니다.
@@ -1373,7 +1432,7 @@ def _(mo):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(
     RUN_DIR,
     ability_same,
@@ -1426,6 +1485,17 @@ def _(mo):
        그림 답이 베이스와 같아지나요? (원본 파일은 수정하지 말고 사본으로)
     4. **fp16**: `--dtype float16`으로 바꾸면 로그와 재개 파일의 `scaler` 항목이 어떻게 달라지나요?
     5. **STOP 가중치**: 4절의 `omni_losses`에서 `stop_weight=0`일 때 손실이 얼마나 바뀌는지 보고, 학습에서 이 가중치가 없으면 생성 음성의 길이가 어떻게 될지 예상해 보세요.
+
+
+    ### 연습 문제의 관찰 기준
+
+    | 과제 | 힌트·비교 기준 |
+    | --- | --- |
+    | 1. 누적 | batch 8×누적 2와 batch 16의 유효 배치·갱신 횟수를 맞추세요. 가변 유효 토큰 수, 반올림, micro-batch별 LR 때문에 완전 일치는 기대하지 않습니다. |
+    | 2. last1 | 실제 `requires_grad`와 변화한 층을 먼저 확인한 뒤 받아 읽기 WER과 텍스트·그림 답변을 함께 비교하세요. |
+    | 3. projector 고정 | 학습 후 해당 모듈의 변화량이 0인지 확인하세요. 다른 층이 바뀌면 그림 답 전체가 같다는 보장은 없습니다. |
+    | 4. fp16 | CUDA에서 GradScaler 활성 여부와 재개 파일의 scaler state를 확인하세요. bf16에서는 비활성인 경로와 구분합니다. |
+    | 5. STOP | 같은 배치에서 STOP 위치의 손실 차이가 사라지는지 먼저 계산하고, 재학습 시 생성 길이·종료율·WER을 함께 비교하세요. |
     """)
     return
 

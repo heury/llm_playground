@@ -6,6 +6,29 @@ app = marimo.App(width="medium")
 
 @app.cell
 def _():
+    import sys as _display_sys
+    from pathlib import Path as _DisplayPath
+
+    _display_dir = str(_DisplayPath(__file__).resolve().parent)
+    if _display_dir not in _display_sys.path:
+        _display_sys.path.insert(0, _display_dir)
+    from notebook_display import result_table
+
+    return (result_table,)
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    **실행 안내:** 저장소 루트에서 `cd notebooks/minimind` → `uv sync --locked` →
+    `uv run marimo edit minimind_lora_tour.py`. 환경·준비물과 권장 순서는 [공통 README](README.md)를 참고하세요.
+    위젯 변경 시 의존 셀이 다시 실행됩니다. 모델 크기·데이터·학습 설정 변경 전에는 해당 절의 재실행 범위를 확인하세요.
+    """)
+    return
+
+
+@app.cell
+def _():
     import copy
     import json
     import sys
@@ -78,7 +101,8 @@ def _():
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(r"""
+    mo.vstack([
+        mo.md(r"""
     # MiniMind LoRA 구조 따라가기
 
     `projects/minimind/model/model_lora.py`는 60줄 정도의 짧은 파일입니다. 이 파일만으로
@@ -98,23 +122,22 @@ def _(mo):
 
     미세 조정은 이미 학습된 가중치 `W`를 새 데이터에 맞게 조금 바꾸는 일입니다.
 
-    - **전체 미세 조정:** `W` 전체를 바꿉니다. `D × D` 행렬이면 `D²`개를 학습하고 저장해야 합니다.
-    - **LoRA:** `W`는 **고정**하고, 바꿀 양 `ΔW`를 작은 행렬 두 개의 곱 `B·A`로 표현해 그 둘만 학습합니다.
+    - **전체 미세 조정:** `W` 전체를 바꿉니다. $D\times D$ 행렬이면 $D^2$개를 학습하고 저장해야 합니다.
+    - **LoRA:** `W`는 **고정**하고, 바꿀 양 `ΔW`를 작은 행렬 두 개의 곱 $BA$로 표현해 그 둘만 학습합니다.
 
     $$
     h = W x + \underbrace{B A}_{\Delta W} x, \qquad
     A \in \mathbb{R}^{r \times d_{in}},\; B \in \mathbb{R}^{d_{out} \times r},\; r \ll d
     $$
 
-    ```text
-              ┌──────────────────────────┐
-    x ──┬────▶│ W  (원래 Linear, 고정)     │──────────┐
-        │     └──────────────────────────┘          (+)──▶ h
-        │     ┌────────────┐   ┌────────────┐        │
-        └────▶│ A: d → r   │──▶│ B: r → d   │────────┘
-              │ 학습, 무작위 │   │ 학습, 0 시작 │
-              └────────────┘   └────────────┘
-    ```
+    """),
+        mo.mermaid(r"""
+    flowchart LR
+     X["입력 x"] --> W["원래 Linear W: 고정"] --> ADD(("+")) --> Y["출력 h"]
+     X --> A["A: d_in → r, 무작위 초기화, 학습"]
+     A --> B["B: r → d_out, 0 초기화, 학습"] --> ADD
+    """),
+        mo.md(r"""
 
     **파일 속 함수 지도**
 
@@ -124,8 +147,9 @@ def _(mo):
     | `apply_lora` | 정사각형 Linear에 LoRA를 붙이고 `forward`를 교체 | 2, 3 | `train_lora.py`, `eval_llm.py` |
     | (학습 루프) | LoRA 이외 매개변수 고정, LoRA만 최적화 | 4 | `train_lora.py` |
     | `save_lora`, `load_lora` | LoRA 가중치만 저장·복원 | 5 | `train_lora.py`, `eval_llm.py` |
-    | `merge_lora` | `W + B·A`로 합친 일반 모델 저장 | 6 | `scripts/convert_model.py` |
+    | `merge_lora` | $W+BA$로 합친 일반 모델 저장 | 6 | `scripts/convert_model.py` |
     """)
+    ])
     return
 
 
@@ -143,9 +167,9 @@ def _(mo):
     ```
 
     - `nn.Linear`의 가중치는 `[출력, 입력]` 모양입니다. 그래서 `A.weight`는 `[r, d_in]`, `B.weight`는 `[d_out, r]`이고
-      `ΔW = B.weight @ A.weight`는 원래 가중치와 같은 `[d_out, d_in]`입니다.
+      $\Delta W=BA$ (`B.weight @ A.weight`)는 원래 가중치와 같은 `[d_out, d_in]`입니다.
     - 폭이 `r`인 통로를 지나므로 `ΔW`의 **rank(독립된 방향의 수)는 최대 `r`** 입니다. 이름의 "Low-Rank"가 이 뜻입니다.
-    - `B = 0`에서 시작하므로 처음에는 `B(A(x)) = 0`. LoRA를 붙여도 모델 출력이 **처음엔 그대로**입니다.
+    - $B=0$에서 시작하므로 처음에는 $B(Ax)=0$. LoRA를 붙여도 모델 출력이 **처음엔 그대로**입니다.
     - MiniMind 구현에는 다른 라이브러리에 흔한 `alpha / r` 배율과 LoRA dropout이 없습니다. 출력에 `B(A(x))`를 그대로 더합니다.
     """)
     return
@@ -186,23 +210,23 @@ def _(delta_w, delta_w_rank, demo_lora, lora_demo_rank, lora_dim, mo):
     `ΔW = B @ A` `{tuple(delta_w.shape)}`.
 
     - 초기 출력은 모두 0이었습니다.
-    - `B(A(x))`와 `x @ ΔWᵀ`가 같습니다. **LoRA는 원래 Linear에 행렬 하나(ΔW)를 더하는 것과 같습니다.**
+    - `B(A(x))`와 $x\\Delta W^\\top$가 같습니다. **LoRA는 원래 Linear에 행렬 하나(ΔW)를 더하는 것과 같습니다.**
     - `ΔW`는 {lora_dim}×{lora_dim} 행렬이지만 rank는 **{delta_w_rank}** (≤ r = {lora_demo_rank})입니다.
     """)
     return
 
 
 @app.cell(hide_code=True)
-def _(mo):
+def _(mo, result_table):
     _D = 768
     mo.vstack([
         mo.md(r"""
     ### 1-1. 매개변수가 얼마나 줄어드나
 
-    `d_in = d_out = D`인 Linear 하나에서 전체 미세 조정은 `D²`개, LoRA는 `r·(d_in + d_out) = 2rD`개를 학습합니다.
-    MiniMind 기본 크기 `D = 768`로 계산하면:
+    $d_{\mathrm{in}}=d_{\mathrm{out}}=D$인 Linear 하나에서 전체 미세 조정은 $D^2$개, LoRA는 $r(d_{\mathrm{in}}+d_{\mathrm{out}})=2rD$개를 학습합니다.
+    MiniMind 기본 크기 $D=768$로 계산하면:
     """),
-        mo.ui.table(
+        result_table(
             [{"rank r": r, "LoRA 매개변수 (A+B)": f"{r * (_D + _D):,}", "전체 W (D×D)": f"{_D * _D:,}",
               "비율": f"{r * 2 * _D / (_D * _D):.2%}"} for r in [1, 4, 8, 16, 64]],
             selection=None,
@@ -218,7 +242,7 @@ def _(mo):
 
     - **B = 0:** 학습 전 출력이 원래 모델과 똑같아야 합니다. 이미 잘 동작하는 모델을 망가뜨리지 않고 시작합니다.
     - **A ≠ 0:** 둘 다 0이면 기울기가 서로를 곱하므로 **둘 다 영원히 0**입니다.
-      `∂L/∂B`는 `A x`에 비례하고, `∂L/∂A`는 `B`에 비례하기 때문입니다.
+      $\partial\mathcal{L}/\partial B$는 $Ax$에 비례하고, $\partial\mathcal{L}/\partial A$는 `B`에 비례하기 때문입니다.
 
     같은 목표(임의의 출력)를 향해 SGD를 몇 번 돌리며 기울기 크기를 기록해 봅니다.
     """)
@@ -255,9 +279,9 @@ def _(LoRA, lora_dim, torch):
 
 
 @app.cell(hide_code=True)
-def _(init_grads_both_zero, init_grads_original, mo):
+def _(init_grads_both_zero, init_grads_original, mo, result_table):
     mo.vstack([
-        mo.ui.table(
+        result_table(
             [{"step": s,
               "원본 초기화: ‖∂L/∂A‖": f"{a['A']:.2e}", "원본 초기화: ‖∂L/∂B‖": f"{a['B']:.2e}",
               "A=B=0: ‖∂L/∂A‖": f"{b['A']:.2e}", "A=B=0: ‖∂L/∂B‖": f"{b['B']:.2e}"}
@@ -284,7 +308,14 @@ def _(mo):
 
 
 @app.cell
-def _(MiniMindConfig, MiniMindForCausalLM, device, hf_hub_download, json, load_file):
+def _(
+    MiniMindConfig,
+    MiniMindForCausalLM,
+    device,
+    hf_hub_download,
+    json,
+    load_file,
+):
     BASE_REPO = "caspar/MiniMind-Dense-64M-Mixed-SFT-v1.0"
     BASE_REVISION = "v1.0"
 
@@ -295,7 +326,7 @@ def _(MiniMindConfig, MiniMindForCausalLM, device, hf_hub_download, json, load_f
     base_model.to(device).eval()
     assert _missing == ["lm_head.weight"] and not _unexpected       # lm_head는 Embedding과 공유
     assert base_model.lm_head.weight is base_model.model.embed_tokens.weight
-    return BASE_REPO, base_config, base_model
+    return base_config, base_model
 
 
 @app.cell(hide_code=True)
@@ -316,7 +347,14 @@ def _(mo):
 
 
 @app.cell
-def _(MiniMindConfig, MiniMindForCausalLM, base_config, base_model, nn, setup_seed):
+def _(
+    MiniMindConfig,
+    MiniMindForCausalLM,
+    base_config,
+    base_model,
+    nn,
+    setup_seed,
+):
     no_gqa_config = MiniMindConfig(**{**base_config.to_dict(), "num_key_value_heads": base_config.num_attention_heads})
     setup_seed(0)
     no_gqa_model = MiniMindForCausalLM(no_gqa_config)  # 구조 비교용 (CPU, 무작위 가중치)
@@ -335,12 +373,12 @@ def _(MiniMindConfig, MiniMindForCausalLM, base_config, base_model, nn, setup_se
 
 
 @app.cell(hide_code=True)
-def _(base_config, linears_gqa, linears_no_gqa, mo):
+def _(base_config, linears_gqa, linears_no_gqa, mo, result_table):
     mo.vstack([
         mo.md(f"1층(`layers.0`)과 `lm_head`의 Linear (나머지 {base_config.num_hidden_layers - 1}개 층도 같은 구조)"),
         mo.hstack([
-            mo.vstack([mo.md(f"**베이스 모델 (GQA: Query 8 / KV {base_config.num_key_value_heads})**"), mo.ui.table(linears_gqa, selection=None)]),
-            mo.vstack([mo.md("**GQA 없음 (KV 8)**"), mo.ui.table(linears_no_gqa, selection=None)]),
+            mo.vstack([mo.md(f"**베이스 모델 (GQA: Query 8 / KV {base_config.num_key_value_heads})**"), result_table(linears_gqa, selection=None)]),
+            mo.vstack([mo.md("**GQA 없음 (KV 8)**"), result_table(linears_no_gqa, selection=None)]),
         ], widths="equal"),
         mo.md(r"""
     - `q_proj`(768 → 768)와 `o_proj`(768 → 768)는 정사각형이라 LoRA가 붙습니다.
@@ -370,7 +408,17 @@ def _(mo):
 
 
 @app.cell
-def _(apply_lora, base_config, base_model, copy, device, no_gqa_config, no_gqa_model, tokenizer, torch):
+def _(
+    apply_lora,
+    base_config,
+    base_model,
+    copy,
+    device,
+    no_gqa_config,
+    no_gqa_model,
+    tokenizer,
+    torch,
+):
     probe_model = copy.deepcopy(base_model)  # LoRA를 붙이기 "전"에 복사 (3-1절)
     probe_ids = tokenizer("The cat sat on the mat.", return_tensors="pt").input_ids.to(device)
 
@@ -402,14 +450,28 @@ def _(apply_lora, base_config, base_model, copy, device, no_gqa_config, no_gqa_m
     apply_lora(_m, rank=16)
     assert count_lora_params(no_gqa_config, 16) == sum(p.numel() for n, p in _m.named_parameters() if "lora" in n)
     no_gqa_lora_params = count_lora_params(no_gqa_config, 16)
-    return count_lora_params, lora_module_names, lora_param_names, no_gqa_lora_params, params_after, params_before
+    return (
+        lora_module_names,
+        lora_param_names,
+        no_gqa_lora_params,
+        params_after,
+        params_before,
+    )
 
 
 @app.cell(hide_code=True)
-def _(lora_module_names, lora_param_names, mo, no_gqa_lora_params, params_after, params_before):
+def _(
+    lora_module_names,
+    lora_param_names,
+    mo,
+    no_gqa_lora_params,
+    params_after,
+    params_before,
+    result_table,
+):
     mo.vstack([
         mo.md(f"rank 16 LoRA가 붙은 모듈 **{len(lora_module_names)}개** (8개 층 × `q_proj`, `o_proj`). 매개변수 이름 예시:"),
-        mo.ui.table([{"LoRA 매개변수 이름": n} for n in lora_param_names[:6]], selection=None),
+        result_table([{"LoRA 매개변수 이름": n} for n in lora_param_names[:6]], selection=None),
         mo.md(
             f"매개변수 수: {params_before:,} → {params_after:,} "
             f"(LoRA **{params_after - params_before:,}개, {(params_after - params_before) / params_after:.2%}**). "
@@ -643,11 +705,20 @@ def _(F, device, fact_test, general_eval_q, identity_test_q, tokenizer, torch):
             "general_mimi": sum("Mimi" in a for a in general),
             "retention": answer_logp_per_token(model, base_general_pairs),
         }
+
     return ask, evaluate
 
 
 @app.cell
-def _(ask, base_model, evaluate, general_eval_q, make_sft_ds, replay_q, train_pairs):
+def _(
+    ask,
+    base_model,
+    evaluate,
+    general_eval_q,
+    make_sft_ds,
+    replay_q,
+    train_pairs,
+):
     base_general_pairs = [(q, ask(base_model, q)) for q in general_eval_q]   # 망각 측정 기준
     replay_pairs = [(q, ask(base_model, q)) for q in replay_q]               # 섞을 원래 답 (평가와 다른 질문)
     replay_ds = make_sft_ds("identity_replay.jsonl", train_pairs + replay_pairs)
@@ -656,7 +727,17 @@ def _(ask, base_model, evaluate, general_eval_q, make_sft_ds, replay_q, train_pa
 
 
 @app.cell
-def _(DataLoader, SkipBatchSampler, apply_lora, autocast_ctx, copy, device, get_lr, setup_seed, torch):
+def _(
+    DataLoader,
+    SkipBatchSampler,
+    apply_lora,
+    autocast_ctx,
+    copy,
+    device,
+    get_lr,
+    setup_seed,
+    torch,
+):
     def train_lora_model(base, train_ds, args, history=None):
         """train_lora.py의 5단계(LoRA 적용·고정) + train_epoch (DDP·wandb·저장 제외)"""
         model = copy.deepcopy(base)                                    # LoRA를 붙이기 "전"에 복사
@@ -691,6 +772,7 @@ def _(DataLoader, SkipBatchSampler, apply_lora, autocast_ctx, copy, device, get_
                 if history is not None:
                     history.append(loss.item())
         return model.eval(), lora_params
+
     return (train_lora_model,)
 
 
@@ -704,6 +786,9 @@ def _(mo):
 
     - **새 데이터만:** 정체성·Zentor 11개
     - **+ replay:** 평가와 겹치지 않는 일반 질문 8개에 대한 베이스 모델 자신의 답을 섞음
+
+
+    위젯 값을 바꾸면 아래 학습·저장·복원·병합 결과가 다시 계산됩니다. 매번 LoRA를 붙이기 전 베이스 모델의 새 사본에서 시작하며, 이전 LoRA 학습을 이어가지 않습니다.
     """)
     return
 
@@ -718,7 +803,18 @@ def _(mo):
 
 
 @app.cell
-def _(base_general_pairs, base_model, evaluate, identity_ds, lora_data_select, lora_lr_select, lora_rank_select, replay_ds, torch, train_lora_model):
+def _(
+    base_general_pairs,
+    base_model,
+    evaluate,
+    identity_ds,
+    lora_data_select,
+    lora_lr_select,
+    lora_rank_select,
+    replay_ds,
+    torch,
+    train_lora_model,
+):
     lora_args = {"lora_rank": lora_rank_select.value, "learning_rate": lora_lr_select.value,
                  "epochs": 10, "batch_size": 4, "grad_clip": 1.0}
     lora_history = []
@@ -741,11 +837,33 @@ def _(base_general_pairs, base_model, evaluate, identity_ds, lora_data_select, l
     lora_trainable = sum(p.numel() for p in lora_params)
     lora_total = sum(p.numel() for p in lora_model.parameters())
     lora_eval = evaluate(lora_model, base_general_pairs)
-    return lora_args, lora_delta_ranks, lora_eval, lora_history, lora_model, lora_total, lora_trainable
+    return (
+        lora_args,
+        lora_delta_ranks,
+        lora_eval,
+        lora_history,
+        lora_model,
+        lora_total,
+        lora_trainable,
+    )
 
 
 @app.cell(hide_code=True)
-def _(base_eval, fact_test, general_eval_q, identity_test_q, lora_args, lora_delta_ranks, lora_eval, lora_history, lora_total, lora_trainable, mo, plt):
+def _(
+    base_eval,
+    fact_test,
+    general_eval_q,
+    identity_test_q,
+    lora_args,
+    lora_delta_ranks,
+    lora_eval,
+    lora_history,
+    lora_total,
+    lora_trainable,
+    mo,
+    plt,
+    result_table,
+):
     _fig, _ax = plt.subplots(figsize=(4.8, 2.8))
     _ax.plot(lora_history)
     _ax.set_yscale("log")
@@ -770,13 +888,13 @@ def _(base_eval, fact_test, general_eval_q, identity_test_q, lora_args, lora_del
     학습된 ΔW의 rank: `{sorted(set(lora_delta_ranks.values()))}` (≤ r = {lora_args['lora_rank']})
     """),
         ], widths=[1, 1], align="center"),
-        mo.ui.table([
+        result_table([
             {"모델": "베이스", "정체성 (새 표현 4개)": f"{base_eval['identity_ok']}/4", "Zentor (3개)": f"{base_eval['fact_ok']}/3",
              "일반 질문에 Mimi가 섞임": f"{base_eval['general_mimi']}/6", "원래 일반 답 유지도": f"{base_eval['retention']:.3f}"},
             {"모델": "LoRA", "정체성 (새 표현 4개)": f"{lora_eval['identity_ok']}/4", "Zentor (3개)": f"{lora_eval['fact_ok']}/3",
              "일반 질문에 Mimi가 섞임": f"{lora_eval['general_mimi']}/6", "원래 일반 답 유지도": f"{lora_eval['retention']:.3f}"},
         ], selection=None),
-        mo.ui.table([{"질문": q, "베이스": b, "LoRA 적용": l} for q, b, l in zip(_qs, _b, _l)], selection=None, page_size=13),
+        result_table([{"질문": q, "베이스": b, "LoRA 적용": l} for q, b, l in zip(_qs, _b, _l)], selection=None, page_size=13),
         mo.md(r"""
     **읽는 법** (기본 설정 rank 16, lr 1e-3, 새 데이터만)
 
@@ -815,7 +933,19 @@ def _(mo):
 
 
 @app.cell
-def _(apply_lora, base_model, copy, device, load_lora, lora_args, lora_data_dir, lora_model, save_lora, tokenizer, torch):
+def _(
+    apply_lora,
+    base_model,
+    copy,
+    device,
+    load_lora,
+    lora_args,
+    lora_data_dir,
+    lora_model,
+    save_lora,
+    tokenizer,
+    torch,
+):
     lora_path = lora_data_dir / "lora_identity.pth"
     save_lora(lora_model, lora_path)
     saved_lora_state = torch.load(lora_path)
@@ -844,14 +974,29 @@ def _(apply_lora, base_model, copy, device, load_lora, lora_args, lora_data_dir,
 
     lora_file_bytes = lora_path.stat().st_size
     full_model_half_bytes = sum(v.numel() * 2 for v in base_model.state_dict().values())
-    return eval_ids, full_model_half_bytes, lora_file_bytes, lora_path, restore_max_diff, saved_lora_state
+    return (
+        eval_ids,
+        full_model_half_bytes,
+        lora_file_bytes,
+        lora_path,
+        restore_max_diff,
+        saved_lora_state,
+    )
 
 
 @app.cell(hide_code=True)
-def _(full_model_half_bytes, lora_file_bytes, lora_path, mo, restore_max_diff, saved_lora_state):
+def _(
+    full_model_half_bytes,
+    lora_file_bytes,
+    lora_path,
+    mo,
+    restore_max_diff,
+    result_table,
+    saved_lora_state,
+):
     mo.vstack([
         mo.md(f"저장 위치: `{lora_path}` (키 {len(saved_lora_state)}개 = 8개 층 × q·o × A·B, 처음 4개만 표시)"),
-        mo.ui.table([{"키": k, "shape": str(tuple(v.shape)), "dtype": str(v.dtype)}
+        result_table([{"키": k, "shape": str(tuple(v.shape)), "dtype": str(v.dtype)}
                      for k, v in list(saved_lora_state.items())[:4]], selection=None),
         mo.md(f"""
     - LoRA 파일 **{lora_file_bytes / 2**20:.2f} MB** vs 전체 모델(float16, 공유 가중치 중복 포함) 약 **{full_model_half_bytes / 2**20:.0f} MB**
@@ -868,7 +1013,7 @@ def _(mo):
     ## 6. `merge_lora`: LoRA를 원래 가중치에 합치기
 
     추론할 때 LoRA를 따로 두면 Linear마다 계산이 하나씩 더 붙습니다. 1절에서 본 것처럼 LoRA는
-    `W`에 `ΔW = B·A`를 더한 것과 같으므로, **미리 더해 두면** 일반 MiniMind와 똑같은 모델이 됩니다.
+    `W`에 $\Delta W=BA$를 더한 것과 같으므로, **미리 더해 두면** 일반 MiniMind와 똑같은 모델이 됩니다.
 
     ```python
     load_lora(model, lora_path)                                     # 먼저 apply_lora된 모델에 LoRA 값을 채움
@@ -883,7 +1028,21 @@ def _(mo):
 
 
 @app.cell
-def _(F, apply_lora, ask, base_model, copy, eval_ids, general_eval_q, lora_args, lora_data_dir, lora_model, lora_path, merge_lora, torch):
+def _(
+    F,
+    apply_lora,
+    ask,
+    base_model,
+    copy,
+    eval_ids,
+    general_eval_q,
+    lora_args,
+    lora_data_dir,
+    lora_model,
+    lora_path,
+    merge_lora,
+    torch,
+):
     # ① 한 층으로 원리 확인: W + B·A 하나의 Linear가 LoRA가 붙은 Linear와 같은 값을 냅니다.
     _q = lora_model.model.layers[0].self_attn.q_proj
     with torch.no_grad():
@@ -912,11 +1071,25 @@ def _(F, apply_lora, ask, base_model, copy, eval_ids, general_eval_q, lora_args,
     # 모든 가중치가 float16으로 저장되어 생기는 반올림 오차는 LoRA가 만든 변화보다 훨씬 작아야 합니다.
     assert merge_max_diff < base_vs_lora_diff / 5
     merged_file_bytes = merged_path.stat().st_size
-    return base_vs_lora_diff, merge_answer_rows, merge_max_diff, merged_file_bytes, merged_state
+    return (
+        base_vs_lora_diff,
+        merge_answer_rows,
+        merge_max_diff,
+        merged_file_bytes,
+        merged_state,
+    )
 
 
 @app.cell(hide_code=True)
-def _(base_vs_lora_diff, merge_answer_rows, merge_max_diff, merged_file_bytes, merged_state, mo):
+def _(
+    base_vs_lora_diff,
+    merge_answer_rows,
+    merge_max_diff,
+    merged_file_bytes,
+    merged_state,
+    mo,
+    result_table,
+):
     mo.vstack([
         mo.md(f"""
     병합 파일 키 {len(merged_state)}개, `.lora.` 키 없음, 크기 {merged_file_bytes / 2**20:.0f} MB.
@@ -927,7 +1100,7 @@ def _(base_vs_lora_diff, merge_answer_rows, merge_max_diff, merged_file_bytes, m
     | 병합 모델 vs LoRA 모델 | `{merge_max_diff:.2e}` (전체 가중치의 float16 반올림) |
     | 베이스 모델 vs LoRA 모델 (참고) | `{base_vs_lora_diff:.2e}` (LoRA가 만든 변화) |
     """),
-        mo.ui.table(merge_answer_rows, selection=None),
+        result_table(merge_answer_rows, selection=None),
         mo.md(r"""
     **분리 vs 병합**
 
@@ -948,12 +1121,12 @@ def _(mo):
 
     | 단계 | 원본 | 핵심 |
     | --- | --- | --- |
-    | 구조 | `LoRA` | `ΔW = B·A`, rank ≤ r, B=0으로 시작해 처음 출력은 그대로 |
+    | 구조 | `LoRA` | $\Delta W=BA$, rank ≤ r, B=0으로 시작해 처음 출력은 그대로 |
     | 붙이기 | `apply_lora` | **정사각형 `nn.Linear`만** → 이 모델에서는 `q_proj`, `o_proj` (rank 16: 393,216개, 0.6%) |
-    | 끼워 넣기 | `module.forward` 교체 | `W x + B(A(x))`, 기본 인자로 층마다 값 고정, LoRA 적용 후 `deepcopy` 금지 |
+    | 끼워 넣기 | `module.forward` 교체 | $Wx+B(Ax)$, 기본 인자로 층마다 값 고정, LoRA 적용 후 `deepcopy` 금지 |
     | 학습 | `train_lora.py` | 이름에 `lora`가 있는 매개변수만 학습, 나머지 고정 |
     | 저장·복원 | `save_lora`, `load_lora` | LoRA 키만 float16 저장(약 1MB), 복원 전 같은 rank로 `apply_lora` |
-    | 병합 | `merge_lora` | `W ← W + B·A`, LoRA 없는 일반 모델 |
+    | 병합 | `merge_lora` | $W\leftarrow W+BA$, LoRA 없는 일반 모델 |
 
     실제 학습은 `cd projects/minimind/trainer && python train_lora.py --from_weight full_sft --lora_rank 16 --data_path ../dataset/lora_identity.jsonl`
     처럼 실행하고, 결과 `../out/lora_identity_768.pth`를 `eval_llm.py --lora_weight lora_identity`로 불러 씁니다.

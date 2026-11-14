@@ -2,7 +2,10 @@
 
 Use the pinned caspar VLM language/vision weights and tokenizer. Initialize only
 Talker and audio projector from the native upstream Omni checkpoint. Train on
-sft_t2a_mini and sft_a2a_mini, excluding 128 deterministic heldout rows each.
+sft_t2a_mini and sft_a2a_mini, excluding 128 deterministic validation rows and
+128 separate test rows each. Report baseline/final test losses and generate
+three examples from each test split. Check the saved tokenizer's complete
+vocabulary and backend against the base VLM before training.
 Freeze the full VLM and external encoders; verify the original VLM tensors exactly.
 
 Stages: T2A Talker (2e-5), A2A audio projector (1e-4), A2A both (2e-5),
@@ -19,6 +22,11 @@ network volume. A watchdog stops this run's Pod on failure or after 12 hours.
 Hugging Face and Runpod credentials stay on the host.
 
 ## Host capacity monitor
+
+Set `OMNI_RUN_ID`, `OMNI_REMOTE_ROOT`, and `OMNI_HF_REPO` to unique values for
+each new run. `OMNI_MAX_GPU_HOURLY` configures a price ceiling (default $1.19/hour);
+set it from the current catalog price before launching. These are run settings,
+not credentials. The current CLI/template/catalog reads remain authoritative.
 
 `monitor.py` runs only on the host and reads the existing `.env` key in memory.
 It checks Secure Cloud RTX 5090 every 600 seconds for up to 24 hours, with a

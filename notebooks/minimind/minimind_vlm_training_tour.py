@@ -6,6 +6,29 @@ app = marimo.App(width="medium")
 
 @app.cell
 def _():
+    import sys as _display_sys
+    from pathlib import Path as _DisplayPath
+
+    _display_dir = str(_DisplayPath(__file__).resolve().parent)
+    if _display_dir not in _display_sys.path:
+        _display_sys.path.insert(0, _display_dir)
+    from notebook_display import result_table
+
+    return (result_table,)
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    **실행 안내:** 저장소 루트에서 `cd notebooks/minimind` → `uv sync --locked` →
+    `uv run marimo edit minimind_vlm_training_tour.py`. 환경·준비물과 권장 순서는 [공통 README](README.md)를 참고하세요.
+    위젯 변경 시 의존 셀이 다시 실행됩니다. 모델 크기·데이터·학습 설정 변경 전에는 해당 절의 재실행 범위를 확인하세요.
+    """)
+    return
+
+
+@app.cell
+def _():
     import contextlib
     import io
     import json
@@ -54,7 +77,6 @@ def _():
         Logger,
         MiniMindVLM,
         Namespace,
-        Path,
         SkipBatchSampler,
         VLMConfig,
         VLMDataset,
@@ -90,21 +112,25 @@ def _():
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(r"""
-    # MiniMind-V 학습 따라가기: 정렬(Pretrain) → 시각 SFT
+    mo.vstack([
+        mo.md(r"""
+        # MiniMind-V 학습 따라가기: 정렬(Pretrain) → 시각 SFT
 
-    구조 노트북(`minimind_vlm_tour.py`)에서는 VLM이 **이미지 토큰 64개를 문장에 끼워 넣는 언어 모델**이라는 것을 봤습니다.
-    이 노트북은 그 모델을 **어떻게 학습하는지**를 다룹니다. 원본 학습 스크립트 두 개를 따라갑니다.
+        구조 노트북(`minimind_vlm_tour.py`)에서는 VLM이 **이미지 토큰 64개를 문장에 끼워 넣는 언어 모델**이라는 것을 봤습니다.
+        이 노트북은 그 모델을 **어떻게 학습하는지**를 다룹니다. 원본 학습 스크립트 두 개를 따라갑니다.
 
-    ```text
-     llm_768.pth (대화하는 언어 모델)
-        │  ① train_pretrain_vlm.py   그림 설명(캡션) 데이터, Projector만 학습       → pretrain_vlm_768.pth
-        ▼
-     pretrain_vlm_768.pth (그림을 "보는" 모델)
-        │  ② train_sft_vlm.py        질의응답 + 캡션 + 일반 대화, Projector + 첫·마지막 층 → sft_vlm_768.pth
-        ▼
-     sft_vlm_768.pth (그림에 대해 묻고 답하는 모델)
-    ```
+
+
+        **사전 지식:** [VLM 구조](minimind_vlm_tour.py)의 시각 특징·Projector·placeholder 결합과 [사전 학습](minimind_pretrain_tour.py)의 CE·기울기 누적·체크포인트를 먼저 확인하세요.
+    """),
+        mo.mermaid(r"""
+    flowchart TB
+     L["llm_768.pth: 언어 모델"] --> P["train_pretrain_vlm.py: 캡션, Projector만 학습"]
+     P --> W["pretrain_vlm_768.pth: 시각 정렬 가중치"]
+     W --> S["train_sft_vlm.py: 질의응답·캡션·대화, Projector와 첫·마지막 층"]
+     S --> F["sft_vlm_768.pth: 시각 지시 학습 가중치"]
+    """),
+        mo.md(r"""
 
     베이스 언어 모델은 [`caspar/MiniMind-Dense-64M-Mixed-SFT-v1.0`](https://huggingface.co/caspar/MiniMind-Dense-64M-Mixed-SFT-v1.0)입니다.
     학습 루프는 노트북에서 다시 쓰지 않고, 두 스크립트의 **원본 `train_epoch` 함수를 그대로 호출**합니다.
@@ -128,6 +154,7 @@ def _(mo):
     | `--save_weight` | `pretrain_vlm` | `sft_vlm` | 저장 이름 |
     | 옵티마이저 | `AdamW(filter(requires_grad, ...))` | `AdamW(model.parameters())` | 학습할 매개변수만 넘김 / 전부 넘김 |
     """)
+    ])
     return
 
 
@@ -146,8 +173,20 @@ def _(mo):
     return
 
 
-@app.cell
-def _(VLMConfig, device, hf_hub_download, json, load_file, minimind_v_dir, mo, shutil, snapshot_download, tempfile, torch):
+@app.cell(hide_code=True)
+def _(
+    VLMConfig,
+    device,
+    hf_hub_download,
+    json,
+    load_file,
+    minimind_v_dir,
+    mo,
+    shutil,
+    snapshot_download,
+    tempfile,
+    torch,
+):
     mo.stop(device != "cuda", mo.callout(mo.md(
         "**GPU를 찾지 못했습니다.** 이 노트북은 NVIDIA GPU에서 학습하도록 만들었습니다. "
         "`uv run python -c 'import torch; print(torch.cuda.is_available())'`로 확인하세요."), kind="danger"))
@@ -175,23 +214,23 @@ def _(VLMConfig, device, hf_hub_download, json, load_file, minimind_v_dir, mo, s
                               "intermediate_size", "vocab_size", "rope_theta", "rms_norm_eps", "use_moe"]]
     assert all(r["베이스 config.json"] == r["VLMConfig 기본값"] for r in config_check)
     disk_free_gb = shutil.disk_usage(work_dir).free / 1e9
-    return BASE_REPO, config_check, disk_free_gb, work_dir
+    return config_check, disk_free_gb, work_dir
 
 
 @app.cell(hide_code=True)
-def _(config_check, disk_free_gb, mo, work_dir):
+def _(config_check, disk_free_gb, mo, result_table, work_dir):
     _items = [mo.md(f"""
     작업 폴더: `{work_dir}` (남은 공간 **{disk_free_gb:.1f}GB**)
 
-    ```text
-    {work_dir.name}/
-    ├── model/            # tokenizer*.json, chat_template.jinja, siglip2-base-p32-256-ve/
-    ├── out/llm_768.pth   # 베이스 언어 모델 (from_weight='llm')
-    ├── dataset/          # 2절에서 만드는 parquet
-    ├── checkpoints/      # 재개용 상태 (train_epoch가 저장)
-    └── trainer/          # 학습할 때 여기로 이동해서 실행
-    ```
-    """), mo.ui.table(config_check, selection=None),
+    원본 trainer의 상대 경로를 유지하도록 아래 작업 공간을 만듭니다.
+    """), mo.mermaid(f"""
+    flowchart TB
+        ROOT["{work_dir.name}/"] --> MODEL["model/: tokenizer와 SigLIP2"]
+        ROOT --> OUT["out/llm_768.pth: 베이스 언어 모델"]
+        ROOT --> DATA["dataset/: 실습 parquet"]
+        ROOT --> CHECK["checkpoints/: 재개 상태"]
+        ROOT --> TRAIN["trainer/: 학습 실행 위치"]
+    """), result_table(config_check, selection=None),
         mo.md("스크립트가 만드는 `VLMConfig`의 기본값이 베이스 모델 설정과 모두 같으므로, 원본 인자 그대로 가중치를 넣을 수 있습니다.")]
     if disk_free_gb < 3:
         _items.insert(0, mo.callout(mo.md(f"임시 폴더의 남은 공간이 {disk_free_gb:.1f}GB입니다. 약 2GB가 필요합니다. "
@@ -212,7 +251,7 @@ def _(VLMConfig, contextlib, init_vlm_model, io, work_dir):
                                                 device="cuda:0", freeze_llm=2)
     base_vlm.eval()
     base_init_log = _out.getvalue().strip()
-    return base_init_log, base_vlm, in_trainer_dir, tokenizer
+    return base_vlm, in_trainer_dir, tokenizer
 
 
 @app.cell(hide_code=True)
@@ -279,7 +318,16 @@ def _(Image, ImageDraw, io, math):
             for _ in range(2):
                 _a = {"color": _c, "shape": _s, "pos": _rng.choice(["left", "right"]), "size": _rng.choice(["small", "big"])}
                 TEST_ITEMS.append((_a, draw_scene(_c, _s, _a["pos"], _a["size"], _rng)))
-    return COLORS, HELD_OUT, SHAPES, TEST_ITEMS, TRAIN_COMBOS, draw_scene, png_bytes, random_attrs
+    return (
+        COLORS,
+        HELD_OUT,
+        SHAPES,
+        TEST_ITEMS,
+        TRAIN_COMBOS,
+        draw_scene,
+        png_bytes,
+        random_attrs,
+    )
 
 
 @app.cell(hide_code=True)
@@ -354,6 +402,7 @@ def _(MiniMindVLM, autocast_or_not, device, tokenizer, torch):
     def ask(model, img, question, max_new_tokens=20):
         content = ("<image>\n" if img is not None else "") + question
         return generate_reply(model, img, [{"role": "user", "content": content}], max_new_tokens)
+
     return ask, generate_reply, render_prompt
 
 
@@ -364,6 +413,7 @@ def _(contextlib, torch):
         if next(model.parameters()).dtype == torch.float16:
             return contextlib.nullcontext()
         return torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+
     return (autocast_or_not,)
 
 
@@ -381,7 +431,19 @@ def _(ask, base_vlm):
 
 
 @app.cell
-def _(Image, TRAIN_COMBOS, draw_scene, json, pa, png_bytes, pq, random, random_attrs, replay_pairs, work_dir):
+def _(
+    Image,
+    TRAIN_COMBOS,
+    draw_scene,
+    json,
+    pa,
+    png_bytes,
+    pq,
+    random,
+    random_attrs,
+    replay_pairs,
+    work_dir,
+):
     CAPTION_PROMPTS = ["Describe the image.", "What is in this picture?", "Give a short caption for this image."]
     QA = {"color": ("What color is the shape?", "It is {color}."),
           "shape": ("What shape is it?", "It is a {shape}."),
@@ -538,7 +600,7 @@ def _(get_lr, mo, plt):
     _plot = mo.as_html(_fig)
     plt.close(_fig)
     mo.hstack([_plot, mo.md(r"""
-    `get_lr(step, total, lr) = lr × (0.1 + 0.45 × (1 + cos(π·step/total)))`
+    $\eta(s)=\eta_0[0.1+0.45(1+\cos(\pi s/S))]$($s$는 step, $S$는 total)
 
     처음 `lr`에서 시작해 코사인 곡선으로 줄어들고, 끝에서는 **`lr`의 10%** 에서 멈춥니다(0까지 내려가지 않음).
     warmup은 없습니다. 언어 모델 학습 스크립트들과 같은 함수입니다.
@@ -547,7 +609,25 @@ def _(get_lr, mo, plt):
 
 
 @app.cell
-def _(Logger, Namespace, SkipBatchSampler, VLMConfig, VLMDataset, contextlib, in_trainer_dir, init_vlm_model, io, os, pretrain_script, re, setup_seed, torch, vlm_checkpoint, vlm_collate_fn, work_dir):
+def _(
+    Logger,
+    Namespace,
+    SkipBatchSampler,
+    VLMConfig,
+    VLMDataset,
+    contextlib,
+    in_trainer_dir,
+    init_vlm_model,
+    io,
+    os,
+    pretrain_script,
+    re,
+    setup_seed,
+    torch,
+    vlm_checkpoint,
+    vlm_collate_fn,
+    work_dir,
+):
     from torch.utils.data import DataLoader as _DataLoader
 
     def script_args(script, **overrides):
@@ -641,11 +721,25 @@ def _(Logger, Namespace, SkipBatchSampler, VLMConfig, VLMDataset, contextlib, in
         """재개용 파일(checkpoints/)은 크므로 다 쓴 뒤 지웁니다. 추론용 out/ 가중치는 남깁니다."""
         for p in (work_dir / "checkpoints").glob(f"{weight}_768*"):
             p.unlink()
-    return SimulatedCrash, file_sizes, remove_resume_files, run_stage, script_args
+
+    return file_sizes, remove_resume_files, run_stage, script_args
 
 
 @app.cell
-def _(F, QA, TEST_ITEMS, TEXT_EVAL_Q, HELD_OUT, ask, autocast_or_not, base_text_answers, device, render_prompt, tokenizer, torch):
+def _(
+    F,
+    HELD_OUT,
+    QA,
+    TEST_ITEMS,
+    TEXT_EVAL_Q,
+    ask,
+    autocast_or_not,
+    base_text_answers,
+    device,
+    render_prompt,
+    tokenizer,
+    torch,
+):
     @torch.no_grad()
     def text_retention(model):
         """이미지 없는 일반 질문에 대한 베이스 모델의 원래 답을, 이 모델이 얼마나 그대로 낼 수 있는지 (토큰당 평균 log p)"""
@@ -681,11 +775,12 @@ def _(F, QA, TEST_ITEMS, TEXT_EVAL_Q, HELD_OUT, ask, autocast_or_not, base_text_
         return {"모델": name, "캡션 (학습 조합)": f"{r['seen_caption']:.0%}", "캡션 (제외 조합)": f"{r['held_caption']:.0%}",
                 "질의응답 (학습 조합)": f"{r['seen_qa']:.0%}", "질의응답 (제외 조합)": f"{r['held_qa']:.0%}",
                 "'It is ...' 형식": f"{r['held_format']:.0%}", "언어 능력 유지 (log p)": f"{r['retention']:.3f}"}
+
     return eval_row, evaluate
 
 
 @app.cell
-def _(evaluate, base_vlm):
+def _(base_vlm, evaluate):
     base_eval = evaluate(base_vlm)
     return (base_eval,)
 
@@ -705,7 +800,19 @@ def _(mo):
 
 
 @app.cell
-def _(TEST_ITEMS, ask, evaluate, file_sizes, pretrain_script, remove_resume_files, run_stage, script_args, time, torch, work_dir):
+def _(
+    TEST_ITEMS,
+    ask,
+    evaluate,
+    file_sizes,
+    pretrain_script,
+    remove_resume_files,
+    run_stage,
+    script_args,
+    time,
+    torch,
+    work_dir,
+):
     args_pre = script_args(pretrain_script, max_seq_len=128)
     _t0 = time.time()
     _model, pre_log, pre_losses = run_stage(pretrain_script, args_pre)
@@ -722,11 +829,32 @@ def _(TEST_ITEMS, ask, evaluate, file_sizes, pretrain_script, remove_resume_file
     remove_resume_files("pretrain_vlm")
     del _model
     torch.cuda.empty_cache()
-    return args_pre, pre_ckpt_info, pre_eval, pre_example, pre_log, pre_losses, pre_out_sizes, pre_seconds
+    return (
+        args_pre,
+        pre_ckpt_info,
+        pre_eval,
+        pre_example,
+        pre_log,
+        pre_losses,
+        pre_out_sizes,
+        pre_seconds,
+    )
 
 
 @app.cell(hide_code=True)
-def _(args_pre, base_eval, eval_row, mo, plt, pre_eval, pre_log, pre_losses, pre_out_sizes, pre_seconds):
+def _(
+    args_pre,
+    base_eval,
+    eval_row,
+    mo,
+    plt,
+    pre_eval,
+    pre_log,
+    pre_losses,
+    pre_out_sizes,
+    pre_seconds,
+    result_table,
+):
     _lines = pre_log.splitlines()
     _shown = [l for l in _lines if "Params" in l] + [l for l in _lines if "Epoch" in l][:2] + ["..."] + \
              [l for l in _lines if f"({len(pre_losses) // args_pre.epochs}/" in l]
@@ -741,7 +869,7 @@ def _(args_pre, base_eval, eval_row, mo, plt, pre_eval, pre_log, pre_losses, pre
         mo.md(f"GPU 학습 {len(pre_losses)} step + 평가: **{pre_seconds:.0f}초**. 원본 `Logger` 출력 일부:"),
         mo.md("```text\n" + "\n".join(_shown) + "\n```"),
         _plot,
-        mo.ui.table([eval_row("학습 전 (무작위 Projector)", base_eval), eval_row("① pretrain_vlm", pre_eval)], selection=None),
+        result_table([eval_row("학습 전 (무작위 Projector)", base_eval), eval_row("① pretrain_vlm", pre_eval)], selection=None),
         mo.md(f"`out/` 폴더: `{pre_out_sizes}`"),
     ])
     return
@@ -791,7 +919,16 @@ def _(mo):
 
 
 @app.cell
-def _(evaluate, remove_resume_files, run_stage, script_args, sft_lr, sft_script, time, torch):
+def _(
+    evaluate,
+    remove_resume_files,
+    run_stage,
+    script_args,
+    sft_lr,
+    sft_script,
+    time,
+    torch,
+):
     args_sft = script_args(sft_script, max_seq_len=128, learning_rate=sft_lr.value)
     _t0 = time.time()
     _model, sft_log, sft_losses = run_stage(sft_script, args_sft)
@@ -800,11 +937,19 @@ def _(evaluate, remove_resume_files, run_stage, script_args, sft_lr, sft_script,
     remove_resume_files("sft_vlm")  # out/sft_vlm_768.pth는 8절에서 사용
     del _model
     torch.cuda.empty_cache()
-    return args_sft, sft_eval, sft_log, sft_losses, sft_seconds
+    return args_sft, sft_eval, sft_losses, sft_seconds
 
 
 @app.cell
-def _(args_sft, evaluate, remove_resume_files, run_stage, sft_script, torch, vars_copy):
+def _(
+    args_sft,
+    evaluate,
+    remove_resume_files,
+    run_stage,
+    sft_script,
+    torch,
+    vars_copy,
+):
     sft_variants = {}
     for _name, _over in [("정렬 생략 (from llm)", {"from_weight": "llm", "save_weight": "sft_skip"}),
                          ("질의응답만", {"data_path": "../dataset/sft_qa_only.parquet", "save_weight": "sft_qa"})]:
@@ -821,11 +966,24 @@ def _(Namespace):
     def vars_copy(args, **overrides):
         """Namespace 복사본에 일부 인자만 바꿔 넣기 (명령줄에서 --인자 하나만 바꾸는 것과 같음)"""
         return Namespace(**{**vars(args), **overrides})
+
     return (vars_copy,)
 
 
 @app.cell(hide_code=True)
-def _(args_sft, base_eval, eval_row, mo, plt, pre_eval, sft_eval, sft_losses, sft_seconds, sft_variants):
+def _(
+    args_sft,
+    base_eval,
+    eval_row,
+    mo,
+    plt,
+    pre_eval,
+    result_table,
+    sft_eval,
+    sft_losses,
+    sft_seconds,
+    sft_variants,
+):
     _fig, _ax = plt.subplots(figsize=(6.5, 2.8))
     _ax.plot(sft_losses, lw=0.8, label="SFT (from pretrain_vlm)")
     _ax.plot(sft_variants["정렬 생략 (from llm)"]["losses"], lw=0.8, label="SFT, skip stage 1 (from llm)")
@@ -842,9 +1000,9 @@ def _(args_sft, base_eval, eval_row, mo, plt, pre_eval, sft_eval, sft_losses, sf
         mo.md(f"SFT 설정: lr={args_sft.learning_rate}, batch {args_sft.batch_size}, {args_sft.epochs} epochs, "
               f"`freeze_llm={args_sft.freeze_llm}` · SFT 1회 학습 + 평가 **{sft_seconds:.0f}초**"),
         _plot,
-        mo.ui.table(_rows, selection=None),
+        result_table(_rows, selection=None),
         mo.md("**속성별 질의응답 정답률 (제외 조합 12장)**"),
-        mo.ui.table(_attr, selection=None),
+        result_table(_attr, selection=None),
     ])
     return
 
@@ -871,10 +1029,17 @@ def _(mo):
 
 
 @app.cell(hide_code=True)
-def _(TEXT_EVAL_Q, base_text_answers, mo, sft_eval, sft_variants):
+def _(
+    TEXT_EVAL_Q,
+    base_text_answers,
+    mo,
+    result_table,
+    sft_eval,
+    sft_variants,
+):
     mo.vstack([
         mo.md("**이미지 없는 일반 질문의 답** (언어 능력이 어떻게 변했는지 직접 보기)"),
-        mo.ui.table([{"질문": q, "베이스": b, "② SFT": s, "정렬 생략": k, "질의응답만": o}
+        result_table([{"질문": q, "베이스": b, "② SFT": s, "정렬 생략": k, "질의응답만": o}
                      for q, b, s, k, o in zip(TEXT_EVAL_Q, base_text_answers, sft_eval["text_answers"],
                                               sft_variants["정렬 생략 (from llm)"]["eval"]["text_answers"],
                                               sft_variants["질의응답만"]["eval"]["text_answers"])], selection=None),
@@ -926,7 +1091,15 @@ def _(args_sft, file_sizes, run_stage, sft_script, torch, vars_copy, work_dir):
 
 
 @app.cell
-def _(args_crash, crash_losses, remove_resume_files, run_stage, sft_script, torch, vars_copy):
+def _(
+    args_crash,
+    crash_losses,
+    remove_resume_files,
+    run_stage,
+    sft_script,
+    torch,
+    vars_copy,
+):
     _ = crash_losses  # 중단 실행이 끝난 뒤에 재개
     args_resume = vars_copy(args_crash, from_resume=1)
     _model, resume_log, resume_losses = run_stage(sft_script, args_resume)
@@ -937,7 +1110,20 @@ def _(args_crash, crash_losses, remove_resume_files, run_stage, sft_script, torc
 
 
 @app.cell(hide_code=True)
-def _(args_sft, crash_log, crash_losses, crash_sizes, mo, plt, pre_ckpt_info, resume_ckpt_info, resume_log, resume_losses, sft_losses):
+def _(
+    args_sft,
+    crash_log,
+    crash_losses,
+    crash_sizes,
+    mo,
+    plt,
+    pre_ckpt_info,
+    result_table,
+    resume_ckpt_info,
+    resume_log,
+    resume_losses,
+    sft_losses,
+):
     _start = len(sft_losses) - len(resume_losses)  # 재개한 전역 step
     _iters = len(sft_losses) // args_sft.epochs
     _fig, _ax = plt.subplots(figsize=(6.5, 2.8))
@@ -965,7 +1151,7 @@ def _(args_sft, crash_log, crash_losses, crash_sizes, mo, plt, pre_ckpt_info, re
       다음 epoch **{_mean([a for a, _ in _next_epoch]):.3f} / {_mean([b for _, b in _next_epoch]):.3f}**
         """),
         mo.md("**재개용 체크포인트 들여다보기**"),
-        mo.ui.table([{"항목": k, "SFT (`sft_resume_768_resume.pth`)": str(v)} for k, v in resume_ckpt_info.items()], selection=None),
+        result_table([{"항목": k, "SFT (`sft_resume_768_resume.pth`)": str(v)} for k, v in resume_ckpt_info.items()], selection=None),
         mo.md(f"""
     - pretrain의 옵티마이저(`filter(requires_grad)`): param_groups {pre_ckpt_info['param_groups 안의 매개변수']}개, Adam 상태 {pre_ckpt_info['Adam 상태가 있는 매개변수']}개
     - 파일 크기: `{crash_sizes}`
@@ -1171,7 +1357,7 @@ def _(mo):
     return (cleanup_button,)
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(cleanup_button, mo, shutil, work_dir):
     mo.stop(not cleanup_button.value, mo.md(f"*작업 폴더 `{work_dir}`는 노트북을 닫아도 남습니다. 다 쓴 뒤 버튼을 누르세요.*"))
     shutil.rmtree(work_dir, ignore_errors=True)

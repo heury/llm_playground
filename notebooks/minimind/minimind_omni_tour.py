@@ -6,6 +6,29 @@ app = marimo.App(width="medium")
 
 @app.cell
 def _():
+    import sys as _display_sys
+    from pathlib import Path as _DisplayPath
+
+    _display_dir = str(_DisplayPath(__file__).resolve().parent)
+    if _display_dir not in _display_sys.path:
+        _display_sys.path.insert(0, _display_dir)
+    from notebook_display import result_table
+
+    return (result_table,)
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    **실행 안내:** 저장소 루트에서 `cd notebooks/minimind` → `uv sync --locked` →
+    `uv run marimo edit minimind_omni_tour.py`. 환경·준비물과 권장 순서는 [공통 README](README.md)를 참고하세요.
+    위젯 변경 시 의존 셀이 다시 실행됩니다. 모델 크기·데이터·학습 설정 변경 전에는 해당 절의 재실행 범위를 확인하세요.
+    """)
+    return
+
+
+@app.cell
+def _():
     import marimo as mo
 
     return (mo,)
@@ -39,6 +62,15 @@ def _(mo):
 
     > 원본 코드: [jingyaogong/minimind-o](https://github.com/jingyaogong/minimind-o) (Apache-2.0).
     > 베이스 모델의 라이선스와 학습 데이터 출처는 모델 카드를 따릅니다.
+
+
+    **사전 지식:** [SFT](minimind_sft_tour.py)의 assistant 정답 마스크·학습 루프와 [VLM 구조](minimind_vlm_tour.py)의 Projector·placeholder 치환을 먼저 확인하세요.
+
+
+    **지표 정의:** 이후 표·해설의 WER은 $\min(1,(S+D+I)/\max(1,N))$로 상한을 1로 제한한 값입니다.
+    $S,D,I$는 단어 대치·삭제·삽입 수, $N$은 정답 단어 수입니다. 일반 WER은 삽입 때문에 1을 넘을 수 있습니다.
+    이 표시에서 1은 원래 오류율이 100% 이상이라는 뜻이며, 모든 단어가 다르다는 뜻은 아닙니다.
+    Whisper의 전사 오류도 섞이므로 발음·음질·화자 유사도를 모두 대변하지 않습니다.
     """)
     return
 
@@ -111,7 +143,6 @@ def _():
         MimiModel,
         MiniMindForCausalLM,
         MiniMindOmni,
-        OMNI_DIR,
         OmniConfig,
         OmniDataset,
         Path,
@@ -141,7 +172,7 @@ def _():
     )
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(mo, torch):
     mo.stop(
         not torch.cuda.is_available(),
@@ -230,10 +261,10 @@ def _(
 
     _state = {k: v.float() for k, v in load_file(base_dir / "model.safetensors").items()}
     load_report = base_model.load_state_dict(_state, strict=False)
-    return base_dir, base_model, load_report, omni_config, tokenizer
+    return base_model, load_report, omni_config, tokenizer
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(base_model, load_report, mo, omni_config):
     _missing_groups = {}
     for _k in load_report.missing_keys:
@@ -311,7 +342,7 @@ def _(mo):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(DEVICE, MiniMindForCausalLM, base_model, mo, tokenizer, torch):
     def prompt_ids(question):
         """채팅 템플릿을 적용하고, 모델 카드 안내대로 빈 think 블록을 제거합니다."""
@@ -371,13 +402,13 @@ def _(DEVICE, prompt_ids, tokenizer, torch):
     return GENERAL_QUESTIONS, chat_text
 
 
-@app.cell
-def _(GENERAL_QUESTIONS, base_model, chat_text, mo, torch):
+@app.cell(hide_code=True)
+def _(GENERAL_QUESTIONS, base_model, chat_text, result_table, torch):
     base_answers = {}
     for _q in GENERAL_QUESTIONS:
         torch.manual_seed(0)
         base_answers[_q] = chat_text(base_model, _q)
-    mo.ui.table([{"질문": q, "베이스 답변": a} for q, a in base_answers.items()], selection=None)
+    result_table([{"질문": q, "베이스 답변": a} for q, a in base_answers.items()], selection=None)
     return (base_answers,)
 
 
@@ -401,7 +432,7 @@ def _(mo):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(
     ASR_REPO,
     ASR_REV,
@@ -461,7 +492,7 @@ def _(
         f"Mimi: {mimi.config.frame_rate} 프레임/초, 코드북 크기 {mimi.config.codebook_size}, "
         f"샘플링 {SAMPLE_RATE}Hz (Mimi는 코드북을 최대 {mimi.config.num_quantizers}개까지 지원하지만 MiniMind-O는 앞 8개만 사용)"
     )
-    return SAMPLE_RATE, codes_to_wav, player, transcribe, wer
+    return codes_to_wav, player, transcribe, wer
 
 
 @app.cell(hide_code=True)
@@ -471,7 +502,7 @@ def _(mo):
 
     작은 GPU에서 몇 분 만에 결과를 보려면 짧고 깨끗한 샘플만 써야 합니다. 다음 조건으로 거릅니다.
 
-    - 한 턴 대화(질문 1개 + 답변 1개), 화자 임베딩(`spk_emb`)이 없는 샘플 → 목소리가 하나로 통일됨
+    - 한 턴 대화(질문 1개 + 답변 1개), 화자 임베딩(`spk_emb`)이 없는 샘플 → 별도 화자 조건 벡터를 사용하지 않음(단일 화자인지는 별도 확인 필요)
     - 답변 음성 20~60프레임 (1.6~4.8초)
     - 질문과 답변이 ASCII(영어)이고 질문은 120자 이하
     - 말하는 속도가 초당 10~22자 → 텍스트와 음성이 어긋난 샘플 제외
@@ -480,7 +511,7 @@ def _(mo):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(DATA_FILE, DATA_REPO, DATA_REV, hf_hub_download, json, mo, pq, random):
     data_path = hf_hub_download(DATA_REPO, DATA_FILE, repo_type="dataset", revision=DATA_REV)
     _table = pq.read_table(data_path, columns=["conversations", "answer_audios", "spk_emb"])
@@ -507,7 +538,7 @@ def _(DATA_FILE, DATA_REPO, DATA_REV, hf_hub_download, json, mo, pq, random):
     return (all_rows,)
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(all_rows, codes_to_wav, json, mo, player, torch, transcribe):
     def row_codes(row):
         """펼쳐진 코드 → [8, 프레임 수]"""
@@ -559,8 +590,18 @@ def _(mo):
     return
 
 
-@app.cell
-def _(all_rows, codes_to_wav, json, mo, np, player, row_codes, transcribe, wer):
+@app.cell(hide_code=True)
+def _(
+    all_rows,
+    codes_to_wav,
+    json,
+    mo,
+    np,
+    player,
+    row_codes,
+    transcribe,
+    wer,
+):
     _ks = [1, 2, 4, 8]
     _scores = {k: [] for k in _ks}
     _players = []
@@ -587,7 +628,7 @@ def _(all_rows, codes_to_wav, json, mo, np, player, row_codes, transcribe, wer):
             mo.hstack(_players, wrap=True),
         ]
     )
-    return (rvq_wer,)
+    return
 
 
 @app.cell(hide_code=True)
@@ -601,7 +642,7 @@ def _(mo):
     - 8줄: 텍스트 토큰 (Thinker 입력)
 
     텍스트와 오디오는 **같은 위치 축**을 공유합니다. 답변 텍스트가 시작되는 위치를 `S`라 하면,
-    코드북 `i`의 첫 코드는 `S + i + 1` 위치에 놓입니다. 즉 코드북마다 한 칸씩 늦게 시작하는 **계단 모양**이 됩니다.
+    코드북 `i`의 첫 코드는 $S+i+1$ 위치에 놓입니다. 즉 코드북마다 한 칸씩 늦게 시작하는 **계단 모양**이 됩니다.
 
     이렇게 하면 한 위치에서 8개 코드북을 동시에 예측하더라도, 같은 프레임의 앞 코드북(더 거친 정보)은
     이미 앞 위치에서 입력으로 들어와 있습니다. 대신 마지막 코드북까지 다 나와야 프레임 하나가 완성되므로
@@ -612,7 +653,7 @@ def _(mo):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(mo):
     n_train_ui = mo.ui.dropdown(options=["32", "64", "128", "256"], value="64", label="학습 문장 수")
     steps_ui = mo.ui.dropdown(options=["400", "800", "1600"], value="800", label="학습 step 수 (실험마다)")
@@ -625,8 +666,18 @@ def _(mo):
     return n_train_ui, steps_ui
 
 
-@app.cell
-def _(OmniDataset, Path, all_rows, mo, n_train_ui, pa, pq, tempfile, tokenizer):
+@app.cell(hide_code=True)
+def _(
+    OmniDataset,
+    Path,
+    all_rows,
+    mo,
+    n_train_ui,
+    pa,
+    pq,
+    tempfile,
+    tokenizer,
+):
     OMNI_MAX_LEN = 160  # 질문(~40토큰) + 음성(≤60프레임 + 지연 8)이 들어가는 길이
     N_HELDOUT = 16
     heldout_rows = all_rows[:N_HELDOUT]
@@ -644,8 +695,8 @@ def _(OmniDataset, Path, all_rows, mo, n_train_ui, pa, pq, tempfile, tokenizer):
     return OMNI_MAX_LEN, heldout_rows, inspect_ds, train_ds, train_rows
 
 
-@app.cell
-def _(inspect_ds, mo, omni_config, setup_seed, tokenizer, torch):
+@app.cell(hide_code=True)
+def _(inspect_ds, mo, omni_config, result_table, setup_seed, tokenizer, torch):
     setup_seed(1)
     sample_x, sample_text_labels, sample_audio_labels, *_ = inspect_ds[0]
 
@@ -683,7 +734,7 @@ def _(inspect_ds, mo, omni_config, setup_seed, tokenizer, torch):
     아래 표는 **입력** 텐서(라벨보다 한 칸 늦음)이고, `·`는 `audio_pad`입니다.
     """
             ),
-            mo.ui.table(_cells, selection=None, page_size=16),
+            result_table(_cells, selection=None, page_size=16),
         ]
     )
     return PAD, STOP, answer_start, sample_audio_labels, sample_text_labels
@@ -712,7 +763,7 @@ def _(STOP, answer_start, np, plt, sample_audio_labels, sample_text_labels):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(OMNI_MAX_LEN, STOP, mo, setup_seed, train_ds):
     # 모든 학습 샘플이 길이 안에 들어가는지(STOP까지 잘리지 않는지) 확인합니다.
     setup_seed(0)
@@ -779,7 +830,7 @@ def _(DEVICE, DataLoader, omni_collate_fn, setup_seed, torch, train_ds):
     return probe_batch, talker_by_hand
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(base_model, mo, probe_batch, talker_by_hand, torch):
     with torch.no_grad():
         _ref = base_model(probe_batch)
@@ -852,7 +903,7 @@ def _(DEVICE, codes_to_wav, prompt_ids, tokenizer, torch):
     return (speak,)
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(base_model, json, mo, player, speak, train_rows, transcribe):
     _q = json.loads(train_rows[0]["conversations"])[0]["content"]
     _text, _wav, _n = speak(base_model, _q)
@@ -903,8 +954,8 @@ def _(mo):
 def _(
     DEVICE,
     DataLoader,
-    SkipBatchSampler,
     STOP,
+    SkipBatchSampler,
     copy,
     get_lr,
     nn,
@@ -999,28 +1050,28 @@ def _(
     return run_training, train_summary
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(base_model, mo, run_training, steps_ui, train_summary):
     with mo.status.spinner("실험 A: Talker만 학습 중..."):
         model_a, hist_a, info_a = run_training(base_model, "talker", int(steps_ui.value))
     mo.md(train_summary(info_a))
-    return hist_a, info_a, model_a
+    return hist_a, model_a
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(base_model, mo, run_training, steps_ui, train_summary):
     with mo.status.spinner("실험 B: 눈 가린 Talker 학습 중..."):
         model_b, hist_b, info_b = run_training(base_model, "blind", int(steps_ui.value))
     mo.md(train_summary(info_b))
-    return hist_b, info_b, model_b
+    return hist_b, model_b
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(base_model, mo, run_training, steps_ui, train_summary):
     with mo.status.spinner("실험 C: 전체 학습 중..."):
         model_c, hist_c, info_c = run_training(base_model, "all", int(steps_ui.value))
     mo.md(train_summary(info_c))
-    return hist_c, info_c, model_c
+    return hist_c, model_c
 
 
 @app.cell
@@ -1137,7 +1188,7 @@ def _(DEVICE, PAD, codes_to_wav, prompt_ids, tokenizer, torch):
     return (read_aloud,)
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(
     heldout_rows,
     json,
@@ -1171,10 +1222,10 @@ def _(
         "| 실험 | WER 학습 문장 | WER 확인용 문장 |\n|---|---|---|\n"
         + "\n".join(f"| {n} | {read_wer[(n, 'train')]:.2f} | {read_wer[(n, 'heldout')]:.2f} |" for n in _models)
     )
-    return read_results, read_wer
+    return (read_results,)
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(mo, player, read_results):
     def _example(split, idx):
         items = {n: read_results[(n, split)][idx] for n in ["A talker", "B blind", "C all"]}
@@ -1217,8 +1268,8 @@ def _(mo):
     return
 
 
-@app.cell
-def _(json, mo, model_a, model_c, speak, train_rows, transcribe):
+@app.cell(hide_code=True)
+def _(json, model_a, model_c, result_table, speak, train_rows, transcribe):
     _rows = []
     for _r in train_rows[:3]:
         _c = json.loads(_r["conversations"])
@@ -1234,7 +1285,7 @@ def _(json, mo, model_a, model_c, speak, train_rows, transcribe):
                     "프레임": _n,
                 }
             )
-    mo.ui.table(_rows, selection=None)
+    result_table(_rows, selection=None)
     return
 
 
@@ -1250,7 +1301,7 @@ def _(mo):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(
     GENERAL_QUESTIONS,
     base_answers,
@@ -1260,6 +1311,7 @@ def _(
     model_a,
     model_b,
     model_c,
+    result_table,
     torch,
 ):
     # A, B는 Thinker 파라미터가 베이스와 비트 단위까지 같아야 합니다.
@@ -1281,10 +1333,10 @@ def _(
                 f"**텍스트 능력 보존**: 일반 질문 {len(GENERAL_QUESTIONS)}개 중 베이스와 같은 답 — "
                 f"A {retention['A']}개, C {retention['C']}개. (A·B의 Thinker 파라미터가 베이스와 완전히 같음을 확인)"
             ),
-            mo.ui.table(_rows, selection=None),
+            result_table(_rows, selection=None),
         ]
     )
-    return (retention,)
+    return
 
 
 @app.cell(hide_code=True)
@@ -1314,8 +1366,19 @@ def _(mo):
     return
 
 
-@app.cell
-def _(DEVICE, json, mo, model_c, prompt_ids, time, tokenizer, torch, train_rows):
+@app.cell(hide_code=True)
+def _(
+    DEVICE,
+    json,
+    mo,
+    model_c,
+    prompt_ids,
+    result_table,
+    time,
+    tokenizer,
+    torch,
+    train_rows,
+):
     _q = json.loads(train_rows[1]["conversations"])[0]["content"]
     torch.manual_seed(0)
     _x = torch.tensor([prompt_ids(_q)], device=DEVICE)
@@ -1368,10 +1431,10 @@ def _(DEVICE, json, mo, model_c, prompt_ids, time, tokenizer, torch, train_rows)
     - 전체 단계 {stream_stats['total_steps']}: {_cap_note}
     """
             ),
-            mo.ui.table(stream_log[:24], selection=None, page_size=24),
+            result_table(stream_log[:24], selection=None, page_size=24),
         ]
     )
-    return (stream_stats,)
+    return
 
 
 @app.cell(hide_code=True)
@@ -1385,7 +1448,7 @@ def _(mo):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(base_model, mo, model_a, model_b, model_c, probe_batch, talker_by_hand):
     _rows = []
     scale_stats = {}
@@ -1408,7 +1471,7 @@ def _(base_model, mo, model_a, model_b, model_c, probe_batch, talker_by_hand):
         + "\n\n두 항 모두 RMSNorm으로 끝나므로 크기는 대체로 스케일 값에 비례합니다. "
         "시작값 3:1은 *처음에는 텍스트 정보를 더 크게 들으라*는 설계이고, B는 텍스트 항이 0이라 오디오 항만 남습니다."
     )
-    return (scale_stats,)
+    return
 
 
 @app.cell(hide_code=True)
@@ -1429,7 +1492,7 @@ def _(mo):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(DEVICE, base_model, mo, omni_config, tokenizer, torch):
     _L = 23
     _text = tokenizer.apply_chat_template(
@@ -1520,6 +1583,17 @@ def _(mo):
        어느 쪽의 온도가 더 중요할지 가설을 세우고 코드북별로 다르게 적용해 보세요.
     5. **절충안**: 실험 C의 학습률을 2e-5로 낮추거나, Thinker는 마지막 층만 학습하도록(`--freeze_backbone last1`)
        바꾸면 받아 읽기 성능과 텍스트 능력 보존 사이의 균형이 어떻게 달라지나요?
+
+
+    ### 연습 문제의 관찰 기준
+
+    | 과제 | 힌트·비교 기준 |
+    | --- | --- |
+    | 1. bridge 위치 | 같은 데이터·시드·학습량으로 층 0·3·7을 비교하고 학습/확인용 WER을 함께 기록하세요. 특정 층이 항상 우수하다는 정답은 없습니다. |
+    | 2. STOP 가중치 | 생성 프레임 수·종료 토큰 빈도·WER을 함께 보세요. 종료 신호가 약해져 길이가 불안정해질 수 있지만 항상 길어진다고 보장하지 않습니다. |
+    | 3. 문장 수 | 고정한 확인 문장을 학습에 넣지 말고 두 WER의 차이를 비교하세요. 학습 WER만 감소하면 일반화 개선의 근거가 부족합니다. |
+    | 4. 온도 | 같은 문장·시드에서 코드북별 온도와 전사·음질을 비교하세요. 거친 정보가 있는 코드북 0을 바꾸는 경우와 뒤 코드북을 바꾸는 경우를 나눠 가설을 확인하세요. |
+    | 5. 동결·학습률 | 학습 가능한 층과 가중치 변화량을 확인하고 WER·텍스트 CE·생성 답을 함께 비교하세요. 받아 읽기 개선만으로 기존 능력 보존을 판단하지 않습니다. |
     """)
     return
 

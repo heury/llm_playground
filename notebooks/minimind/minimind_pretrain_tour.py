@@ -6,6 +6,29 @@ app = marimo.App(width="medium")
 
 @app.cell
 def _():
+    import sys as _display_sys
+    from pathlib import Path as _DisplayPath
+
+    _display_dir = str(_DisplayPath(__file__).resolve().parent)
+    if _display_dir not in _display_sys.path:
+        _display_sys.path.insert(0, _display_dir)
+    from notebook_display import result_table
+
+    return (result_table,)
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    **실행 안내:** 저장소 루트에서 `cd notebooks/minimind` → `uv sync --locked` →
+    `uv run marimo edit minimind_pretrain_tour.py`. 환경·준비물과 권장 순서는 [공통 README](README.md)를 참고하세요.
+    위젯 변경 시 의존 셀이 다시 실행됩니다. 모델 크기·데이터·학습 설정 변경 전에는 해당 절의 재실행 범위를 확인하세요.
+    """)
+    return
+
+
+@app.cell
+def _():
     import itertools
     import json
     import math
@@ -70,7 +93,8 @@ def _():
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(r"""
+    mo.vstack([
+        mo.md(r"""
     # MiniMind 사전 학습(Pretrain) 따라가기
 
     **사전 학습**은 아무 지시도 없는 평범한 글을 잔뜩 읽히면서 **다음 토큰 맞히기**만 반복해,
@@ -87,21 +111,17 @@ def _(mo):
 
     ## 0. 큰 그림
 
-    ```text
-    jsonl 파일 {"text": ...}
-        │  PretrainDataset            ① 토큰화, <bos>/<eos>, 패딩, 정답(labels)
-        ▼
-    (input_ids, labels)  [T]
-        │  randperm + SkipBatchSampler + DataLoader   ⑥ 섞기, 배치, 재개 시 건너뛰기
-        ▼
-    배치 [B, T] ──▶ model(input_ids, labels) ──▶ loss             ② ③
-                                         │
-                       loss / 누적 수 → backward  (여러 번 쌓기)     ③
-                                         │ 누적 수마다
-                 기울기 자르기(clip) → AdamW step(학습률 get_lr)     ③ ④
-                                         │ save_interval마다
-                        가중치 파일 + 재개용 체크포인트 저장          ⑧
-    ```
+    """),
+        mo.mermaid(r"""
+    flowchart TB
+     J["JSONL: text 필드"] --> D["PretrainDataset: 토큰화, BOS/EOS, 패딩, labels"]
+     D --> L["randperm, SkipBatchSampler, DataLoader: 배치 B×T"]
+     L --> M["model input_ids, labels: loss"]
+     M --> B["누적 수로 나눈 손실의 backward"]
+     B --> C["누적마다 clip → AdamW step, get_lr"]
+     C --> S["save_interval마다 가중치와 재개 체크포인트 저장"]
+    """),
+        mo.md(r"""
 
     **`train_pretrain.py` 지도** (원형 숫자는 이 노트북의 절)
 
@@ -115,6 +135,7 @@ def _(mo):
     | 8. 학습 | epoch마다 섞고 `train_epoch` 실행 | 6, 7 |
     | `train_epoch` | 학습률 → forward → 누적 backward → clip → step → 로그 → 저장 | 3, 4, 7 |
     """)
+    ])
     return
 
 
@@ -159,7 +180,16 @@ def _(Path, PretrainDataset, itertools, json, random, tempfile, tokenizer):
     max_seq_len = 16  # 원본 기본값은 340. 우리 문장은 짧으므로 16이면 충분합니다.
     train_ds = PretrainDataset(str(train_path), tokenizer, max_length=max_seq_len)
     val_ds = PretrainDataset(str(val_path), tokenizer, max_length=max_seq_len)
-    return all_sentences, max_seq_len, train_ds, train_path, val_ds, val_sentences, write_jsonl, data_dir
+    return (
+        all_sentences,
+        data_dir,
+        max_seq_len,
+        train_ds,
+        train_path,
+        val_ds,
+        val_sentences,
+        write_jsonl,
+    )
 
 
 @app.cell(hide_code=True)
@@ -214,7 +244,7 @@ def _(max_seq_len, tokenizer, train_ds):
 
 
 @app.cell(hide_code=True)
-def _(mo, sample_input_ids, sample_labels, tokenizer):
+def _(mo, result_table, sample_input_ids, sample_labels, tokenizer):
     def _tok(i):
         return tokenizer.convert_ids_to_tokens(int(i))
 
@@ -229,7 +259,7 @@ def _(mo, sample_input_ids, sample_labels, tokenizer):
             "위치 t에서 맞힐 토큰 (labels[t+1])": "—" if _next is None else ("무시(-100)" if _next == -100 else _tok(_next)),
         })
     mo.vstack([
-        mo.ui.table(_rows, selection=None, page_size=20),
+        result_table(_rows, selection=None, page_size=20),
         mo.md("`Ġ`는 단어 앞 공백입니다. 첫 토큰 bos는 맞힐 대상이 아니고, 마지막 실제 토큰 다음에는 **eos**를 맞혀야 합니다."),
     ])
     return
@@ -279,13 +309,21 @@ def _(mo):
 
     모델 설정은 스크립트와 같습니다: `MiniMindConfig(hidden_size=768, num_hidden_layers=8, use_moe=False)`.
     토크나이저도 실제 MiniMind 것(어휘 6,400개)을 씁니다. 모델은 `init_model`처럼 만든 뒤 `model.to(device)`로 GPU에 올립니다.
-    학습 전 모델은 6,400개 토큰 중 아무거나 고르는 것과 비슷하므로 손실이 `ln(6400) ≈ 8.76` 근처에서 시작합니다.
+    학습 전 모델은 6,400개 토큰 중 아무거나 고르는 것과 비슷하므로 손실이 $\ln(6400)\approx8.76$ 근처에서 시작합니다.
     """)
     return
 
 
 @app.cell
-def _(MiniMindConfig, MiniMindForCausalLM, device, math, setup_seed, torch, train_ds):
+def _(
+    MiniMindConfig,
+    MiniMindForCausalLM,
+    device,
+    math,
+    setup_seed,
+    torch,
+    train_ds,
+):
     # train_pretrain.py 기본 인자: --hidden_size 768 --num_hidden_layers 8 --use_moe 0
     lm_config = MiniMindConfig(hidden_size=768, num_hidden_layers=8, use_moe=False)
 
@@ -304,7 +342,17 @@ def _(MiniMindConfig, MiniMindForCausalLM, device, math, setup_seed, torch, trai
         initial_loss = initial_model(first_ids, labels=first_labels).loss.item()
     uniform_loss = math.log(lm_config.vocab_size)
     model_params = sum(p.numel() for p in initial_model.parameters())
-    return init_pretrain_model, initial_loss, initial_model, lm_config, model_params, stack_samples, uniform_loss
+    return (
+        first_ids,
+        first_labels,
+        init_pretrain_model,
+        initial_loss,
+        initial_model,
+        lm_config,
+        model_params,
+        stack_samples,
+        uniform_loss,
+    )
 
 
 @app.cell(hide_code=True)
@@ -313,7 +361,7 @@ def _(device, initial_loss, mo, model_params, torch, uniform_loss):
     mo.md(f"""
     모델 매개변수 **{model_params / 1e6:.1f}M**, 장치 `{device}`{_gpu}
 
-    학습 전 손실 `{initial_loss:.3f}` ≈ 균등 분포 손실 `ln(6400) = {uniform_loss:.3f}`
+    학습 전 손실 `{initial_loss:.3f}` ≈ 균등 분포 손실 $\\ln(6400) = {uniform_loss:.3f}$
     """)
     return
 
@@ -335,7 +383,14 @@ def _(mo):
 
 
 @app.cell
-def _(device, initial_model, sample_input_ids, sample_real_len, torch, train_ds):
+def _(
+    device,
+    initial_model,
+    sample_input_ids,
+    sample_real_len,
+    torch,
+    train_ds,
+):
     _ids = sample_input_ids[None].to(device)
     with torch.no_grad():
         logits_with_pad = initial_model(_ids).logits[0, :sample_real_len]
@@ -415,11 +470,28 @@ def _(first_ids, first_labels, init_pretrain_model, torch):
         v.numel() for s in step_optimizer.state.values() for v in s.values() if torch.is_tensor(v) and v.dim() > 0
     )
     model_numel = sum(p.numel() for p in step_model.parameters())
-    return adam_state_keys, adam_state_numel, grad_norm_after, grad_norm_before, loss_after_one_step, model_numel, step_loss
+    return (
+        adam_state_keys,
+        adam_state_numel,
+        grad_norm_after,
+        grad_norm_before,
+        loss_after_one_step,
+        model_numel,
+        step_loss,
+    )
 
 
 @app.cell(hide_code=True)
-def _(adam_state_keys, adam_state_numel, grad_norm_after, grad_norm_before, loss_after_one_step, mo, model_numel, step_loss):
+def _(
+    adam_state_keys,
+    adam_state_numel,
+    grad_norm_after,
+    grad_norm_before,
+    loss_after_one_step,
+    mo,
+    model_numel,
+    step_loss,
+):
     mo.md(f"""
     | 항목 | 값 |
     | --- | --- |
@@ -490,7 +562,14 @@ def _(init_pretrain_model, stack_samples, torch, train_ds):
 
 
 @app.cell(hide_code=True)
-def _(accum_mixed_diff, accum_same_diff, mixed_len_idx, mo, same_len_idx, train_ds):
+def _(
+    accum_mixed_diff,
+    accum_same_diff,
+    mixed_len_idx,
+    mo,
+    same_len_idx,
+    train_ds,
+):
     def _n(idx):
         return [int((train_ds[i][1] != -100).sum()) for i in idx]
 
@@ -515,7 +594,7 @@ def _(mo):
         return lr * (0.1 + 0.45 * (1 + math.cos(math.pi * current_step / total_steps)))
     ```
 
-    - `current_step = 0`이면 `0.1 + 0.45·2 = 1.0`배, 끝(`current_step = total_steps`)이면 `0.1 + 0.45·0 = 0.1`배입니다.
+    - `current_step = 0`이면 $0.1+0.45\cdot2=1.0$배, 끝(`current_step = total_steps`)이면 $0.1+0.45\cdot0=0.1$배입니다.
     - 즉 **설정한 학습률에서 시작해 코사인 곡선을 따라 그 10%까지** 줄어듭니다. 처음엔 크게 움직이고 끝에는 세밀하게 다듬습니다.
     - MiniMind는 처음에 학습률을 서서히 올리는 warmup을 쓰지 않습니다.
     - `train_epoch`는 **micro-batch마다** `get_lr(epoch * iters + step, epochs * iters, lr)`로 학습률을 다시 정합니다.
@@ -586,8 +665,8 @@ def _(torch):
 
 
 @app.cell(hide_code=True)
-def _(as_bf16, as_fp16, as_fp16_scaled, mo, small_grads):
-    mo.ui.table(
+def _(as_bf16, as_fp16, as_fp16_scaled, result_table, small_grads):
+    result_table(
         [
             {"원래 값 (fp32)": f"{a:.1e}", "fp16": f"{b:.3e}", "fp16 + 배율 2¹⁶": f"{c:.3e}", "bf16": f"{d:.3e}"}
             for a, b, c, d in zip(small_grads.tolist(), as_fp16.tolist(), as_fp16_scaled.tolist(), as_bf16.tolist())
@@ -638,10 +717,10 @@ def _(SkipBatchSampler, setup_seed, torch, train_ds):
 
 
 @app.cell(hide_code=True)
-def _(batches_epoch0, batches_epoch0_skip3, batches_epoch1, mo):
+def _(batches_epoch0, batches_epoch0_skip3, batches_epoch1, mo, result_table):
     _n = max(len(batches_epoch0), len(batches_epoch1))
     mo.vstack([
-        mo.ui.table(
+        result_table(
             [
                 {"배치 번호": k + 1,
                  "epoch 0": str(batches_epoch0[k]) if k < len(batches_epoch0) else "",
@@ -676,7 +755,19 @@ def _(mo):
 
 
 @app.cell
-def _(DataLoader, Path, SkipBatchSampler, autocast_ctx, device, get_lr, lm_checkpoint, lm_config, setup_seed, torch, train_ds):
+def _(
+    DataLoader,
+    Path,
+    SkipBatchSampler,
+    autocast_ctx,
+    device,
+    get_lr,
+    lm_checkpoint,
+    lm_config,
+    setup_seed,
+    torch,
+    train_ds,
+):
     def run_pretraining(model, optimizer, scaler, args, *, start_epoch=0, start_step=0,
                         out_dir=None, ckpt_dir=None, stop_at=None, history=None, logs=None, val_fn=None):
         for epoch in range(start_epoch, args["epochs"]):
@@ -731,6 +822,7 @@ def _(DataLoader, Path, SkipBatchSampler, autocast_ctx, device, get_lr, lm_check
 
             if val_fn is not None:  # 노트북 추가: epoch마다 검증 손실
                 val_fn(epoch)
+
     return (run_pretraining,)
 
 
@@ -755,7 +847,19 @@ def _(mo):
 
 
 @app.cell
-def _(device, dtype, init_pretrain_model, pt_accum, pt_batch, pt_epochs, pt_lr, run_pretraining, stack_samples, torch, val_ds):
+def _(
+    device,
+    dtype,
+    init_pretrain_model,
+    pt_accum,
+    pt_batch,
+    pt_epochs,
+    pt_lr,
+    run_pretraining,
+    stack_samples,
+    torch,
+    val_ds,
+):
     pt_args = {
         "epochs": pt_epochs.value, "batch_size": pt_batch.value,
         "accumulation_steps": pt_accum.value, "learning_rate": pt_lr.value,
@@ -784,7 +888,16 @@ def _(device, dtype, init_pretrain_model, pt_accum, pt_batch, pt_epochs, pt_lr, 
 
 
 @app.cell
-def _(all_sentences, device, initial_model, math, pt_model, tokenizer, torch, train_ds):
+def _(
+    all_sentences,
+    device,
+    initial_model,
+    math,
+    pt_model,
+    tokenizer,
+    torch,
+    train_ds,
+):
     def continue_text(model, prompt, sample=False, seed=0):
         """bos + prompt 뒤를 이어 씁니다. 학습 데이터도 bos로 시작했으므로 생성도 bos로 시작합니다."""
         ids = torch.tensor([[tokenizer.bos_token_id] + tokenizer(prompt, add_special_tokens=False).input_ids], device=device)
@@ -809,7 +922,18 @@ def _(all_sentences, device, initial_model, math, pt_model, tokenizer, torch, tr
 
 
 @app.cell(hide_code=True)
-def _(gen_rows, loss_floor_ref, mo, plt, pt_args, pt_history, pt_logs, pt_updates, pt_val):
+def _(
+    gen_rows,
+    loss_floor_ref,
+    mo,
+    plt,
+    pt_args,
+    pt_history,
+    pt_logs,
+    pt_updates,
+    pt_val,
+    result_table,
+):
     _fig, (_ax1, _ax2) = plt.subplots(1, 2, figsize=(10, 3.2))
     _ax1.plot([h["loss"] for h in pt_history], lw=0.8, label="train loss (micro-batch)")
     _ax1.plot([v["seen_steps"] for v in pt_val], [v["val_loss"] for v in pt_val], "o-", ms=3, label="val loss (unseen sentences)")
@@ -832,15 +956,16 @@ def _(gen_rows, loss_floor_ref, mo, plt, pt_args, pt_history, pt_logs, pt_update
     검증 손실 `{pt_val[-1]['val_loss']:.3f}`, 참고선 `{loss_floor_ref:.3f}`.
     """),
         mo.md("**원본과 같은 형식의 로그 (마지막 8줄)**\n```text\n" + "\n".join(pt_logs[-8:]) + "\n```"),
-        mo.ui.table(gen_rows, selection=None),
+        result_table(gen_rows, selection=None),
         mo.md(r"""
     **읽는 법**
 
     - **참고선:** 문장의 주어·동사·목적어는 앞 내용으로 알 수 없는 무작위 선택입니다. 72개 조합이 고르게 나온다면
-      문장당 `ln(72)`만큼은 어떤 모델도 줄일 수 없습니다. 이를 정답 토큰 수로 나눈 값입니다. 손실이 0이 되지 않는 것이 정상입니다.
+      문장당 엔트로피는 $\ln72$입니다. 참고선은 이를 정답 토큰 수로 나눈 값이며, **72개 전체의 균일 생성 분포를 가정한 값**입니다.
+      이번 60/12개 분할의 실측 검증 손실에 대한 엄밀한 하한은 아닙니다.
       학습 문장은 72개 중 60개뿐이라 선택지가 조금 적으므로, 학습 손실은 참고선보다 약간 낮아질 수 있습니다.
-    - **검증 손실**이 학습 손실과 함께 내려가면, 학습에 없던 조합도 잘 예측한다는 뜻입니다. 문장을 외운 것이 아니라
-      "주어 + 동사 + 목적어 + 마침표 + 끝" 구조를 배웠습니다.
+    - **검증 손실**이 학습 손실과 함께 내려가면, 학습에 없던 조합도 잘 예측한다는 뜻입니다. 이 작은 과제에서 "주어 + 동사 + 목적어 + 마침표 + 끝" 구조의 미관측 조합으로 일반화함을 시사합니다.
+      이 관찰만으로 암기가 없거나 일반 언어 능력을 얻었다고 증명하지는 못합니다.
     - 생성은 문장 하나를 쓰고 **eos에서 멈춥니다**. 1-1절에서 본 eos 정답 덕분입니다.
     - 학습률을 `2e-2`, `1e-1`로 올려 손실 곡선을 비교해 보세요.
     """),
@@ -877,7 +1002,18 @@ def _(mo):
 
 
 @app.cell
-def _(Path, device, dtype, init_pretrain_model, lm_checkpoint, lm_config, run_pretraining, shutil, tempfile, torch):
+def _(
+    Path,
+    device,
+    dtype,
+    init_pretrain_model,
+    lm_checkpoint,
+    lm_config,
+    run_pretraining,
+    shutil,
+    tempfile,
+    torch,
+):
     resume_args = {"epochs": 4, "batch_size": 8, "accumulation_steps": 2, "learning_rate": 5e-4,
                    "grad_clip": 1.0, "seed": 42, "log_interval": 1000, "save_interval": 4}
 
@@ -916,15 +1052,23 @@ def _(Path, device, dtype, init_pretrain_model, lm_checkpoint, lm_config, run_pr
     shutil.rmtree(_ckpt_root)
     resume_diff = max_param_diff(model_a, model_c)
     assert resume_diff == 0.0  # 비트 단위로 같음
-    return ckpt_files, fresh_training_state, interrupted_then_resumed, max_param_diff, resume_args, resume_ckp, resume_diff
+    return (
+        ckpt_files,
+        fresh_training_state,
+        interrupted_then_resumed,
+        max_param_diff,
+        resume_args,
+        resume_ckp,
+        resume_diff,
+    )
 
 
 @app.cell(hide_code=True)
-def _(ckpt_files, mo, resume_ckp, resume_diff):
+def _(ckpt_files, mo, result_table, resume_ckp, resume_diff):
     _opt_state = resume_ckp["optimizer"]["state"]
     mo.vstack([
         mo.md("저장된 파일 (확인 후 임시 폴더는 삭제했습니다)"),
-        mo.ui.table(
+        result_table(
             [{"파일": name, "크기": f"{size / 2**20:.0f} MB"} for name, size in ckpt_files],
             selection=None,
         ),
@@ -955,7 +1099,14 @@ def _(mo):
 
 
 @app.cell
-def _(fresh_training_state, interrupted_then_resumed, max_param_diff, resume_args, run_pretraining, shutil):
+def _(
+    fresh_training_state,
+    interrupted_then_resumed,
+    max_param_diff,
+    resume_args,
+    run_pretraining,
+    shutil,
+):
     misaligned_args = {**resume_args, "save_interval": 3}
     _model_a, _opt_a, _scaler_a = fresh_training_state(misaligned_args)
     run_pretraining(_model_a, _opt_a, _scaler_a, misaligned_args)
@@ -1044,13 +1195,19 @@ def _(mo):
 @app.cell(hide_code=True)
 def _(mo):
     mo.accordion({
-        "과제 1. 학습률 바꾸기 (7-2절)": mo.md("""
-    학습률을 `5e-4`, `5e-3`, `2e-2`, `1e-1`로 바꿔 손실 곡선과 생성 결과를 비교하세요.
+        "과제 1. 학습률 바꾸기 (7-2절)": mo.md(r"""
+        학습률을 `5e-4`, `5e-3`, `2e-2`, `1e-1`로 바꿔 손실 곡선과 생성 결과를 비교하세요.
 
-    *해설:* `5e-4`(원본 기본값)는 수십 step 만에 손실이 1 아래로 내려갑니다. `5e-3`부터는 내려가는 속도가 느려지고,
-    `2e-2`·`1e-1`은 첫 갱신 직후 손실이 오히려 크게 튀었다가(1e-1은 수십까지) 끝까지 회복하지 못합니다.
-    clip은 기울기 크기만 자르고, AdamW는 학습률만큼 모든 가중치를 움직이므로 학습률이 크면 64M 모델이 한 번에 망가집니다.
-    좋은 학습률은 모델 크기와 데이터에 따라 달라서, 작은 모델로 찾은 값을 그대로 옮길 수 없습니다.
+        *해설:* `5e-4`(원본 기본값)는 수십 step 만에 손실이 1 아래로 내려갑니다. `5e-3`부터는 내려가는 속도가 느려지고,
+        `2e-2`·`1e-1`은 첫 갱신 직후 손실이 오히려 크게 튀었다가(1e-1은 수십까지) 끝까지 회복하지 못합니다.
+        clip은 기울기 norm을 제한하지만 AdamW의 최종 갱신량을 학습률과 별개로 제한하지는 않습니다.
+        실제 이동은 원소별 모멘트·epsilon·weight decay에 따라 달라집니다. 이 실험에서 큰 학습률은 학습을 불안정하게 만들 수 있습니다.
+        좋은 학습률은 모델 크기와 데이터에 따라 달라서, 작은 모델로 찾은 값을 그대로 옮길 수 없습니다.
+
+
+        AdamW의 원소별 갱신은 $\Delta\theta=-\eta\hat m/(\sqrt{\hat v}+\epsilon)-\eta\lambda\theta$입니다.
+        $\eta$는 학습률, $\hat m,\hat v$는 편향 보정한 1·2차 모멘트, $\epsilon$은 분모 안정화 상수,
+        $\lambda$는 weight decay 계수입니다. 현재 기울기뿐 아니라 누적 상태와 원래 가중치에도 의존합니다.
     """),
         "과제 2. 누적 수 바꾸기 (7-2절)": mo.md("""
     `batch_size=8`에서 `accumulation_steps`를 1, 2, 4로 바꾸면 실제 갱신 횟수와 최종 손실은 어떻게 될까요?
@@ -1058,11 +1215,12 @@ def _(mo):
     *해설:* 갱신 횟수가 대략 1/누적 수로 줄어듭니다. 같은 epoch 수라면 갱신이 적어 손실이 덜 내려갑니다.
     누적은 "큰 배치를 흉내 내는 방법"이지 공짜로 학습을 더 하는 방법이 아닙니다.
     """),
-        "과제 3. 검증 문장을 처음 보는 주어로 (1절)": mo.md("""
+        "과제 3. 검증 문장을 처음 보는 주어로 (1절)": mo.md(r"""
     `val_sentences`를 `"The teacher"`로 시작하는 문장 12개로, `train_sentences`를 나머지로 바꾸면 검증 손실은 어떻게 될까요?
 
     *해설:* 학습 데이터에 `teacher`가 한 번도 나오지 않으므로, 그 토큰을 예측하는 위치의 손실이 크게 남습니다.
-    검증 손실이 학습 손실보다 확실히 높아집니다. 모델은 본 적 없는 단어는 만들어 내지 못합니다.
+    검증 손실이 학습 손실보다 확실히 높아집니다. 학습에서 그 단어를 정답으로 예측할 신호가 없어 문맥에 맞게 높은 확률을 주기 어렵습니다.
+    어휘표 안의 미관측 토큰을 생성하는 것 자체가 불가능하다는 뜻은 아닙니다.
     """),
         "과제 4. 저장 간격 (8-1절)": mo.md("""
     `misaligned_args`의 `save_interval`을 6으로 바꾸고, `stop_at`을 `(1, 7)`로 바꾸면 차이는 0일까요?

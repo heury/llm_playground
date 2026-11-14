@@ -6,6 +6,29 @@ app = marimo.App(width="medium")
 
 @app.cell
 def _():
+    import sys as _display_sys
+    from pathlib import Path as _DisplayPath
+
+    _display_dir = str(_DisplayPath(__file__).resolve().parent)
+    if _display_dir not in _display_sys.path:
+        _display_sys.path.insert(0, _display_dir)
+    from notebook_display import result_table
+
+    return (result_table,)
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    **실행 안내:** 저장소 루트에서 `cd notebooks/minimind` → `uv sync --locked` →
+    `uv run marimo edit minimind_grpo_tour.py`. 환경·준비물과 권장 순서는 [공통 README](README.md)를 참고하세요.
+    위젯 변경 시 의존 셀이 다시 실행됩니다. 모델 크기·데이터·학습 설정 변경 전에는 해당 절의 재실행 범위를 확인하세요.
+    """)
+    return
+
+
+@app.cell
+def _():
     import copy
     import io
     import json
@@ -86,7 +109,8 @@ def _():
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(r"""
+    mo.vstack([
+        mo.md(r"""
     # MiniMind GRPO(Group Relative Policy Optimization) 따라가기
 
     DPO는 미리 모아 둔 "좋은 답 / 나쁜 답" 쌍으로 학습했습니다. 그런데 수학 문제처럼 **정답을 기계적으로 채점할 수 있는**
@@ -106,21 +130,28 @@ def _(mo):
 
     ## 0. 큰 그림
 
-    ```text
-    사전 학습 ──▶ SFT ──▶ GRPO
-                           ├─ policy   : SFT 모델 복사본, 학습됨 (답도 직접 생성)
-                           ├─ reference: SFT 모델 복사본, 고정 (너무 멀리 가지 않게 잡아 주는 기준점)
-                           └─ 보상     : 정답 채점 함수 score_gsm8k_response (모델이 아님)
-    ```
+    """),
+        mo.mermaid(r"""
+    flowchart LR
+     P["사전 학습"] --> S["SFT"] --> G["GRPO"]
+     G --> A["policy: 답 생성 및 학습"]
+     G --> R["reference: SFT 복사본, 고정"]
+     G --> C["보상: score_gsm8k_response 정답 채점 함수"]
+    """),
+        mo.md(r"""
 
     학습 한 step은 다음과 같습니다.
 
-    ```text
-    질문 B개 ─▶ 질문마다 답 G개 생성 (rollout)
-            ─▶ 답마다 채점 (보상 0 또는 1)
-            ─▶ 같은 질문의 답 G개끼리 비교 (advantage = 그룹 평균보다 얼마나 좋은가)
-            ─▶ 평균보다 좋은 답의 토큰 확률 ↑, 나쁜 답의 토큰 확률 ↓  (+ reference에서 너무 멀어지지 않게 KL)
-    ```
+    """),
+        mo.mermaid(r"""
+    flowchart TB
+     Q["질문 B개"] --> G["질문마다 답 G개 생성: rollout"]
+     G --> R["답마다 0 또는 1 보상"]
+     R --> A["같은 질문의 G개 보상으로 advantage 계산"]
+     A --> P["좋은 답의 토큰 확률 증가, 나쁜 답 감소"]
+     K["reference와의 KL 규제"] --> P
+    """),
+        mo.md(r"""
 
     **DPO와 비교**
 
@@ -132,6 +163,7 @@ def _(mo):
     | 비교 기준 | reference 모델 | **같은 질문에 대한 답 G개의 평균 보상** (PPO의 critic 모델이 필요 없음) |
     | 기본 학습률 | 4e-8 | 3e-7 |
     """)
+    ])
     return
 
 
@@ -149,8 +181,17 @@ def _(mo):
     return
 
 
-@app.cell
-def _(MiniMindConfig, MiniMindForCausalLM, device, hf_hub_download, json, load_file, mo, torch):
+@app.cell(hide_code=True)
+def _(
+    MiniMindConfig,
+    MiniMindForCausalLM,
+    device,
+    hf_hub_download,
+    json,
+    load_file,
+    mo,
+    torch,
+):
     mo.stop(
         not torch.cuda.is_available(),
         mo.md("**GPU가 필요합니다.** `torch.cuda.is_available()`가 `False`입니다. NVIDIA 드라이버와 CUDA용 PyTorch를 확인하세요."),
@@ -253,9 +294,9 @@ def _(GSM8KDataset, Path, json, random, tempfile, tokenizer):
 
 
 @app.cell(hide_code=True)
-def _(mo, train_ds, train_rows):
+def _(mo, result_table, train_ds, train_rows):
     mo.vstack([
-        mo.ui.table([{"종류": r["kind"], "question": r["question"], "answer (정답 풀이)": r["answer"]} for r in train_rows],
+        result_table([{"종류": r["kind"], "question": r["question"], "answer (정답 풀이)": r["answer"]} for r in train_rows],
                     selection=None, page_size=6),
         mo.md(f"`GSM8KDataset`이 만든 학습 샘플 하나 (`{{'prompt': ..., 'answer': ...}}`):\n"
               f"```text\n{train_ds[0]['prompt']}\n```\n"
@@ -286,7 +327,18 @@ def _(mo):
 
 
 @app.cell
-def _(MAX_GEN_LEN, autocast_ctx, device, re, score_gsm8k_response, setup_seed, test_ds, test_kinds, tokenizer, torch):
+def _(
+    MAX_GEN_LEN,
+    autocast_ctx,
+    device,
+    re,
+    score_gsm8k_response,
+    setup_seed,
+    test_ds,
+    test_kinds,
+    tokenizer,
+    torch,
+):
     def completion_texts(output_ids, prompt_len):
         """생성 결과에서 답 부분만 문자열로, 그리고 EOS 전까지의 토큰 수를 돌려줍니다."""
         completion = output_ids[:, prompt_len:]
@@ -334,6 +386,7 @@ def _(MAX_GEN_LEN, autocast_ctx, device, re, score_gsm8k_response, setup_seed, t
             "정답 숫자를 쓰고도 최종 답은 틀림": sum(g["gold_in_text"] and g["score"] == 0 for g in greedy) / n,
             "greedy": greedy,
         }
+
     return (evaluate,)
 
 
@@ -344,12 +397,12 @@ def _(evaluate, sft_model):
 
 
 @app.cell(hide_code=True)
-def _(mo, sft_eval, test_ds):
+def _(mo, result_table, sft_eval, test_ds):
     _keys = ["greedy 정답률", "샘플링 정답률", "덧셈 (greedy)", "곱셈 (greedy)", "형식 오류", "정답 숫자를 쓰고도 최종 답은 틀림"]
     mo.vstack([
         mo.md("| " + " | ".join(_keys) + " | 평균 답 길이 |\n| " + " --- |" * (len(_keys) + 1) + "\n| "
               + " | ".join(f"{sft_eval[k]:.1%}" for k in _keys) + f" | {sft_eval['평균 답 길이(토큰)']:.1f} 토큰 |"),
-        mo.ui.table([{"질문": s["prompt"].split("user\n")[1].split("\nSolve")[0], "정답": s["answer"].split("#### ")[1],
+        result_table([{"질문": s["prompt"].split("user\n")[1].split("\nSolve")[0], "정답": s["answer"].split("#### ")[1],
                       "SFT 모델 답 (greedy)": g["text"], "보상": g["score"]}
                      for s, g in zip(test_ds.samples[:8], sft_eval["greedy"][:8])], selection=None),
         mo.md(r"""
@@ -409,8 +462,8 @@ def _(score_gsm8k_response):
 
 
 @app.cell(hide_code=True)
-def _(mo, reward_table):
-    mo.vstack([mo.md("정답 풀이 `'... #### 42'`에 대한 채점 결과:"), mo.ui.table(reward_table, selection=None)])
+def _(mo, result_table, reward_table):
+    mo.vstack([mo.md("정답 풀이 `'... #### 42'`에 대한 채점 결과:"), result_table(reward_table, selection=None)])
     return
 
 
@@ -447,7 +500,17 @@ def _(mo):
 
 
 @app.cell
-def _(MAX_GEN_LEN, TorchRolloutEngine, autocast_ctx, calculate_gsm8k_rewards_and_stats, device, setup_seed, sft_model, tokenizer, train_ds):
+def _(
+    MAX_GEN_LEN,
+    TorchRolloutEngine,
+    autocast_ctx,
+    calculate_gsm8k_rewards_and_stats,
+    device,
+    setup_seed,
+    sft_model,
+    tokenizer,
+    train_ds,
+):
     DEMO_G = 6
     DEMO_SEED = 8
     DEMO_INDICES = [44, 39]   # SFT 모델이 가끔 맞히는 학습 문제: 덧셈 하나(44번), 곱셈 하나(39번)
@@ -469,11 +532,28 @@ def _(MAX_GEN_LEN, TorchRolloutEngine, autocast_ctx, calculate_gsm8k_rewards_and
     assert demo_rollout.completion_ids.shape == demo_rollout.per_token_logps.shape
     assert bool(demo_rollout.completion_mask.all())          # torch 엔진은 마스크를 전부 1로 돌려줌
     assert int(demo_rollout.prompt_lens[0]) == _P             # 왼쪽 패딩 → 모든 행의 프롬프트 길이 = P
-    return DEMO_G, DEMO_SEED, demo_batch, demo_inputs, demo_reward_stats, demo_rewards, demo_rollout
+    return (
+        DEMO_G,
+        DEMO_SEED,
+        demo_batch,
+        demo_inputs,
+        demo_reward_stats,
+        demo_rewards,
+        demo_rollout,
+    )
 
 
 @app.cell(hide_code=True)
-def _(DEMO_G, demo_inputs, demo_reward_stats, demo_rewards, demo_rollout, mo, tokenizer):
+def _(
+    DEMO_G,
+    demo_inputs,
+    demo_reward_stats,
+    demo_rewards,
+    demo_rollout,
+    mo,
+    result_table,
+    tokenizer,
+):
     _pads = (demo_inputs["attention_mask"] == 0).sum(1).tolist()
     mo.vstack([
         mo.md(f"""
@@ -483,7 +563,7 @@ def _(DEMO_G, demo_inputs, demo_reward_stats, demo_rewards, demo_rollout, mo, to
     - 채점 진단(`reward_stats`): 정답 {demo_reward_stats['reward/correct_rate']:.0%}, 틀린 숫자 {demo_reward_stats['reward/wrong_number_rate']:.0%},
       형식 오류 {demo_reward_stats['reward/format_error_rate']:.0%}, **보상이 섞인 그룹 비율 {demo_reward_stats['reward/mixed_group_rate']:.0%}**
     """),
-        mo.ui.table([{"질문": i // DEMO_G, "답 번호": i % DEMO_G, "생성한 답": t, "보상": demo_rewards[i].item(),
+        result_table([{"질문": i // DEMO_G, "답 번호": i % DEMO_G, "생성한 답": t, "보상": demo_rewards[i].item(),
                       "토큰 수": int((demo_rollout.completion_ids[i] != tokenizer.eos_token_id).sum())}
                      for i, t in enumerate(demo_rollout.completions)], selection=None, page_size=12),
     ])
@@ -507,6 +587,38 @@ def _(mo):
     $$
     A_i = \frac{r_i - \mathrm{mean}(r_1, \dots, r_G)}{\mathrm{std}(r_1, \dots, r_G) + 10^{-4}}
     $$
+
+    **질문별 평균을 답마다 복사하는 이유**는 각 답변에서 **그 답변이 속한 질문의 평균 보상**을 빼기 위해서입니다.
+    질문이 2개이고 질문마다 답변을 3개씩 생성했다면(`B=2`, `G=3`), 같은 질문의 답변이 연속해서 배치됩니다.
+    아래 숫자는 계산을 설명하기 위한 예시 보상입니다.
+
+    ```python
+    rewards = [1, 2, 3,   2, 4, 6]  # [B*G]: 질문 A의 답 3개, 질문 B의 답 3개
+    grouped_rewards = [[1, 2, 3],    # [B, G]: 질문 A
+                       [2, 4, 6]]   #         질문 B
+
+    # 질문별 평균은 [2, 4] → repeat_interleave(3)으로 각 답변 위치에 배치
+    mean_r = [2, 2, 2,   4, 4, 4]   # [B*G]
+
+    # 실제 코드에서는 텐서끼리 원소별로 뺍니다.
+    rewards - mean_r
+    # [-1, 0, 1,   -2, 0, 2]
+    ```
+
+    이렇게 길이와 순서를 맞추면 1차원 `rewards`에서 질문별 평균을 바로 뺄 수 있습니다.
+    표준편차도 같은 방식으로 복사해서 나누면, 각 답변의 `advantage`는 **같은 질문의 답변들 사이에서의 상대적 점수**가 됩니다.
+    양수면 그 질문의 평균보다 좋은 답변, 음수면 평균보다 나쁜 답변이며, 평균과 같으면 0입니다.
+
+    `repeat_interleave`는 현재 코드의 1차원 형태에 맞추기 위한 처리입니다.
+    `[B, G]` 형태를 유지하면 `[B, 1]` 평균·표준편차를 각 열에 적용하는 **브로드캐스팅**으로도 같은 계산을 할 수 있습니다.
+
+    ```python
+    grouped_rewards = rewards.view(-1, args.num_generations)  # [B, G]
+    mean_r = grouped_rewards.mean(dim=1, keepdim=True)        # [B, 1]
+    std_r = grouped_rewards.std(dim=1, unbiased=False, keepdim=True)
+    advantages = (grouped_rewards - mean_r) / (std_r + 1e-4)   # [B, G]
+    advantages = advantages.reshape(-1)                      # [B*G]
+    ```
 
     - PPO는 "기대 보상"을 예측하는 **critic 모델**을 따로 학습해 기준선으로 씁니다. GRPO는 그 대신 **같은 질문의 답 G개 평균**을 씁니다.
       그래서 모델이 하나 줄어듭니다.
@@ -545,13 +657,20 @@ def _(DEMO_G, demo_rewards, torch):
 
 
 @app.cell(hide_code=True)
-def _(DEMO_G, advantage_table, demo_advantages, demo_rewards, mo):
+def _(
+    DEMO_G,
+    advantage_table,
+    demo_advantages,
+    demo_rewards,
+    mo,
+    result_table,
+):
     mo.vstack([
-        mo.ui.table(advantage_table, selection=None),
+        result_table(advantage_table, selection=None),
         mo.md("드물게 맞힌 답일수록 큰 양수(1개 정답 → +2.24), 흔한 오답일수록 작은 음수(−0.45)를 받습니다. "
               "반대로 대부분 맞히는 질문에서는 **틀린 답 하나를 크게 깎습니다**(5개 정답 → −2.24).\n\n"
               "4절 rollout의 실제 값:"),
-        mo.ui.table([{"질문": i // DEMO_G, "답 번호": i % DEMO_G, "보상": demo_rewards[i].item(),
+        result_table([{"질문": i // DEMO_G, "답 번호": i % DEMO_G, "보상": demo_rewards[i].item(),
                       "advantage": round(demo_advantages[i].item(), 3)} for i in range(len(demo_rewards))],
                     selection=None, page_size=12),
     ])
@@ -587,7 +706,7 @@ def _(mo):
     - `logits[:, t]`는 토큰 `t+1`을 예측합니다. 그래서 `logits[:, :-1]`과 `outputs[:, 1:]`을 짝짓고, 답 부분 위치(`logp_pos`)만 고릅니다.
     - **첫 EOS는 포함**합니다(언제 멈출지도 학습 대상). **그 뒤에 채워진 EOS들은 제외**합니다.
     - 학습 첫 step에는 policy = rollout 때 모델 = reference입니다. 그래서 다시 계산한 로그 확률이 rollout 때 값과 같습니다
-      (`ratio = 1`). 둘 다 bf16 autocast 안에서 계산하기 때문입니다.
+      ($\mathrm{ratio}=1$). 둘 다 bf16 autocast 안에서 계산하기 때문입니다.
     - **reference와의 차이(KL)는 정확히 0이 아닙니다.** 원본 코드에서 reference forward는 `autocast_ctx` **밖**에 있어 fp32로
       계산되고, policy는 bf16으로 계산됩니다. 같은 가중치라도 정밀도 차이만큼 로그 확률이 다릅니다. 아래에서 그 크기를 봅니다.
     """)
@@ -624,23 +743,43 @@ def _(F, autocast_ctx, demo_rollout, device, sft_model, tokenizer, torch):
     # 원본이 로그로 남기는 kl_ref와 같은 식
     demo_kl_ref = (((demo_ref_logps - demo_logps) * demo_mask).sum() / demo_mask.sum()).item()
     demo_max_logp_gap = ((demo_ref_logps - demo_logps).abs() * demo_mask).max().item()
-    return demo_kl_ref, demo_logps, demo_mask, demo_max_logp_gap, demo_old_logps, demo_ref_logps, eos_idx, max_ratio_gap
+    return (
+        demo_kl_ref,
+        demo_logps,
+        demo_mask,
+        demo_max_logp_gap,
+        demo_old_logps,
+        demo_ref_logps,
+        eos_idx,
+        max_ratio_gap,
+    )
 
 
 @app.cell(hide_code=True)
-def _(demo_kl_ref, demo_mask, demo_max_logp_gap, demo_old_logps, demo_rollout, eos_idx, max_ratio_gap, mo, tokenizer):
+def _(
+    demo_kl_ref,
+    demo_mask,
+    demo_max_logp_gap,
+    demo_old_logps,
+    demo_rollout,
+    eos_idx,
+    max_ratio_gap,
+    mo,
+    result_table,
+    tokenizer,
+):
     _row = int(eos_idx.argmin())            # 가장 일찍 끝난 답: EOS 뒤 채움이 가장 깁니다
     _e = int(eos_idx[_row])
     _ids = demo_rollout.completion_ids[_row]
     _show = list(range(max(0, _e - 6), min(len(_ids), _e + 5)))
     mo.vstack([
         mo.md(f"답 {_row}번의 끝부분 (첫 EOS 위치 = {_e}, 답 길이 R = {len(_ids)}):"),
-        mo.ui.table([{"답 안 위치": t, "토큰": tokenizer.convert_ids_to_tokens(int(_ids[t])).replace("Ċ", "\\n"),
+        result_table([{"답 안 위치": t, "토큰": tokenizer.convert_ids_to_tokens(int(_ids[t])).replace("Ċ", "\\n"),
                       "completion_mask": int(demo_mask[_row, t]),
                       "log p (rollout 때)": round(demo_old_logps[_row, t].item(), 3)} for t in _show], selection=None),
         mo.md(f"""
     - 답별 유효 토큰 수(첫 EOS 포함): `{demo_mask.sum(1).tolist()}`
-    - 다시 계산한 로그 확률과 rollout 때 값의 비율: `max |π/π_old − 1|` = **{max_ratio_gap:.1e}** (bf16끼리 비교)
+    - 다시 계산한 로그 확률과 rollout 때 값의 비율: $\\max\\left|\\pi/\\pi_{{old}}-1\\right|$ = **{max_ratio_gap:.1e}** (bf16끼리 비교)
     - reference(fp32)와 policy(bf16)의 로그 확률 차이: 토큰 최대 **{demo_max_logp_gap:.3f}**,
       원본 로그의 `kl_ref`(평균) = **{demo_kl_ref:.1e}**. 같은 가중치인데도 정밀도 때문에 생기는 차이입니다.
       학습이 진행되며 생기는 실제 변화(8절 그래프)보다는 작지만, KL 벌점이 첫 step부터 이 잡음에도 작게 반응한다는 뜻입니다.
@@ -672,23 +811,30 @@ def _(mo):
 
     **답마다 평균 → 배치 평균.** 긴 답과 짧은 답이 같은 무게를 가집니다.
 
-    **KL 항(`beta`, 기본값 0.1)** 은 DPO의 reference 역할과 같습니다. `exp(x) − x − 1`은 x = 0일 때 0이고 양쪽으로 커지는
+    **KL 항(`beta`, 기본값 0.1)** 은 DPO의 reference 역할과 같습니다. $e^x-x-1$은 x = 0일 때 0이고 양쪽으로 커지는
     KL 추정식(k3)입니다. policy가 reference에서 멀어질수록 벌점이 커집니다.
 
     **GRPO와 CISPO의 차이는 `ratio`가 1에서 벗어났을 때만** 생깁니다.
 
-    - **GRPO (PPO clip):** ratio가 `[1−ε, 1+ε]` 밖으로 advantage 방향으로 나가면 그 토큰의 기울기를 **0으로 만듭니다**(더 밀지 않음).
-    - **CISPO:** ratio를 상수(`detach`)로 보고 `epsilon_high`(5.0)에서 자르기만 합니다. **어떤 토큰의 기울기도 버리지 않습니다.**
-      PPO clip은 드물지만 중요한 토큰(갑자기 확률이 크게 바뀐 토큰)의 기울기를 버리기 쉬운데, CISPO는 크기만 제한합니다.
+    - **GRPO (PPO clip):** ratio가 $[1-\epsilon,1+\epsilon]$ 밖으로 advantage 방향으로 나가면 그 토큰의 기울기를 **0으로 만듭니다**(더 밀지 않음).
+    - **CISPO:** ratio를 상수(`detach`)로 보고 `epsilon_high`(5.0)에서 자르기만 합니다. **PPO clip처럼 보상 항의 기울기를 제거하지는 않습니다.**
+      PPO clip은 드물지만 중요한 토큰(갑자기 확률이 크게 바뀐 토큰)의 기울기를 버리기 쉬운데, CISPO는 ratio 배율을 제한하며 clipping 때문에 해당 보상 항을 제거하지 않습니다.
 
-    그런데 `train_grpo.py`는 **rollout 한 번에 업데이트를 한 번만** 합니다. 업데이트 전에 계산하므로 항상 `ratio = 1`이고
+    그런데 `train_grpo.py`는 **rollout 한 번에 업데이트를 한 번만** 합니다. 업데이트 전에 계산하므로 항상 $\mathrm{ratio}=1$이고
     (6절에서 확인), 이때 두 손실의 **기울기는 정확히 같습니다.** 아래에서 직접 계산합니다.
     """)
     return
 
 
 @app.cell
-def _(demo_advantages, demo_logps, demo_mask, demo_old_logps, demo_ref_logps, torch):
+def _(
+    demo_advantages,
+    demo_logps,
+    demo_mask,
+    demo_old_logps,
+    demo_ref_logps,
+    torch,
+):
     def policy_loss_fn(per_token_logps, old_per_token_logps, ref_per_token_logps, advantages, completion_mask,
                        loss_type, beta=0.1, epsilon=0.2, epsilon_high=5.0):
         """train_grpo.py의 손실 부분을 그대로 옮긴 것"""
@@ -718,7 +864,18 @@ def _(demo_advantages, demo_logps, demo_mask, demo_old_logps, demo_ref_logps, to
 
 
 @app.cell(hide_code=True)
-def _(DEMO_G, demo_advantages, demo_grad, demo_loss, demo_mask, mo, plt, policy_loss_fn, torch):
+def _(
+    DEMO_G,
+    demo_advantages,
+    demo_grad,
+    demo_loss,
+    demo_mask,
+    mo,
+    plt,
+    policy_loss_fn,
+    result_table,
+    torch,
+):
     # ratio가 1이 아닐 때 토큰 하나의 기울기 크기: −∂loss/∂log π  (beta=0)
     _ratios = torch.linspace(0.3, 6.5, 300)
     _fig, _axes = plt.subplots(1, 2, figsize=(10, 3))
@@ -743,16 +900,16 @@ def _(DEMO_G, demo_advantages, demo_grad, demo_loss, demo_mask, mo, plt, policy_
     _per_answer = (demo_grad["cispo"].sum(1) / demo_mask.sum(1)).tolist()
     mo.vstack([
         mo.md(f"4절 rollout에서 손실 **값**은 CISPO `{demo_loss['cispo']:.4f}`, GRPO `{demo_loss['grpo']:.6f}`로 다릅니다. "
-              "GRPO는 `−ratio·A`(ratio = 1이라 advantage 평균 ≈ 0)이고 CISPO는 `−A·log π`이기 때문입니다. "
+              "GRPO는 $-rA$ ($r$은 ratio)(ratio = 1이라 advantage 평균 ≈ 0)이고 CISPO는 $-A\\log\\pi$이기 때문입니다. "
               "하지만 답 토큰별 **기울기는 같습니다**(assert 통과). 학습을 움직이는 것은 손실 값이 아니라 기울기입니다."),
-        mo.ui.table([{"답": f"질문 {i // DEMO_G} / 답 {i % DEMO_G}", "advantage": round(demo_advantages[i].item(), 3),
+        result_table([{"답": f"질문 {i // DEMO_G} / 답 {i % DEMO_G}", "advantage": round(demo_advantages[i].item(), 3),
                       "토큰당 −∂loss/∂log p (평균)": round(-_per_answer[i], 4)} for i in range(len(_per_answer))],
                     selection=None, page_size=12),
-        mo.md("기울기의 부호가 advantage와 같습니다. 양수면 그 답 토큰의 로그 확률을 올리고, 음수면 내립니다. "
-              "advantage 0인 그룹(보상이 모두 같은 질문)은 기울기도 0입니다.\n\n"
+        mo.md("표는 손실 기울기의 음수, 즉 로그 확률의 갱신 방향을 표시합니다. 보상 항은 advantage가 양수면 로그 확률을 올리고 음수면 내립니다. "
+              "advantage가 0인 그룹은 보상 항의 기울기가 0입니다. KL 항의 기울기는 policy와 reference가 다르면 남을 수 있습니다.\n\n"
               "**ratio가 1이 아니라면** (rollout 하나로 여러 번 업데이트하거나, SGLang처럼 다른 엔진이 생성할 때):"),
         _plot,
-        mo.md("GRPO(실선)는 advantage가 양수일 때 ratio > 1.2, 음수일 때 ratio < 0.8이면 기울기가 **0**이 됩니다. "
+        mo.md("GRPO(실선)는 advantage가 양수일 때 ratio > 1.2, 음수일 때 ratio < 0.8이면 보상 항의 기울기가 **0**이 됩니다(KL 항은 별도). "
               "CISPO(점선)는 ratio에 비례하다가 5에서 멈출 뿐 0이 되지 않습니다."),
     ])
     return
@@ -777,7 +934,29 @@ def _(mo):
 
 
 @app.cell
-def _(CosineAnnealingLR, DataLoader, MAX_GEN_LEN, MAX_SEQ_LEN, Path, SimpleNamespace, SkipBatchSampler, TorchRolloutEngine, autocast_ctx, copy, device, io, math, redirect_stdout, setup_seed, sft_model, tempfile, tokenizer, torch, train_ds, train_grpo):
+def _(
+    CosineAnnealingLR,
+    DataLoader,
+    MAX_GEN_LEN,
+    MAX_SEQ_LEN,
+    Path,
+    SimpleNamespace,
+    SkipBatchSampler,
+    TorchRolloutEngine,
+    autocast_ctx,
+    copy,
+    device,
+    io,
+    math,
+    redirect_stdout,
+    setup_seed,
+    sft_model,
+    tempfile,
+    tokenizer,
+    torch,
+    train_ds,
+    train_grpo,
+):
     ckpt_dir = Path(tempfile.mkdtemp(prefix="minimind_grpo_out_"))
 
     def run_grpo(cfg, history, batches=None):
@@ -816,6 +995,7 @@ def _(CosineAnnealingLR, DataLoader, MAX_GEN_LEN, MAX_SEQ_LEN, Path, SimpleNames
         finally:
             train_grpo.lm_checkpoint = original_lm_checkpoint
         return model.eval(), log.getvalue()
+
     return ckpt_dir, run_grpo
 
 
@@ -831,7 +1011,17 @@ def _(mo):
 
 
 @app.cell
-def _(DEMO_G, DEMO_SEED, demo_advantages, demo_batch, demo_kl_ref, demo_loss, demo_rewards, run_grpo, setup_seed):
+def _(
+    DEMO_G,
+    DEMO_SEED,
+    demo_advantages,
+    demo_batch,
+    demo_kl_ref,
+    demo_loss,
+    demo_rewards,
+    run_grpo,
+    setup_seed,
+):
     parity_history = []
     setup_seed(DEMO_SEED)
     _, parity_log = run_grpo({"epochs": 1, "batch_size": 2, "learning_rate": 3e-7, "num_generations": DEMO_G,
@@ -845,7 +1035,15 @@ def _(DEMO_G, DEMO_SEED, demo_advantages, demo_batch, demo_kl_ref, demo_loss, de
 
 
 @app.cell(hide_code=True)
-def _(demo_advantages, demo_kl_ref, demo_loss, demo_rewards, mo, parity, parity_log):
+def _(
+    demo_advantages,
+    demo_kl_ref,
+    demo_loss,
+    demo_rewards,
+    mo,
+    parity,
+    parity_log,
+):
     mo.md(f"""
     | | 4~7절 직접 계산 | 원본 `grpo_train_epoch` |
     | --- | --- | --- |
@@ -893,11 +1091,22 @@ def _(evaluate, grpo_beta, grpo_g, grpo_loss, grpo_lr, run_grpo):
     grpo_history = []
     grpo_model, grpo_log = run_grpo(grpo_cfg, grpo_history)
     grpo_eval = evaluate(grpo_model)
-    return grpo_cfg, grpo_eval, grpo_history, grpo_log, grpo_model
+    return grpo_cfg, grpo_eval, grpo_history, grpo_log
 
 
 @app.cell(hide_code=True)
-def _(ckpt_dir, grpo_cfg, grpo_eval, grpo_history, grpo_log, mo, plt, sft_eval, test_ds):
+def _(
+    ckpt_dir,
+    grpo_cfg,
+    grpo_eval,
+    grpo_history,
+    grpo_log,
+    mo,
+    plt,
+    result_table,
+    sft_eval,
+    test_ds,
+):
     def _smooth(values, k=8):
         return [sum(values[max(0, i - k + 1): i + 1]) / len(values[max(0, i - k + 1): i + 1]) for i in range(len(values))]
 
@@ -924,7 +1133,7 @@ def _(ckpt_dir, grpo_cfg, grpo_eval, grpo_history, grpo_log, mo, plt, sft_eval, 
               f"loss_type={grpo_cfg['loss_type']}, {len(grpo_history)} step. 원본이 저장한 가중치: `{_pth}`"),
         _plot,
         mo.md("**학습에 없던 평가 256문제**에서 측정 (greedy, 최대 96토큰. 샘플링은 문제당 4회)\n\n" + _table),
-        mo.ui.table([{"질문": s["prompt"].split("user\n")[1].split("\nSolve")[0], "정답": s["answer"].split("#### ")[1],
+        result_table([{"질문": s["prompt"].split("user\n")[1].split("\nSolve")[0], "정답": s["answer"].split("#### ")[1],
                       "SFT 답": a["text"], "GRPO 후 답": b["text"]}
                      for s, a, b in zip(test_ds.samples[:12], sft_eval["greedy"][:12], grpo_eval["greedy"][:12])],
                     selection=None, page_size=6),
@@ -944,15 +1153,21 @@ def _(mo):
     - 가장 크게 줄어든 것은 **"정답 숫자를 쓰고도 최종 답은 틀림"(29% → 6%)** 입니다. 맞게 계산해 놓고 **필요 없는 단계를
       덧붙이다 답을 망치는** 행동이 줄었습니다. 보상 함수에는 "덧붙이지 말라"는 규칙이 없습니다. 그런 답이 0점을 받았을 뿐입니다.
     - **계산 자체를 틀리는 답은 남습니다.** 덧셈이 잘 오르지 않은 이유입니다(SFT 모델은 `6+7=9`처럼 덧셈 자체를 자주 틀립니다).
-      학습 후 오히려 계산이 틀리게 바뀐 답도 보일 수 있습니다. GRPO는 모델이 **이미 가끔 하는** 행동의 빈도를 바꾸는 방법이지,
-      모르는 지식을 넣는 방법이 아닙니다. 샘플링에서 한 번도 안 나오는 정답은 보상을 받을 기회가 없습니다.
+      학습 후 오히려 계산이 틀리게 바뀐 답도 보일 수 있습니다. 이 규칙 보상 실험은 생성한 답을 채점할 뿐 정답 풀이 텍스트를 직접 학습 목표로 제공하지 않습니다.
+      이것이 GRPO로 새로운 풀이 전략을 발견할 수 없다는 뜻은 아닙니다. 샘플링에서 한 번도 안 나오는 정답은 보상을 받을 기회가 없습니다.
     - **섞인 그룹 비율**: 보상이 서로 다른 답이 있는 질문의 비율이며, 실제로 학습 신호를 주는 질문의 비율입니다(여기서는 평균 0.5 정도).
       나머지 질문은 KL 항 말고는 아무것도 배우지 않습니다.
-    - **`kl_ref` 로그 값은 음수가 될 수 있습니다.** 원본은 `(ref_logp − logp)`의 평균을 기록합니다. policy가 자신이 생성한 답의
-      확률을 reference보다 높게 보면 음수입니다. 손실에 쓰는 `exp(x) − x − 1`은 항상 0 이상입니다.
-    - **학습률이 이렇게 작은데(3e-7) 왜 바뀔까?** Adam은 기울기 크기와 상관없이 매개변수마다 대략 학습률만큼 움직입니다.
-      6,400만 개가 한 방향으로 64번 움직이면 출력은 꽤 바뀝니다. 게다가 "여기서 끝낼까, 더 쓸까"는 확률이 비슷한 갈림길이라
+    - **`kl_ref` 로그 값은 음수가 될 수 있습니다.** 원본은 $\log\pi_{\mathrm{ref}}-\log\pi_\theta$의 평균을 기록합니다. policy가 자신이 생성한 답의
+      확률을 reference보다 높게 보면 음수입니다. 손실에 쓰는 $e^x-x-1$은 항상 0 이상입니다.
+    - **학습률이 이렇게 작은데(3e-7) 왜 바뀔까?** Adam의 모멘트 정규화는 일정한 기울기 스케일 변화의 영향을 일부 상쇄합니다.
+      다만 실제 이동은 원소별 모멘트·epsilon과 AdamW의 weight decay에 따라 다릅니다.
+      많은 매개변수의 작은 갱신이 누적되면 출력은 바뀔 수 있습니다. 게다가 "여기서 끝낼까, 더 쓸까"는 확률이 비슷한 갈림길이라
       작은 변화로도 greedy 답이 바뀝니다. 이 노트북 실험에서는 학습률을 10분의 1(3e-8)로 낮춰도 비슷하게 좋아졌습니다.
+
+
+    AdamW의 원소별 갱신은 $\Delta\theta=-\eta\hat m/(\sqrt{\hat v}+\epsilon)-\eta\lambda\theta$입니다.
+    $\eta$는 학습률, $\hat m,\hat v$는 편향 보정한 1·2차 모멘트, $\epsilon$은 분모 안정화 상수,
+    $\lambda$는 weight decay 계수입니다. 현재 기울기뿐 아니라 누적 상태와 원래 가중치에도 의존합니다.
     """)
     return
 
@@ -996,10 +1211,10 @@ def _(mo):
     | 데이터 | 질문만. 정답은 채점에만 쓰고 프롬프트에 넣지 않음 (`GSM8KDataset`) |
     | rollout | 질문마다 답 G개 샘플링, 생성 때 로그 확률(old policy)도 저장 |
     | 보상 | 규칙 채점 0/1 (`score_gsm8k_response`) 또는 보상 모델 점수 |
-    | advantage | 같은 질문의 답끼리 `(r − 평균) / (표준편차 + 1e-4)`. critic 모델 없음. 보상이 모두 같으면 0 |
-    | 손실 | 토큰마다 `−A · log π` 꼴 + `β · KL(reference)`. 답마다 평균 후 배치 평균 |
+    | advantage | 같은 질문의 답끼리 $(r-\mu)/(\sigma+10^{-4})$. critic 모델 없음. 보상이 모두 같으면 0 |
+    | 손실 | 토큰마다 $-A\log\pi_\theta$ 꼴 + $\beta\,\widehat{D}_{\mathrm{KL}}$. 답마다 평균 후 배치 평균 |
     | GRPO vs CISPO | ratio ≠ 1일 때만 다름. 원본은 rollout당 업데이트 1번이라 ratio = 1 |
-    | 효과 | 모델이 가끔 하던 좋은 행동(여기서는 군더더기 없이 끝내기)의 빈도가 오름. 새 지식은 넣지 못함 |
+    | 효과 | 모델이 가끔 하던 좋은 행동(여기서는 군더더기 없이 끝내기)의 빈도가 오름. 현재 규칙 보상은 정답 풀이를 직접 제공하지 않으며, 새 전략 학습 불가능을 뜻하지 않음 |
     | 주의 | 학습 보상만 보지 말고 학습에 없던 문제와 실제 답으로 확인 |
 
     ## 11. 직접 해 볼 과제

@@ -6,6 +6,29 @@ app = marimo.App(width="medium")
 
 @app.cell
 def _():
+    import sys as _display_sys
+    from pathlib import Path as _DisplayPath
+
+    _display_dir = str(_DisplayPath(__file__).resolve().parent)
+    if _display_dir not in _display_sys.path:
+        _display_sys.path.insert(0, _display_dir)
+    from notebook_display import result_table
+
+    return (result_table,)
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    **실행 안내:** 저장소 루트에서 `cd notebooks/minimind` → `uv sync --locked` →
+    `uv run marimo edit minimind_vlm_tour.py`. 환경·준비물과 권장 순서는 [공통 README](README.md)를 참고하세요.
+    위젯 변경 시 의존 셀이 다시 실행됩니다. 모델 크기·데이터·학습 설정 변경 전에는 해당 절의 재실행 범위를 확인하세요.
+    """)
+    return
+
+
+@app.cell
+def _():
     import copy
     import glob
     import io
@@ -85,7 +108,8 @@ def _():
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(r"""
+    mo.vstack([
+        mo.md(r"""
     # MiniMind-V: 언어 모델에 눈 달기 (Vision LLM 따라가기)
 
     지금까지 다룬 MiniMind는 **글만** 읽습니다. **VLM(Vision-Language Model)** 은 이미지를 보고 질문에 답합니다.
@@ -104,28 +128,18 @@ def _(mo):
 
     ## 0. 전체 구조
 
-    ```text
-     이미지 (256×256)
-        │  SiglipImageProcessor: 크기 맞춤, [-1, 1]로 정규화
-        ▼
-     ┌──────────────────────────┐
-     │ 이미지 인코더 SigLIP2       │  32×32 조각(patch) 8×8 = 64개 → 각각 768차원 벡터
-     │ (95M, 고정: 학습 안 함)     │
-     └──────────────────────────┘
-        │  [64, 768]
-        ▼
-     ┌──────────────────────────┐
-     │ Projector (MLP, 1.2M)      │  이미지 벡터를 언어 모델의 "단어 임베딩 자리"에 맞게 변환
-     └──────────────────────────┘
-        │  [64, 768]   ← 이미지 토큰 64개
-        ▼
-     "<|im_start|>user\n <|image_pad|>×64 \nWhat color is the shape?<|im_end|> ..."
-        │   <|image_pad|> 64칸의 임베딩을 이미지 토큰으로 갈아 끼움 (count_vision_proj)
-        ▼
-     ┌──────────────────────────┐
-     │ MiniMind 언어 모델 (64M)    │  평소처럼 다음 토큰 예측 → "The shape is red."
-     └──────────────────────────┘
-    ```
+    """),
+        mo.mermaid(r"""
+    flowchart TB
+     IMG["256×256 이미지"] --> P["SiglipImageProcessor: 크기·정규화"]
+     P --> V["SigLIP2: 고정, 약 95M, 32×32 patch 8×8개"]
+     V --> F["시각 특징: 64×768"] --> PROJ["Projector MLP: 약 1.2M"]
+     PROJ --> E["이미지 토큰: 64×768"]
+     E --> I["count_vision_proj: image_pad 64칸의 임베딩 교체"]
+     TXT["이미지 placeholder와 질문이 포함된 대화"] --> I
+     I --> L["MiniMind 언어 모델: 약 64M"] --> ANS["다음 토큰 예측: The shape is red."]
+    """),
+        mo.md(r"""
 
     | | 언어 모델 (`MiniMindForCausalLM`) | VLM (`MiniMindVLM`) |
     | --- | --- | --- |
@@ -136,6 +150,7 @@ def _(mo):
 
     `MiniMindVLM`은 `MiniMindForCausalLM`을 **상속**합니다. 즉 VLM은 "이미지를 받는 입구가 하나 더 달린 언어 모델"입니다.
     """)
+    ])
     return
 
 
@@ -155,8 +170,18 @@ def _(mo):
     return
 
 
-@app.cell
-def _(MiniMindVLM, VLMConfig, device, hf_hub_download, json, load_file, mo, setup_seed, snapshot_download):
+@app.cell(hide_code=True)
+def _(
+    MiniMindVLM,
+    VLMConfig,
+    device,
+    hf_hub_download,
+    json,
+    load_file,
+    mo,
+    setup_seed,
+    snapshot_download,
+):
     mo.stop(device != "cuda", mo.callout(mo.md(
         "**GPU를 찾지 못했습니다.** 이 노트북은 NVIDIA GPU에서 학습하도록 만들었습니다. "
         "`uv run python -c 'import torch; print(torch.cuda.is_available())'`로 확인하세요."), kind="danger"))
@@ -192,14 +217,14 @@ def _(MiniMindVLM, VLMConfig, device, hf_hub_download, json, load_file, mo, setu
         {"부품": "vision_proj (Projector)", "매개변수": f"{count(base_vlm.vision_proj) / 1e6:.2f}M", "어디서": "무작위 초기화", "학습": "항상 학습"},
         {"부품": "언어 모델 (model + lm_head)", "매개변수": f"{(count(base_vlm.model)) / 1e6:.1f}M", "어디서": BASE_REPO, "학습": "freeze_llm에 따라"},
     ]
-    return BASE_REPO, VISION_REPO, base_vlm, param_rows, vision_dir, vlm_config
+    return base_vlm, param_rows, vision_dir, vlm_config
 
 
 @app.cell(hide_code=True)
-def _(base_vlm, mo, param_rows, torch, vlm_config):
+def _(base_vlm, mo, param_rows, result_table, torch, vlm_config):
     mo.vstack([
         mo.md(f"실행 장치: **GPU (`{torch.cuda.get_device_name(0)}`)**"),
-        mo.ui.table(param_rows, selection=None),
+        result_table(param_rows, selection=None),
         mo.md(f"""
     - `vlm_config.image_special_token = {vlm_config.image_special_token!r}`, `image_ids = {vlm_config.image_ids}`,
       `image_token_len = {vlm_config.image_token_len}`, `image_hidden_size = {vlm_config.image_hidden_size}`
@@ -260,6 +285,7 @@ def _(Image, ImageDraw, io, math):
         buf = io.BytesIO()
         img.save(buf, format="PNG")
         return buf.getvalue()
+
     return COLORS, HELD_OUT, QA_TEMPLATES, SHAPES, draw_shape, png_bytes
 
 
@@ -302,8 +328,8 @@ def _(mo):
         return outputs.last_hidden_state         # [B, 64, 768]
     ```
 
-    - `SiglipImageProcessor`는 그림을 **256×256**으로 바꾸고 픽셀 값을 `(x / 255 - 0.5) / 0.5`로 **[-1, 1]** 범위에 맞춥니다.
-    - SigLIP2는 그림을 **32×32 조각(patch)** 으로 자릅니다. 256 / 32 = 8이므로 **8×8 = 64조각**,
+    - `SiglipImageProcessor`는 그림을 **256×256**으로 바꾸고 픽셀 값을 $((x/255)-0.5)/0.5$로 **[-1, 1]** 범위에 맞춥니다.
+    - SigLIP2는 그림을 **32×32 조각(patch)** 으로 자릅니다. $256/32=8$이므로 **$8\times8=64$조각**,
       조각마다 **768차원 벡터** 하나가 나옵니다. 조각들은 Transformer 안에서 서로를 참고하므로, 각 벡터는 주변 맥락도 담습니다.
     - 이 64개가 그대로 **이미지 토큰 64개**가 됩니다(`image_token_len = 64`).
     """)
@@ -328,7 +354,7 @@ def _(MiniMindVLM, base_vlm, device, draw_shape, random, torch):
     assert demo_pixels.shape == (1, 1, 3, 256, 256)
     assert -1.0 <= demo_pixels.min() and demo_pixels.max() <= 1.0
     assert demo_feats.shape == (64, 768)
-    return demo_feats, demo_img, demo_pixels, patch_features, pixel_inputs
+    return demo_feats, demo_img, patch_features, pixel_inputs
 
 
 @app.cell(hide_code=True)
@@ -344,7 +370,18 @@ def _(mo):
 
 
 @app.cell(hide_code=True)
-def _(Image, demo_img, draw_shape, glob, minimind_v_dir, mo, patch_features, plt, random, torch):
+def _(
+    Image,
+    demo_img,
+    draw_shape,
+    glob,
+    minimind_v_dir,
+    mo,
+    patch_features,
+    plt,
+    random,
+    torch,
+):
     def _pca_rgb(feats):
         _x = feats - feats.mean(0, keepdim=True)
         _u, _s, _v = torch.pca_lowrank(_x, q=3, center=False)
@@ -449,7 +486,16 @@ def _(mo):
 
 
 @app.cell
-def _(MiniMindVLM, base_vlm, demo_img, device, pixel_inputs, tokenizer, torch, vlm_config):
+def _(
+    MiniMindVLM,
+    base_vlm,
+    demo_img,
+    device,
+    pixel_inputs,
+    tokenizer,
+    torch,
+    vlm_config,
+):
     IMAGE_PAD_ID = vlm_config.image_ids[0]
     assert tokenizer.convert_tokens_to_ids(vlm_config.image_special_token) == IMAGE_PAD_ID == 12
 
@@ -477,7 +523,7 @@ def _(MiniMindVLM, base_vlm, demo_img, device, pixel_inputs, tokenizer, torch, v
 
 
 @app.cell(hide_code=True)
-def _(IMAGE_PAD_ID, inject_changed, inject_ids, mo, tokenizer):
+def _(IMAGE_PAD_ID, inject_changed, inject_ids, mo, result_table, tokenizer):
     _ids = inject_ids[0].tolist()
     _first = _ids.index(IMAGE_PAD_ID)
     _rows = []
@@ -490,7 +536,7 @@ def _(IMAGE_PAD_ID, inject_changed, inject_ids, mo, tokenizer):
                       "모델에 들어가는 벡터": "🖼️ 이미지 토큰 64개 (vision_proj 출력)" if _t == IMAGE_PAD_ID else "단어 임베딩"})
     mo.vstack([
         mo.md(f"**추론 프롬프트** (`<|image_pad|>` 64개는 한 줄로 묶어 표시, 전체 {len(_ids)}토큰)"),
-        mo.ui.table(_rows, selection=None, page_size=30),
+        result_table(_rows, selection=None, page_size=30),
         mo.md(f"""
     원본 `count_vision_proj`와 마스크 한 줄 구현의 결과가 **완전히 같았고**, 임베딩이 바뀐 위치는 정확히 **{inject_changed}칸**이었습니다.
     VLM의 비밀은 이것이 전부입니다. 언어 모델 입장에서 이미지는 **"단어 사전에 없는 단어 64개"** 일 뿐입니다.
@@ -525,7 +571,23 @@ def _(mo):
 
 
 @app.cell
-def _(COLORS, HELD_OUT, QA_TEMPLATES, SHAPES, VLMDataset, base_vlm, draw_shape, json, pa, png_bytes, pq, random, tempfile, tokenizer, vlm_config):
+def _(
+    COLORS,
+    HELD_OUT,
+    QA_TEMPLATES,
+    SHAPES,
+    VLMDataset,
+    base_vlm,
+    draw_shape,
+    json,
+    pa,
+    png_bytes,
+    pq,
+    random,
+    tempfile,
+    tokenizer,
+    vlm_config,
+):
     from pathlib import Path as _Path
 
     vlm_data_dir = _Path(tempfile.mkdtemp(prefix="minimind_vlm_data_"))
@@ -561,11 +623,19 @@ def _(COLORS, HELD_OUT, QA_TEMPLATES, SHAPES, VLMDataset, base_vlm, draw_shape, 
     assert len(train_ds) == 18 * 40
     assert int((sample_ids == 12).sum()) == 64
     assert sample_pixels["pixel_values"].shape == (1, 3, 256, 256)
-    return load_vlm_dataset, make_rows, sample_ids, sample_labels, test_items, train_combos, train_ds, train_rows, vlm_data_dir
+    return (
+        load_vlm_dataset,
+        sample_ids,
+        sample_labels,
+        test_items,
+        train_ds,
+        train_rows,
+        vlm_data_dir,
+    )
 
 
 @app.cell(hide_code=True)
-def _(json, mo, sample_ids, sample_labels, tokenizer, train_rows, train_ds):
+def _(mo, sample_ids, sample_labels, tokenizer, train_ds, train_rows):
     _text = tokenizer.decode(sample_ids).replace("<|image_pad|>" * 64, "<|image_pad|>×64").replace("<|endoftext|>", "")
     _real = int((sample_ids != tokenizer.pad_token_id).sum())
     _target = tokenizer.decode(sample_labels[sample_labels != -100])
@@ -634,6 +704,7 @@ def _(HELD_OUT, TEXT_QUESTIONS, ask, test_items):
         if base_text_answers is not None:
             result["text_same"] = sum(a == b for a, b in zip(text_answers, base_text_answers))
         return result
+
     return (evaluate,)
 
 
@@ -705,7 +776,16 @@ def _(mo):
 
 
 @app.cell
-def _(DataLoader, SkipBatchSampler, autocast_ctx, device, get_lr, setup_seed, torch, vlm_collate_fn):
+def _(
+    DataLoader,
+    SkipBatchSampler,
+    autocast_ctx,
+    device,
+    get_lr,
+    setup_seed,
+    torch,
+    vlm_collate_fn,
+):
     def apply_freeze(model, freeze_llm):
         """init_vlm_model의 '1. 전체 고정 후 vision_proj만' + '2. 전략 확인'"""
         for name, param in model.named_parameters():
@@ -753,7 +833,8 @@ def _(DataLoader, SkipBatchSampler, autocast_ctx, device, get_lr, setup_seed, to
                     logs.append(f"Epoch:[{epoch + 1}/{args['epochs']}]({step}/{iters}), "
                                 f"loss: {loss.item() * args['accumulation_steps']:.4f}, lr: {lr:.8f}")
         return model.eval(), n_trainable
-    return apply_freeze, run_training
+
+    return (run_training,)
 
 
 @app.cell(hide_code=True)
@@ -765,7 +846,22 @@ def _(mo):
 
 
 @app.cell
-def _(Image, base_vlm, copy, load_vlm_dataset, pa, png_bytes, pq, run_training, setup_seed, train_ds, train_rows, vlm_data_dir, vlm_epochs, vlm_proj_lr):
+def _(
+    Image,
+    base_vlm,
+    copy,
+    load_vlm_dataset,
+    pa,
+    png_bytes,
+    pq,
+    run_training,
+    setup_seed,
+    train_ds,
+    train_rows,
+    vlm_data_dir,
+    vlm_epochs,
+    vlm_proj_lr,
+):
     import time as _time
 
     _common = {"epochs": vlm_epochs.value, "batch_size": 16, "accumulation_steps": 1, "grad_clip": 1.0}
@@ -793,7 +889,18 @@ def _(Image, base_vlm, copy, load_vlm_dataset, pa, png_bytes, pq, run_training, 
             model_b = _model
         else:
             model_c = _model
-    return args_a, args_b, hist_a, hist_b, hist_c, logs_a, model_a, model_b, model_c, train_seconds
+    return (
+        args_a,
+        args_b,
+        hist_a,
+        hist_b,
+        hist_c,
+        logs_a,
+        model_a,
+        model_b,
+        model_c,
+        train_seconds,
+    )
 
 
 @app.cell
@@ -804,7 +911,19 @@ def _(base_eval, base_text_answers, evaluate, model_a, model_b, model_c):
 
 
 @app.cell(hide_code=True)
-def _(args_a, args_b, hist_a, hist_b, hist_c, logs_a, mo, plt, train_seconds, vlm_evals):
+def _(
+    args_a,
+    args_b,
+    hist_a,
+    hist_b,
+    hist_c,
+    logs_a,
+    mo,
+    plt,
+    result_table,
+    train_seconds,
+    vlm_evals,
+):
     _fig, _ax = plt.subplots(figsize=(6.5, 3))
     _ax.plot(hist_a, lw=0.9, label=f"A: projector only (lr={args_a['learning_rate']})")
     _ax.plot(hist_b, lw=0.9, label="B: + first/last LLM layer (lr=2e-4)")
@@ -820,8 +939,8 @@ def _(args_a, args_b, hist_a, hist_b, hist_c, logs_a, mo, plt, train_seconds, vl
               "일반 질문 답이 베이스와 같음": f"{v.get('text_same', 4)}/4"} for k, v in vlm_evals.items()]
     mo.vstack([
         mo.md(f"설정: epochs={args_a['epochs']}, batch 16, A·C lr={args_a['learning_rate']}, B lr={args_b['learning_rate']}"),
-        mo.hstack([_plot, mo.ui.table(_time_rows, selection=None)], align="center"),
-        mo.ui.table(_rows, selection=None),
+        mo.hstack([_plot, result_table(_time_rows, selection=None)], align="center"),
+        result_table(_rows, selection=None),
         mo.md("**실험 A 로그 (epoch 끝마다)**\n```text\n" + "\n".join(logs_a) + "\n```"),
     ])
     return
@@ -891,24 +1010,33 @@ def _(mo):
 
 
 @app.cell
-def _(base_text_answers, base_vlm, copy, evaluate, run_training, setup_seed, train_ds, vlm_epochs):
+def _(
+    base_text_answers,
+    base_vlm,
+    copy,
+    evaluate,
+    run_training,
+    setup_seed,
+    train_ds,
+    vlm_epochs,
+):
     setup_seed(0)
     model_d, _ = run_training(copy.deepcopy(base_vlm), train_ds,
                               {"epochs": vlm_epochs.value, "batch_size": 16, "accumulation_steps": 1,
                                "grad_clip": 1.0, "learning_rate": 1e-3}, freeze_llm=1)
     eval_d = evaluate(model_d, base_text_answers)
-    return eval_d, model_d
+    return (eval_d,)
 
 
 @app.cell(hide_code=True)
-def _(TEXT_QUESTIONS, base_text_answers, eval_d, mo, vlm_evals):
+def _(TEXT_QUESTIONS, base_text_answers, eval_d, mo, result_table, vlm_evals):
     _rows = [{"이미지 없는 일반 질문": q, "베이스": b, "A (Projector만)": a, "B (lr 2e-4)": bb, "D (lr 1e-3)": d}
              for q, b, a, bb, d in zip(TEXT_QUESTIONS, base_text_answers, vlm_evals["A"]["text_answers"],
                                        vlm_evals["B"]["text_answers"], eval_d["text_answers"])]
     mo.vstack([
         mo.md(f"D의 그림 정답률: 색 {eval_d['seen_color']:.0%} / 모양 {eval_d['seen_shape']:.0%} (학습 조합), "
               f"색 {eval_d['held_color']:.0%} / 모양 {eval_d['held_shape']:.0%} (제외 조합)"),
-        mo.ui.table(_rows, selection=None),
+        result_table(_rows, selection=None),
         mo.md(r"""
     D는 색 정답률이 크게 떨어지고, 거의 모든 글 질문에 "It is a square." 같은 도형 답을 하거나 의미 없는 토큰을 반복합니다.
     **언어 모델 자체가 망가진 것입니다**(catastrophic forgetting). B에서 시작된 오염이 학습률을 키우자 전체로 번졌습니다.
@@ -963,7 +1091,17 @@ def _(mo):
 
 
 @app.cell
-def _(F, MiniMindVLM, base_vlm, draw_shape, model_a, pixel_inputs, random, tokenizer, torch):
+def _(
+    F,
+    MiniMindVLM,
+    base_vlm,
+    draw_shape,
+    model_a,
+    pixel_inputs,
+    random,
+    tokenizer,
+    torch,
+):
     @torch.no_grad()
     def projected_tokens(model, img):
         pv = {k: v.flatten(0, 1) for k, v in pixel_inputs(img).items()}
@@ -985,14 +1123,14 @@ def _(F, MiniMindVLM, base_vlm, draw_shape, model_a, pixel_inputs, random, token
     soft_rows.append({"벡터": "단어 임베딩 (참고)", "평균 노름": f"{_emb.norm(dim=-1).mean():.1f}",
                       "가장 가까운 단어와의 코사인 (평균)": f"' red'↔' square': {F.cosine_similarity(_emb[_red], _emb[_sq], dim=0):.2f}",
                       "가장 자주 가까운 단어 5개": "—"})
-    return projected_tokens, soft_rows
+    return (soft_rows,)
 
 
 @app.cell(hide_code=True)
-def _(mo, soft_rows):
+def _(mo, result_table, soft_rows):
     mo.vstack([
         mo.md("빨간 사각형 그림의 이미지 토큰 64개를 분석한 결과:"),
-        mo.ui.table(soft_rows, selection=None),
+        result_table(soft_rows, selection=None),
         mo.md(r"""
     - 학습된 이미지 토큰은 단어 임베딩보다 **수십 배 깁니다.** 언어 모델의 각 층은 입력을 RMSNorm으로 정규화한 뒤 읽으므로
       길이 자체가 문제 되지는 않고, 오히려 큰 값이 residual 흐름에서 오래 살아남습니다.
@@ -1068,8 +1206,20 @@ def _(mo):
     return (llava_button,)
 
 
-@app.cell
-def _(MiniMindVLM, VLMConfig, ask, device, hf_hub_download, json, llava_button, load_file, mo, real_imgs, vision_dir):
+@app.cell(hide_code=True)
+def _(
+    MiniMindVLM,
+    VLMConfig,
+    ask,
+    device,
+    hf_hub_download,
+    json,
+    llava_button,
+    load_file,
+    mo,
+    real_imgs,
+    vision_dir,
+):
     mo.stop(not llava_button.value, mo.md("*버튼을 누르면 실행합니다.*"))
     LLAVA_REPO, LLAVA_REVISION = "caspar/MiniMind-V-Dense-64M-LLaVA-Short-v1.0", "4e6f87f184b27f0692e1f8b3afed959de254894b"
     _cfg = json.load(open(hf_hub_download(LLAVA_REPO, "config.json", revision=LLAVA_REVISION)))

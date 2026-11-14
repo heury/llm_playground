@@ -6,6 +6,29 @@ app = marimo.App(width="medium")
 
 @app.cell
 def _():
+    import sys as _display_sys
+    from pathlib import Path as _DisplayPath
+
+    _display_dir = str(_DisplayPath(__file__).resolve().parent)
+    if _display_dir not in _display_sys.path:
+        _display_sys.path.insert(0, _display_dir)
+    from notebook_display import result_table
+
+    return (result_table,)
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    **실행 안내:** 저장소 루트에서 `cd notebooks/minimind` → `uv sync --locked` →
+    `uv run marimo edit minimind_distillation_tour.py`. 환경·준비물과 권장 순서는 [공통 README](README.md)를 참고하세요.
+    위젯 변경 시 의존 셀이 다시 실행됩니다. 모델 크기·데이터·학습 설정 변경 전에는 해당 절의 재실행 범위를 확인하세요.
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _():
     import copy
     import json
     import random
@@ -104,15 +127,17 @@ def _(mo):
 
     `train_distillation.py`는 `train_full_sft.py`와 **데이터·학습 루프가 같고, 손실만 다릅니다.**
 
-    ```python
-    loss = alpha * CE(학생, 정답 토큰) + (1 - alpha) * T² · KL(교사_T ‖ 학생_T)
-    ```
+    $$
+    \mathcal{L}=\alpha\,\mathcal{L}_{\mathrm{CE}}+(1-\alpha)T^2 D_{\mathrm{KL}}(p_{\mathrm{teacher},T}\Vert p_{\mathrm{student},T}).
+    $$
+
+    $\alpha$는 정답 CE의 비중, $T$는 softmax 온도입니다. 같은 유효 답변 토큰에서 두 항을 평균합니다.
 
     | | `train_full_sft.py` | `train_distillation.py` |
     | --- | --- | --- |
     | 모델 | 학생 하나 | 학생(학습) + **교사(고정, `no_grad`)** |
     | 정답 | 정답 토큰 (hard label) | 정답 토큰 + **교사의 확률 분포 (soft label)** |
-    | 손실 | CE | **`alpha·CE + (1−alpha)·distill`** (`--alpha 0.5`, `--temperature 1.5`) |
+    | 손실 | CE | **$\alpha\,\mathrm{CE}+(1-\alpha)\,\mathcal{L}_{\mathrm{distill}}$** (`--alpha 0.5`, `--temperature 1.5`) |
     | 학습률 기본값 | 1e-5 | 5e-6 |
     | 데이터 | `SFTDataset` | `SFTDataset` (같음) |
 
@@ -135,7 +160,14 @@ def _(mo):
 
 
 @app.cell
-def _(MiniMindConfig, MiniMindForCausalLM, device, hf_hub_download, json, load_file):
+def _(
+    MiniMindConfig,
+    MiniMindForCausalLM,
+    device,
+    hf_hub_download,
+    json,
+    load_file,
+):
     STUDENT_REPO = "caspar/MiniMind-Dense-64M-Mixed-SFT-v1.0"
     TEACHER_REPO = "caspar/MiniMind-MoE-198M-A64M-Mixed-SFT-v1.0"
     REVISION = "v1.0"  # 버전 고정
@@ -169,14 +201,14 @@ def _(MiniMindConfig, MiniMindForCausalLM, device, hf_hub_download, json, load_f
         for name, repo, m in [("교사", TEACHER_REPO, teacher), ("학생", STUDENT_REPO, student_base)]
     ]
     assert teacher.config.vocab_size == student_base.config.vocab_size == 6400
-    return STUDENT_REPO, TEACHER_REPO, param_rows, student_base, teacher
+    return param_rows, student_base, teacher
 
 
 @app.cell(hide_code=True)
-def _(mo, param_rows, torch):
+def _(mo, param_rows, result_table, torch):
     mo.vstack([
         mo.md(f"실행 장치: **GPU (`{torch.cuda.get_device_name(0)}`)**"),
-        mo.ui.table(param_rows, selection=None),
+        result_table(param_rows, selection=None),
         mo.md(r"""
     교사는 매개변수가 3배지만 토큰마다 전문가 하나만 쓰므로 **계산량은 학생과 비슷합니다.**
     MoE의 장점(같은 계산량으로 더 많은 지식 저장)을 **배포하기 쉬운 Dense 모델로 옮기는 것**이 이 증류의 목적입니다.
@@ -189,10 +221,12 @@ def _(mo, param_rows, torch):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## 2. 실습 데이터: GSM8K test (두 모델 모두 처음 보는 문제)
+    ## 2. 실습 데이터: GSM8K test에서 나눈 교육용 학습·확인 묶음
 
     두 모델은 GSM8K **train**으로 SFT되었고, 모델 카드에 따르면 GSM8K **test**는 평가에만 썼습니다.
-    그래서 test 문제는 교사와 학생 모두에게 **처음 보는 데이터**입니다. 여기서 두 묶음을 겹치지 않게 뽑습니다.
+    이 기록만으로 사전 학습 단계의 노출이나 표현을 바꾼 중복까지 배제할 수는 없습니다.
+    이 실습은 test 일부를 증류 학습에 재사용하므로 결과를 **표준 GSM8K test 성능으로 보고하지 않습니다.**
+    아래 두 묶음은 이 실습 안에서 서로 겹치지 않습니다.
 
     - **증류 학습용 128문제:** test의 0~127번
     - **평가용 256문제:** test의 1000~1255번 (학습에 쓰지 않음)
@@ -232,7 +266,14 @@ def _(SFTDataset, json, load_dataset, random, tempfile, tokenizer, torch):
     eval_y = torch.stack([y for _, y in _pairs])
     eval_target_tokens = int((eval_y[:, 1:] != -100).sum())
     assert len(kd_train_ds) == 128 and eval_x.shape == (256, MAX_SEQ_LEN)
-    return eval_rows, eval_target_tokens, eval_x, eval_y, kd_train_ds, train_rows
+    return (
+        eval_rows,
+        eval_target_tokens,
+        eval_x,
+        eval_y,
+        kd_train_ds,
+        train_rows,
+    )
 
 
 @app.cell(hide_code=True)
@@ -312,7 +353,15 @@ def _(F, device, eval_x, eval_y, student_base, teacher, tokenizer, torch):
         "교사 1등 확률 평균": float(_top1.mean()),
         "교사 분포 엔트로피 평균 (nats)": float(_entropy.mean()),
     }
-    return answer_positions_logits, dk_context, dk_label, dk_stats, dk_student_logits, dk_teacher_logits, top_tokens
+    return (
+        answer_positions_logits,
+        dk_context,
+        dk_label,
+        dk_stats,
+        dk_student_logits,
+        dk_teacher_logits,
+        top_tokens,
+    )
 
 
 @app.cell(hide_code=True)
@@ -323,7 +372,19 @@ def _(mo):
 
 
 @app.cell(hide_code=True)
-def _(F, dk_context, dk_label, dk_stats, dk_student_logits, dk_teacher_logits, dk_temperature, mo, plt, tokenizer, top_tokens):
+def _(
+    F,
+    dk_context,
+    dk_label,
+    dk_stats,
+    dk_student_logits,
+    dk_teacher_logits,
+    dk_temperature,
+    mo,
+    plt,
+    tokenizer,
+    top_tokens,
+):
     _T = dk_temperature.value
     _ids = F.softmax(dk_teacher_logits, -1).topk(8).indices
     _names = [repr(tokenizer.decode([int(i)])) for i in _ids]
@@ -381,7 +442,7 @@ def _(mo):
     1. **`F.kl_div(input, target)`의 순서.** `input`은 학생의 **log 확률**, `target`은 교사의 **확률**입니다.
        계산 결과는 $\sum_i p^{teacher}_i (\log p^{teacher}_i - \log p^{student}_i) = \mathrm{KL}(p^{teacher} \,\|\, p^{student})$,
        즉 **교사 분포 기준의 forward KL**입니다. 교사가 확률을 준 토큰은 학생도 모두 확률을 주도록 만듭니다.
-    2. **`reduction='batchmean'`.** 합을 첫 번째 차원 크기로 나눕니다. 원본은 `[B, L, V]`를 `[B·L, V]`로 펴고
+    2. **`reduction='batchmean'`.** 합을 첫 번째 차원 크기로 나눕니다. 원본은 `[B, L, V]`를 $[BL,V]$로 펴고
        정답 위치만 골라 넣으므로 **정답 토큰 하나당 평균 KL**이 됩니다(`'mean'`은 어휘 6,400까지 나눠 버려 틀린 값).
     3. **`temperature ** 2` 곱하기.** 아래 4-1에서 직접 확인합니다.
 
@@ -391,7 +452,16 @@ def _(mo):
 
 
 @app.cell
-def _(F, answer_positions_logits, distillation_loss, eval_x, eval_y, student_base, teacher, torch):
+def _(
+    F,
+    answer_positions_logits,
+    distillation_loss,
+    eval_x,
+    eval_y,
+    student_base,
+    teacher,
+    torch,
+):
     # 평가 문제 4개의 정답 위치 logits로 확인합니다.
     kd_t_logits, _, _ = answer_positions_logits(teacher, eval_x[:4], eval_y[:4])
     kd_s_logits, kd_labels, _ = answer_positions_logits(student_base, eval_x[:4], eval_y[:4])
@@ -414,10 +484,10 @@ def _(F, answer_positions_logits, distillation_loss, eval_x, eval_y, student_bas
 
 
 @app.cell(hide_code=True)
-def _(kd_check_rows, kd_s_logits, mo):
+def _(kd_check_rows, kd_s_logits, mo, result_table):
     mo.vstack([
         mo.md(f"평가 문제 4개, 정답 토큰 **{kd_s_logits.shape[0]}개** (`[토큰 수, 어휘] = {list(kd_s_logits.shape)}`)"),
-        mo.ui.table(kd_check_rows, selection=None),
+        result_table(kd_check_rows, selection=None),
         mo.md("원본과 직접 계산이 같습니다. `'mean'`이었다면 값이 6,400분의 1로 작아져 CE와 섞을 때 증류 손실이 거의 무시됩니다."),
     ])
     return
@@ -440,7 +510,7 @@ def _(mo):
 
 
 @app.cell
-def _(F, kd_s_logits, kd_t_logits, torch):
+def _(F, kd_s_logits, kd_t_logits):
     t2_rows = []
     for _T in [1.0, 1.5, 2.0, 4.0, 8.0]:
         _norms = {}
@@ -460,13 +530,13 @@ def _(F, kd_s_logits, kd_t_logits, torch):
 
 
 @app.cell(hide_code=True)
-def _(mo, t2_rows):
+def _(mo, result_table, t2_rows):
     mo.vstack([
-        mo.ui.table(t2_rows, selection=None),
+        result_table(t2_rows, selection=None),
         mo.md(r"""
     - **T² 없음:** T=1 → 8에서 기울기가 수백 분의 1로 줄어듭니다. T=4만 되어도 증류 손실이 CE 옆에서 거의 무시됩니다.
     - **T² 곱함:** 원본이 권장하는 T=1~2에서는 기울기 크기가 거의 같습니다. T=4·8에서는 두 분포 자체가 비슷해져(KL 값도 작아짐)
-      몇 배 줄지만, T² 없이 줄어드는 정도에 비하면 훨씬 작습니다. 그래서 원본은 `alpha·CE + (1−alpha)·distill`을 그대로 더할 수 있습니다.
+      몇 배 줄지만, T² 없이 줄어드는 정도에 비하면 훨씬 작습니다. 그래서 원본은 $\alpha\,\mathrm{CE}+(1-\alpha)\,\mathcal{L}_{\mathrm{distill}}$을 그대로 더할 수 있습니다.
     - 해석적 기울기 $T(p^s - p^t)$와 autograd 결과가 같음도 확인했습니다.
     """),
     ])
@@ -508,6 +578,7 @@ def _(F, autocast_ctx, device, eval_x, eval_y, teacher, torch):
             agree += (s.argmax(-1) == t.argmax(-1)).sum().item()
             n += mask.sum().item()
         return {"ce": ce / n, "kl": kl / n, "agree": agree / n}
+
     return (evaluate,)
 
 
@@ -560,7 +631,22 @@ def _(mo):
 
 
 @app.cell
-def _(DataLoader, F, SkipBatchSampler, autocast_ctx, copy, device, distillation_loss, evaluate, get_lr, setup_seed, student_base, teacher, time, torch):
+def _(
+    DataLoader,
+    F,
+    SkipBatchSampler,
+    autocast_ctx,
+    copy,
+    device,
+    distillation_loss,
+    evaluate,
+    get_lr,
+    setup_seed,
+    student_base,
+    teacher,
+    time,
+    torch,
+):
     def run_distillation(train_ds, alpha, temperature, learning_rate, epochs=5, batch_size=8, grad_clip=1.0):
         """train_distillation.py의 '8. 학습 시작' + train_epoch. 학생 사본을 학습해 (모델, 기록)을 돌려줍니다."""
         setup_seed(42)
@@ -625,6 +711,7 @@ def _(DataLoader, F, SkipBatchSampler, autocast_ctx, copy, device, distillation_
         history["seconds"] = time.time() - start
         history["peak_gb"] = torch.cuda.max_memory_allocated() / 1e9
         return model.eval(), history
+
     return (run_distillation,)
 
 
@@ -640,7 +727,7 @@ def _(mo):
     | --- | --- | --- | --- |
     | **A** | 1.0 | CE만 | 교사 없이 SFT (기준) |
     | **B** (원본 기본값) | 0.5 | CE + 증류 반반 | 정답과 교사를 함께 따름 |
-    | **C** | 0.0 | 증류만 | 교사만 흉내 냄 (정답을 보지 않음) |
+    | **C** | 0.0 | 증류만 | 교사 분포 모사. 정답 CE는 직접 최적화하지 않지만 정답 접두문맥은 입력에 사용 |
     | **A′** (대조군) | 1.0 | CE만, 학습률 2.5e-5 | B의 CE 가중치가 절반이라 좋아진 것인지 확인 |
 
     GPU에서 실험 하나에 약 10초 걸립니다.
@@ -664,7 +751,15 @@ def _(kd_train_ds, run_distillation):
 
 
 @app.cell(hide_code=True)
-def _(kd_experiments, kd_histories, mo, plt, student_eval, teacher_eval):
+def _(
+    kd_experiments,
+    kd_histories,
+    mo,
+    plt,
+    result_table,
+    student_eval,
+    teacher_eval,
+):
     _fig, _axes = plt.subplots(1, 3, figsize=(12, 3.2))
     _colors = {"A: CE only (alpha=1)": "tab:red", "B: alpha=0.5": "tab:green",
                "C: KD only (alpha=0)": "tab:blue", "A': CE only, lr/2": "tab:pink"}
@@ -696,7 +791,7 @@ def _(kd_experiments, kd_histories, mo, plt, student_eval, teacher_eval):
     mo.vstack([
         _plot,
         mo.md("**5 epochs 후 평가 256문제** (학습에 없던 문제)"),
-        mo.ui.table(_rows, selection=None),
+        result_table(_rows, selection=None),
         mo.md("**실험 B 로그 (원본 형식, epoch 끝마다)**\n```text\n" + "\n".join(kd_histories["B: alpha=0.5"]["epoch_logs"]) + "\n```"),
     ])
     return
@@ -709,16 +804,17 @@ def _(mo):
 
     - **A (CE만):** 첫 epoch에 정답 CE가 크게 내려갑니다. GSM8K 풀이 형식(`<<…>>`, `####`)에 맞춰지기 때문입니다.
       그 뒤로는 학습 CE는 계속 내려가는데 **평가 CE는 다시 올라갑니다.** 128문제를 외우는 **과적합**입니다.
-      KL도 계속 커져 교사(= 원래 모델이 가진 일반 능력)에서 멀어집니다.
+      KL도 계속 커져 이 평가 문맥에서 교사 분포와 멀어집니다. KL만으로 일반 능력의 보존 여부를 판단할 수는 없습니다.
     - **B (alpha=0.5):** 평가 CE가 끝까지 내려가 **네 실험 중 가장 낮습니다.** KL은 처음 수준이거나 조금 낮습니다.
-      정답에서 새 형식을 배우면서, 교사 분포가 **"원래처럼 말하라"는 규제(regularizer)** 역할을 합니다.
+      정답에서 새 형식을 배우면서, 교사 분포에 가까이 머물게 하는 **규제(regularizer)** 역할을 합니다.
       정답 하나만이 아니라 교사가 고른 후보들에도 확률을 남기므로, label smoothing보다 정보가 많은 규제입니다.
     - **A′ (CE만, 학습률 절반):** B는 CE 가중치가 0.5라서 "학습률을 절반으로 줄인 것과 같지 않나?"라는 의문을 확인합니다.
       A′도 2 epoch 뒤부터 과적합하며 B보다 나쁩니다. 같은 학습량에서 과적합을 막은 것은 **교사 신호**입니다.
       다만 학습률을 원본 기본값(5e-6)까지 낮추면 CE만으로도 과적합 없이 비슷한 CE에 도달합니다. 이때도 KL은 계속 커져
       교사(원래 분포)에서 멀어지는데, B는 KL을 지킵니다(과제 2).
     - **C (증류만):** KL이 꾸준히 줄고 1등 일치율이 오릅니다. **학생이 교사를 닮아 갑니다.**
-      하지만 정답 CE는 **교사의 CE 근처**까지만 갑니다. 정답을 보지 않으므로 학생은 **교사보다 나아질 수 없습니다.**
+      하지만 정답 CE는 **교사의 CE 근처**까지만 갑니다. 순수 증류의 목적은 교사 분포를 모사하는 것이며, 정답 CE 개선을 직접 최적화하지 않습니다.
+      이번 관찰이 모든 과제에서 학생 성능의 상한이 교사라는 뜻은 아닙니다.
       5절에서 본 것처럼 이 데이터에서 교사가 학생보다 크게 낫지 않아서 CE 이득이 거의 없습니다.
 
     **정리:** 증류로 얻는 것은 (1) 교사 쪽으로 다가가기, (2) 작은 데이터에서 과적합을 막는 규제입니다.
@@ -748,8 +844,16 @@ def _(mo):
     return try_alpha, try_button, try_lr, try_temperature
 
 
-@app.cell
-def _(kd_train_ds, mo, run_distillation, try_alpha, try_button, try_lr, try_temperature):
+@app.cell(hide_code=True)
+def _(
+    kd_train_ds,
+    mo,
+    run_distillation,
+    try_alpha,
+    try_button,
+    try_lr,
+    try_temperature,
+):
     mo.stop(not try_button.value, mo.md("버튼을 누르면 학습합니다."))
     _, try_history = run_distillation(kd_train_ds, alpha=try_alpha.value, temperature=try_temperature.value,
                                       learning_rate=try_lr.value)
@@ -758,10 +862,10 @@ def _(kd_train_ds, mo, run_distillation, try_alpha, try_button, try_lr, try_temp
 
 
 @app.cell(hide_code=True)
-def _(kd_histories, mo, try_history, try_label):
+def _(kd_histories, result_table, try_history, try_label):
     _rows = [{"설정": name, **{f"epoch {i + 1} CE / KL": f"{e['ce']:.3f} / {e['kl']:.3f}" for i, e in enumerate(h["eval"])}}
              for name, h in [(try_label + " (내 실험)", try_history)] + list(kd_histories.items())]
-    mo.ui.table(_rows, selection=None)
+    result_table(_rows, selection=None)
     return
 
 
@@ -777,7 +881,16 @@ def _(mo):
 
 
 @app.cell
-def _(autocast_ctx, copy, device, kd_histories, kd_train_ds, student_base, teacher, torch):
+def _(
+    autocast_ctx,
+    copy,
+    device,
+    kd_histories,
+    kd_train_ds,
+    student_base,
+    teacher,
+    torch,
+):
     _x = torch.stack([kd_train_ds[i][0] for i in range(8)]).to(device)
     _model = copy.deepcopy(student_base).train()
     _opt = torch.optim.AdamW(_model.parameters(), lr=1e-6)
@@ -870,13 +983,13 @@ def _(device, eval_rows, kd_models, student_base, teacher, tokenizer, torch):
 
 
 @app.cell(hide_code=True)
-def _(generation_rows, mo):
+def _(generation_rows, mo, result_table):
     mo.vstack([
-        mo.ui.table(generation_rows, selection=None, page_size=14),
+        result_table(generation_rows, selection=None, page_size=14),
         mo.md(r"""
     - **교사와 학습 전 학생**은 GSM8K 형식이 아니라 UltraChat·SmolTalk식 설명 문장("First, let's calculate ...")으로 답합니다.
       SFT 데이터의 대부분이 일반 대화였기 때문입니다.
-    - **C (증류만)** 는 교사와 **같은 첫 문장**으로 시작하는 경우가 많습니다. 정답 풀이를 보지 않았으므로 GSM8K 형식이 아니라 교사의 말투를 닮습니다.
+    - **C (증류만)** 는 교사와 **같은 첫 문장**으로 시작하는 경우가 많습니다. 정답 풀이의 접두문맥은 입력으로 쓰지만 hard-label CE로 풀이 형식을 직접 최적화하지 않으므로, 이 실험에서는 교사의 말투에 가까운 출력을 보입니다.
     - **A·B**는 128문제의 풀이 형식(`<<…>>` 계산 표시, `#### 답`)을 그대로 따릅니다. 하지만 계산은 틀립니다.
       형식은 적은 데이터로도 배우지만, 계산 능력은 이 크기의 모델·데이터로 생기지 않습니다.
     - 모든 모델이 같은 문장을 반복하기 쉽습니다(작은 모델 + greedy). 손실·KL 차이가 작아도 greedy 생성은 한 토큰이 바뀌면 뒤가 전부 달라지므로,
@@ -919,10 +1032,10 @@ def _(KD_LR, KD_TEMPERATURE, mo):
     | 항목 | 핵심 |
     | --- | --- |
     | soft label | 교사의 확률 분포 전체. 정답 외 후보가 얼마나 그럴듯한지(dark knowledge)를 담음 |
-    | 손실 | `alpha·CE + (1−alpha)·T²·KL(교사_T ‖ 학생_T)`, 정답 마스크 위치만 |
+    | 손실 | $\\alpha\\,CE+(1-\\alpha)T^2D_{{KL}}(p_t\\Vert p_s)$, 정답 마스크 위치만 |
     | `F.kl_div` | input = 학생 log 확률, target = 교사 확률 → forward KL. `batchmean` = 토큰 평균 |
     | 온도 | T↑ → 분포가 평평해짐. T²를 곱해 기울기 크기를 유지 |
-    | 효과 1 | 학생이 교사를 닮아 감 (KL↓, 1등 일치↑). 교사보다 나아지지는 않음 (alpha=0) |
+    | 효과 1 | 학생이 교사를 닮아 감 (KL↓, 1등 일치↑). 순수 증류는 교사 분포 모사가 목적이며 일반적인 성능 상한을 뜻하지 않음 (alpha=0) |
     | 효과 2 | 작은 데이터에서 CE만 쓰면 과적합 → 교사 분포가 규제 역할 (alpha=0.5가 가장 좋음) |
     | 비용 | 매 step 교사 순전파 + 교사 메모리. 오프라인 저장은 top-k나 생성 답변으로 줄임 |
 

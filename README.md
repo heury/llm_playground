@@ -6,6 +6,7 @@
 | --- | --- |
 | [notebooks/gpt/](notebooks/gpt/README.md) | GPT 챕터별 실습과 Attention·모델 구조 실험 |
 | [notebooks/minimind/](notebooks/minimind/README.md) | MiniMind 구조·학습·멀티모달 marimo 실습 |
+| [notebooks/physicalai/](notebooks/physicalai/README.md) | MuJoCo 시뮬레이션 로봇팔로 따라가는 Physical AI 9장 marimo 실습 |
 | [notebooks/unsloth/](notebooks/unsloth/README.md) | Unsloth 기반 Qwen 학습·배포 실습 |
 | [notebooks/vlm-from-scratch/](notebooks/vlm-from-scratch/README.md) | VLM 구성·학습·멀티모달 응용 12부 marimo 실습 |
 | `projects/minimind*/` | MiniMind 계열의 독립 모델 구현·학습·추론 프로젝트 |
@@ -72,6 +73,16 @@ Unsloth를 활용해 Qwen 계열 모델의 미세 조정, 강화 학습, 증류�
 - **[Qwen3_(0_6B)-Phone_Deployment.py](notebooks/unsloth/Qwen3_%280_6B%29-Phone_Deployment.py)** — Qwen3-0.6B를 휴대전화 배포용 QAT로 학습하고 ExecuTorch의 .pte 형식으로 내보내 CPU 추론을 확인합니다.
 
 환경 준비와 추가 패키지는 [unsloth 실행 안내](notebooks/unsloth/README.md)를 참고합니다. DPO 노트북은 형식·구문·채팅 형식만 검증했으며 GPU 학습은 미실행입니다. Phone 노트북의 CPU 추론 확인과 별개로 휴대전화 실기기 검증은 필요합니다.
+
+## physicalai
+
+실물 로봇 없이 MuJoCo의 SO-101 로봇팔로 Physical AI 파이프라인을 장별로 실습합니다.
+참고: [로봇 없이 시작하는 Physical AI 따라하기](https://wikidocs.net/book/21363), [예제 코드](https://github.com/ady95/physicalai_tutorial).
+
+1. Agent 루프 → 2. MuJoCo 기초 → 3. FK·IK·Rule 기반 Pick and Place → 4. 카메라 인식 → 5. 강화학습(PPO)
+→ 6. 모방학습(LeRobot ACT) → 7. VLA(SmolVLA) → 8. 일반화 시험 → 9. LLM Planner
+
+설치·자원 요구와 공개 체크포인트 사용법은 [notebooks/physicalai/README.md](notebooks/physicalai/README.md)를 참고합니다.
 
 ## 코드 참고
 - 실습 코드는 아래 코드를 참고하여 제작하였습니다.

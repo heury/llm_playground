@@ -6,6 +6,29 @@ app = marimo.App(width="medium")
 
 @app.cell
 def _():
+    import sys as _display_sys
+    from pathlib import Path as _DisplayPath
+
+    _display_dir = str(_DisplayPath(__file__).resolve().parent)
+    if _display_dir not in _display_sys.path:
+        _display_sys.path.insert(0, _display_dir)
+    from notebook_display import result_table
+
+    return (result_table,)
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    **실행 안내:** 저장소 루트에서 `cd notebooks/minimind` → `uv sync --locked` →
+    `uv run marimo edit minimind_model_tour.py`. 환경·준비물과 권장 순서는 [공통 README](README.md)를 참고하세요.
+    위젯 변경 시 의존 셀이 다시 실행됩니다. 모델 크기·데이터·학습 설정 변경 전에는 해당 절의 재실행 범위를 확인하세요.
+    """)
+    return
+
+
+@app.cell
+def _():
     import math
     import sys
     from pathlib import Path
@@ -52,7 +75,8 @@ def _():
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(r"""
+    mo.vstack([
+        mo.md(r"""
     # MiniMind 모델 구조 따라가기
 
     `projects/minimind/model/model_minimind.py` 한 파일에 MiniMind 언어 모델 전체가 들어 있습니다.
@@ -66,22 +90,18 @@ def _(mo):
 
     ## 0. 큰 그림
 
-    ```text
-    문장 ──토크나이저──▶ input_ids [B, T]
-                          │
-                 embed_tokens (Embedding)          ▶ h [B, T, D]
-                          │
-          ┌──── MiniMindBlock × L ─────────────────┐
-          │  h = h + Attention( RMSNorm(h) )       │  ← 토큰끼리 정보 교환
-          │  h = h + FeedForward( RMSNorm(h) )     │  ← 토큰마다 따로 가공
-          └────────────────────────────────────────┘
-                          │
-                    norm (RMSNorm)
-                          │
-          lm_head (Embedding과 같은 가중치)         ▶ logits [B, T, V]
-                          │
-                  softmax → 다음 토큰 확률
-    ```
+    """),
+        mo.mermaid(r"""
+    flowchart TB
+     S["문장"] --> T["토크나이저: input_ids B×T"]
+     T --> E["embed_tokens: h B×T×D"]
+     E --> A["h ← h + Attention RMSNorm h"]
+     A --> F["h ← h + FeedForward RMSNorm h"]
+     F --> L["위 블록을 L층 반복"] --> N["마지막 RMSNorm"]
+     N --> H["lm_head: 입력 임베딩과 가중치 공유, logits B×T×V"]
+     H --> P["softmax: 다음 토큰 확률"]
+    """),
+        mo.md(r"""
 
     | 기호 | 뜻 | 기호 | 뜻 |
     | --- | --- | --- | --- |
@@ -105,6 +125,7 @@ def _(mo):
     | `MiniMindForCausalLM.generate` | KV cache를 쓰는 생성 | 10 |
     | `MOEFeedForward` | 전문가 혼합 (선택) | 11 |
     """)
+    ])
     return
 
 
@@ -115,8 +136,8 @@ def _(mo):
 
     모델의 모든 크기는 설정 하나에서 정해집니다. 몇 가지 값은 **다른 값에서 계산**됩니다.
 
-    - `head_dim = hidden_size // num_attention_heads` — 은닉 벡터를 head 수만큼 나눈 크기
-    - `intermediate_size = ceil(hidden_size × π / 64) × 64` — FeedForward 중간 차원 (약 3.14배, 64의 배수)
+    - $d=\lfloor D/H\rfloor$ (`head_dim`, `hidden_size`, `num_attention_heads`) — 은닉 벡터를 head 수만큼 나눈 크기
+    - $I=64\lceil D\pi/64\rceil$ (`intermediate_size`) — FeedForward 중간 차원 (약 3.14배, 64의 배수)
     - `num_key_value_heads`가 `num_attention_heads`보다 작으면 **GQA**(6-2절)
     - `tie_word_embeddings=True` — 입력 Embedding과 출력 `lm_head`가 같은 가중치 (3절)
 
@@ -148,7 +169,7 @@ def _(MiniMindConfig, MiniMindForCausalLM, device, torch):
 
 
 @app.cell(hide_code=True)
-def _(device, lm_config, mo, model, torch):
+def _(device, lm_config, mo, model, result_table, torch):
     _keys = [
         ("hidden_size", "D, 토큰 벡터의 길이"),
         ("num_hidden_layers", "L, 블록 수"),
@@ -166,7 +187,7 @@ def _(device, lm_config, mo, model, torch):
     _param = next(model.parameters())
     _gpu = f" ({torch.cuda.get_device_name(device)})" if device.type == "cuda" else ""
     mo.vstack([
-        mo.ui.table(
+        result_table(
             [{"설정": k, "값": str(getattr(lm_config, k)), "의미": desc} for k, desc in _keys],
             selection=None,
             page_size=20,
@@ -181,17 +202,38 @@ def _(mo):
     mo.md(r"""
     ### 1-1. 매개변수는 어디에 있을까?
 
-    원본 클래스의 `nn.Linear`, `nn.Embedding`, `RMSNorm` 크기를 그대로 세어 보면 다음과 같습니다.
-    (`nn.Linear(a, b)`의 가중치는 `a × b`개, 이 모델의 Linear에는 bias가 없습니다.)
+    원본 클래스의 가중치 shape를 곱해 **서로 다른 학습 매개변수의 수**를 셉니다.
+    `nn.Linear(a, b)`의 가중치 shape는 $(b,a)$이므로 $a\times b$개입니다.
+    이 모델의 Linear에는 bias가 없습니다.
 
-    | 부품 | 개수 |
-    | --- | --- |
-    | Embedding (= lm_head, 공유) | `V × D` |
-    | Attention (층마다) | `D·H·d` (Q) + `2·D·KV·d` (K, V) + `H·d·D` (O) + `2·d` (QK-norm) |
-    | FeedForward (층마다) | `3 × D × intermediate_size` (gate, up, down) |
-    | RMSNorm | 층마다 `2·D` + 마지막 `D` |
+    아래 수식에서 $D$는 은닉 차원, $V$는 어휘 수, $L$은 블록 수입니다.
+    $H_q$는 Query head 수(`num_attention_heads`), $H_{\mathrm{kv}}$는 Key/Value head 수(`num_key_value_heads`),
+    $d$는 head 차원(`head_dim`), $I$는 FFN 중간 차원(`intermediate_size`)입니다.
+    앞 기호표의 `H`, `KV`를 여기서는 각각 $H_q$, $H_{\mathrm{kv}}$로 씁니다.
 
-    아래 함수로 계산한 값이 실제 모델의 매개변수 수와 같은지 확인합니다.
+    | 부품 | 가중치 shape | 매개변수 수 | 모델 안 반복 수 |
+    | --- | --- | --- | --- |
+    | Embedding과 공유 lm_head | $(V,D)$ | $V\times D$ | 1 |
+    | Attention의 Q 투영 | $(H_qd,D)$ | $D H_q d$ | $L$ |
+    | Attention의 K·V 투영 | 각각 $(H_{\mathrm{kv}}d,D)$ | $2D H_{\mathrm{kv}}d$ | $L$ |
+    | Attention의 출력 투영 O | $(D,H_qd)$ | $D H_q d$ | $L$ |
+    | Attention의 QK-norm | 각각 $(d,)$인 벡터 2개 | $2d$ | $L$ |
+    | FeedForward의 gate·up·down | $(I,D)$ 2개와 $(D,I)$ 1개 | $3DI$ | $L$ |
+    | 블록의 Pre-Norm 2개 | 각각 $(D,)$인 벡터 2개 | $2D$ | $L$ |
+    | 모델 마지막 RMSNorm | $(D,)$ | $D$ | 1 |
+
+    QK-norm의 `weight`는 head마다 따로 만들지 않고 모든 head에 같은 길이 $d$의 벡터를 적용하므로,
+    Query와 Key를 합쳐 $2d$개입니다. 블록의 Pre-Norm과는 별도 항목입니다.
+
+    따라서 Dense 모델(`use_moe=False`)에서 입력·출력 가중치를 공유할 때의 전체 개수는
+
+    $$
+    N_{\mathrm{params}} = VD + L\left(2D H_q d + 2D H_{\mathrm{kv}}d + 2d + 3DI + 2D\right) + D.
+    $$
+
+    `tie_word_embeddings=False`이면 독립적인 lm_head에 $VD$개를 더합니다.
+    RoPE의 cos/sin 표는 학습 매개변수가 아닌 버퍼이므로 포함하지 않습니다.
+    아래 함수로 이 식과 실제 모델의 `parameters()` 합이 같은지 확인합니다.
     """)
     return
 
@@ -222,10 +264,10 @@ def _(lm_config, model):
 
 
 @app.cell(hide_code=True)
-def _(count_params, lm_config, mo):
+def _(count_params, lm_config, mo, result_table):
     _d = count_params(lm_config)
     mo.vstack([
-        mo.ui.table(
+        result_table(
             [{"부품": k, "매개변수": f"{_d[k]:,}", "비율": f"{_d[k] / _d['합계']:.1%}"} for k in _d],
             selection=None,
         ),
@@ -277,11 +319,27 @@ def _(AutoTokenizer, device, minimind_dir, sentence_input):
     # 한글은 UTF-8 바이트 단위로 쪼개져 글자 수보다 토큰이 많아집니다.
     korean_text = "안녕하세요"
     korean_ids = tokenizer(korean_text).input_ids
-    return attention_mask, batch_size, input_ids, korean_ids, korean_text, seq_len, tokenizer
+    return (
+        attention_mask,
+        batch_size,
+        input_ids,
+        korean_ids,
+        korean_text,
+        seq_len,
+        tokenizer,
+    )
 
 
 @app.cell(hide_code=True)
-def _(attention_mask, input_ids, korean_ids, korean_text, mo, tokenizer):
+def _(
+    attention_mask,
+    input_ids,
+    korean_ids,
+    korean_text,
+    mo,
+    result_table,
+    tokenizer,
+):
     def _rows(b):
         return [
             {"위치": t, "토큰 ID": int(i), "토큰": tokenizer.convert_ids_to_tokens(int(i)),
@@ -292,8 +350,8 @@ def _(attention_mask, input_ids, korean_ids, korean_text, mo, tokenizer):
     mo.vstack([
         mo.md(f"`input_ids` shape: `{tuple(input_ids.shape)}` = `[B, T]`"),
         mo.hstack([
-            mo.vstack([mo.md("**문장 0**"), mo.ui.table(_rows(0), selection=None, page_size=20)]),
-            mo.vstack([mo.md("**문장 1**"), mo.ui.table(_rows(1), selection=None, page_size=20)]),
+            mo.vstack([mo.md("**문장 0**"), result_table(_rows(0), selection=None, page_size=20)]),
+            mo.vstack([mo.md("**문장 1**"), result_table(_rows(1), selection=None, page_size=20)]),
         ], widths="equal"),
         mo.md(
             f"한글 `{korean_text}`({len(korean_text)}글자) → 토큰 **{len(korean_ids)}개**. "
@@ -380,10 +438,10 @@ def _(embeddings, model, torch):
 
 
 @app.cell(hide_code=True)
-def _(mo, rms_after, rms_before):
+def _(mo, result_table, rms_after, rms_before):
     mo.vstack([
         mo.md("문장 0의 토큰별 RMS (weight가 아직 1이므로 정규화 후 RMS는 1입니다)"),
-        mo.ui.table(
+        result_table(
             [{"위치": t, "정규화 전": f"{a:.4f}", "정규화 후": f"{b:.4f}"}
              for t, (a, b) in enumerate(zip(rms_before.tolist(), rms_after.tolist()))],
             selection=None, page_size=20,
@@ -418,7 +476,7 @@ def _(mo):
 
 
 @app.cell
-def _(precompute_freqs_cis, lm_config, torch):
+def _(lm_config, precompute_freqs_cis, torch):
     rope_dim = lm_config.head_dim
     rope_base = lm_config.rope_theta
     rope_positions = 64
@@ -464,7 +522,7 @@ def _(mo):
     ### 5-2. 회전 적용하기: `apply_rotary_pos_emb`
 
     원본은 벡터를 **앞 절반 `a`와 뒤 절반 `b`** 로 나누어 `(a_i, b_i)`를 한 평면의 좌표로 봅니다.
-    `rotate_half(x) = [-b, a]`를 이용한 식 `x·cos + rotate_half(x)·sin`을 풀어 쓰면 평범한 2차원 회전입니다.
+    `rotate_half(x) = [-b, a]`를 이용한 식 $x\odot\cos\theta+\operatorname{rotate\_half}(x)\odot\sin\theta$을 풀어 쓰면 평범한 2차원 회전입니다.
 
     $$
     \begin{pmatrix} a' \\ b' \end{pmatrix} =
@@ -472,7 +530,7 @@ def _(mo):
     \begin{pmatrix} a \\ b \end{pmatrix}
     $$
 
-    회전의 중요한 성질: Q를 위치 `m`, K를 위치 `n`에서 회전하면 내적은 **거리 `m − n`에만** 달라집니다.
+    회전의 중요한 성질: Q를 위치 `m`, K를 위치 `n`에서 회전하면 내적은 **거리 $m-n$에만** 달라집니다.
     즉 모델은 절대 위치가 아니라 **상대 거리**를 봅니다. 아래에서 확인합니다.
     """)
     return
@@ -505,10 +563,10 @@ def _(apply_rotary_pos_emb, rope_angles, rope_cos, rope_dim, rope_sin, torch):
 
 
 @app.cell(hide_code=True)
-def _(mo, rope_pairs, rope_scores):
+def _(mo, result_table, rope_pairs, rope_scores):
     mo.vstack([
         mo.md("같은 Q·K 벡터를 여러 위치에 놓고 회전한 뒤의 내적:"),
-        mo.ui.table(
+        result_table(
             [{"Q 위치 m": m, "K 위치 n": n, "거리 m−n": m - n, "회전 후 내적": f"{s:.5f}"}
              for (m, n), s in zip(rope_pairs, rope_scores)],
             selection=None,
@@ -532,7 +590,7 @@ def _(mo):
     | ② QK-norm | `q_norm`, `k_norm` (head마다 RMSNorm) | 그대로 |
     | ③ RoPE | `apply_rotary_pos_emb` (Q, K만) | 그대로 |
     | ④ GQA | `repeat_kv`로 K·V head를 H개로 복사 | K·V `[B,T,H,d]` |
-    | ⑤ 점수 | `Q @ Kᵀ / √d` + causal mask + padding mask | `[B,H,T,T]` |
+    | ⑤ 점수 | $QK^\top/\sqrt{d}$ + causal mask + padding mask | `[B,H,T,T]` |
     | ⑥ 가중합 | `softmax(점수) @ V` → head 이어 붙이기 → `o_proj` | `[B,T,D]` |
 
     입력은 1층의 `input_layernorm`을 통과한 벡터입니다.
@@ -548,7 +606,7 @@ def _(mo):
 
 
 @app.cell
-def _(apply_rotary_pos_emb, attention_mask, embeddings, seq_len, model, torch):
+def _(apply_rotary_pos_emb, embeddings, model, seq_len, torch):
     layer0 = model.model.layers[0]
     attn = layer0.self_attn
     n_heads, n_kv_heads, head_dim = attn.n_local_heads, attn.n_local_kv_heads, attn.head_dim
@@ -571,7 +629,16 @@ def _(apply_rotary_pos_emb, attention_mask, embeddings, seq_len, model, torch):
             model.model.freqs_sin[:seq_len],
         )
         q_rot, k_rot = apply_rotary_pos_emb(q, k, *position_embeddings)
-    return attn, attn_input, head_dim, k_rot, n_heads, n_kv_heads, position_embeddings, q_rot, v
+    return (
+        attn,
+        attn_input,
+        head_dim,
+        k_rot,
+        n_heads,
+        position_embeddings,
+        q_rot,
+        v,
+    )
 
 
 @app.cell(hide_code=True)
@@ -588,21 +655,27 @@ def _(attn, attn_input, k_rot, mo, q_rot, v):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(r"""
+    mo.vstack([
+        mo.md(r"""
     ### 6-2. GQA: Key/Value head 공유 — `repeat_kv`
 
     **Grouped-Query Attention**은 Query head 여러 개가 Key/Value head 하나를 함께 씁니다.
     MiniMind 설정은 Query head 8개, K/V head 4개이므로 `n_rep = 8 / 4 = 2`입니다.
 
-    ```text
-    Q head:   0   1   2   3   4   5   6   7
-              └─┬─┘   └─┬─┘   └─┬─┘   └─┬─┘
-    K/V head:   0       1       2       3
-    ```
+    """),
+        mo.mermaid(r"""
+    flowchart TB
+     K0["K/V head 0"] --> Q0["Query head 0, 1"]
+     K1["K/V head 1"] --> Q1["Query head 2, 3"]
+     K2["K/V head 2"] --> Q2["Query head 4, 5"]
+     K3["K/V head 3"] --> Q3["Query head 6, 7"]
+    """),
+        mo.md(r"""
 
     `repeat_kv`는 계산을 위해 K/V head를 `n_rep`번 **복사**만 합니다. 새 가중치는 없습니다.
     이득은 **생성할 때 저장하는 KV cache가 줄어드는 것**입니다(10절).
     """)
+    ])
     return
 
 
@@ -618,10 +691,10 @@ def _(attn, k_rot, n_heads, repeat_kv, torch, v):
 
 
 @app.cell(hide_code=True)
-def _(attn, k_rep, k_rot, mo, n_heads):
+def _(attn, k_rep, k_rot, mo, n_heads, result_table):
     mo.vstack([
         mo.md(f"`n_rep = {attn.n_rep}`, K `{tuple(k_rot.shape)}` → `repeat_kv` → `{tuple(k_rep.shape)}`"),
-        mo.ui.table([{"Query head": h, "사용하는 K/V head": h // attn.n_rep} for h in range(n_heads)], selection=None),
+        result_table([{"Query head": h, "사용하는 K/V head": h // attn.n_rep} for h in range(n_heads)], selection=None),
     ])
     return
 
@@ -635,7 +708,7 @@ def _(mo):
     \mathrm{Attention}(Q,K,V) = \mathrm{softmax}\!\left(\frac{QK^\top}{\sqrt{d}} + M\right) V
     $$
 
-    - `√d`로 나누어 head 차원이 커져도 점수 크기가 일정하게 합니다.
+    - $\sqrt{d}$로 나누어 head 차원이 커져도 점수 크기가 일정하게 합니다.
     - **causal mask:** 위치 `t`는 자기보다 뒤(미래) 토큰을 보면 안 됩니다. 대각선 위를 `-inf`로 채웁니다(`triu(1)`).
       softmax 후 그 칸의 확률은 0이 됩니다.
     - **padding mask:** `attention_mask`가 0인 열(패딩 Key)에 `-1e9`를 더해 무시합니다.
@@ -646,7 +719,19 @@ def _(mo):
 
 
 @app.cell
-def _(F, attention_mask, attn, attn_input, head_dim, k_rep, math, position_embeddings, q_rot, torch, v_rep):
+def _(
+    F,
+    attention_mask,
+    attn,
+    attn_input,
+    head_dim,
+    k_rep,
+    math,
+    position_embeddings,
+    q_rot,
+    torch,
+    v_rep,
+):
     with torch.no_grad():
         # head 축을 앞으로: [B, T, H, d] → [B, H, T, d]
         qh, kh, vh = q_rot.transpose(1, 2), k_rep.transpose(1, 2), v_rep.transpose(1, 2)
@@ -805,7 +890,15 @@ def _(mo):
 
 
 @app.cell
-def _(attention_mask, embeddings, ffn_output, hidden_after_attn, position_embeddings, model, torch):
+def _(
+    attention_mask,
+    embeddings,
+    ffn_output,
+    hidden_after_attn,
+    model,
+    position_embeddings,
+    torch,
+):
     with torch.no_grad():
         block_output_manual = hidden_after_attn + ffn_output  # 6, 7절 결과 조립
         block_output, _ = model.model.layers[0](
@@ -842,7 +935,7 @@ def _(mo):
 
 
 @app.cell
-def _(attention_mask, input_ids, position_embeddings, model, torch):
+def _(attention_mask, input_ids, model, position_embeddings, torch):
     forward_trace = []
 
     def _make_hook(name):
@@ -879,9 +972,9 @@ def _(attention_mask, input_ids, position_embeddings, model, torch):
 
 
 @app.cell(hide_code=True)
-def _(forward_trace, mo, model_out):
+def _(forward_trace, mo, model_out, result_table):
     mo.vstack([
-        mo.ui.table(forward_trace, selection=None, page_size=20),
+        result_table(forward_trace, selection=None, page_size=20),
         mo.md(
             f"최종 logits `{tuple(model_out.logits.shape)}` = `[B, T, V]`: "
             "**모든 위치**에서 다음 토큰 후보 6,400개의 점수를 한꺼번에 냅니다. 직접 조립한 결과와 원본이 같습니다."
@@ -904,7 +997,7 @@ def _(mo):
     ```
 
     패딩 위치의 정답은 `-100`으로 바꿔 손실에서 뺍니다. 무작위 모델은 6,400개 중 하나를 거의 고르게 찍으므로
-    손실이 대략 `ln(6400) ≈ 8.76` 근처에서 시작합니다.
+    손실이 대략 $\ln(6400)\approx8.76$ 근처에서 시작합니다.
     """)
     return
 
@@ -928,7 +1021,16 @@ def _(F, attention_mask, input_ids, math, model, torch):
 
 
 @app.cell(hide_code=True)
-def _(input_ids, labels, loss_out, mo, next_token_probs, tokenizer, uniform_loss):
+def _(
+    input_ids,
+    labels,
+    loss_out,
+    mo,
+    next_token_probs,
+    result_table,
+    tokenizer,
+    uniform_loss,
+):
     _rows = []
     for _t in range(next_token_probs.shape[0]):
         _target = int(labels[0, _t + 1])
@@ -942,8 +1044,8 @@ def _(input_ids, labels, loss_out, mo, next_token_probs, tokenizer, uniform_loss
             "가장 높은 후보": tokenizer.convert_ids_to_tokens(int(next_token_probs[_t].argmax())),
         })
     mo.vstack([
-        mo.ui.table(_rows, selection=None, page_size=20),
-        mo.md(f"원본 손실 `{float(loss_out.loss):.4f}` = 직접 계산과 같음. 균등 분포 손실 `ln(V)` = `{uniform_loss:.4f}`. "
+        result_table(_rows, selection=None, page_size=20),
+        mo.md(f"원본 손실 `{float(loss_out.loss):.4f}` = 직접 계산과 같음. 균등 분포 손실 $\\ln(V)$ = `{uniform_loss:.4f}`. "
               "학습은 이 정답 확률들을 높이는 방향으로 가중치를 바꿉니다."),
     ])
     return
@@ -1016,7 +1118,7 @@ def _(mo):
 
 
 @app.cell
-def _(prompt_ids, model, torch):
+def _(model, prompt_ids, torch):
     max_new_tokens = 8
 
     with torch.no_grad():
@@ -1069,7 +1171,15 @@ def _(mo):
 
 
 @app.cell
-def _(F, MiniMindConfig, MiniMindForCausalLM, attn_input, device, lm_config, torch):
+def _(
+    F,
+    MiniMindConfig,
+    MiniMindForCausalLM,
+    attn_input,
+    device,
+    lm_config,
+    torch,
+):
     # train_pretrain.py --use_moe 1과 같은 설정 (전문가 4개, top-1은 MiniMindConfig 기본값)
     moe_config = MiniMindConfig(**{**lm_config.to_dict(), "use_moe": True, "num_experts": 4, "num_experts_per_tok": 1})
     with torch.random.fork_rng(devices=[]):
@@ -1097,16 +1207,24 @@ def _(F, MiniMindConfig, MiniMindForCausalLM, attn_input, device, lm_config, tor
 
 
 @app.cell(hide_code=True)
-def _(chosen_expert, input_ids, mo, moe_param_info, router_probs, tokenizer):
+def _(
+    chosen_expert,
+    input_ids,
+    mo,
+    moe_param_info,
+    result_table,
+    router_probs,
+    tokenizer,
+):
     mo.vstack([
-        mo.ui.table(
+        result_table(
             [{"위치": t, "토큰": tokenizer.convert_ids_to_tokens(int(input_ids[0, t])),
               "router 확률": " / ".join(f"{p:.2f}" for p in router_probs[t].tolist()),
               "선택 전문가": int(e)}
              for t, e in enumerate(chosen_expert)],
             selection=None, page_size=20,
         ),
-        mo.ui.table([{"항목": k, "매개변수": f"{v:,}"} for k, v in moe_param_info.items()], selection=None),
+        result_table([{"항목": k, "매개변수": f"{v:,}"} for k, v in moe_param_info.items()], selection=None),
         mo.md("직접 라우팅한 결과가 원본 `MOEFeedForward`와 같습니다. 토큰마다 다른 전문가를 거칩니다."),
     ])
     return
@@ -1160,19 +1278,19 @@ def _(mo):
 
     *해설:* 캐시가 없으면 `start_pos = 0`이라 위치 0의 각도로 회전되고, 앞 토큰도 보지 못해 결과가 달라집니다.
     """),
-        "과제 4. 크기를 바꿔 보기 (1절)": mo.md("""
+        "과제 4. 크기를 바꿔 보기 (1절)": mo.md(r"""
     `hidden_size=512`로 줄이면 `head_dim`, `intermediate_size`, 매개변수 수와 비율이 어떻게 바뀌나요?
     `hidden_size=520`이면 어떤 문제가 생기나요?
 
-    *해설:* `head_dim = 512 / 8 = 64`, `intermediate_size = ceil(512π/64)·64 = 1664`.
-    FeedForward·Attention은 `D²`에 비례해 줄지만 Embedding은 `D`에 비례하므로 Embedding 비율이 커집니다.
+    *해설:* `head_dim = 512 / 8 = 64`, $I=64\lceil512\pi/64\rceil=1664$.
+    FeedForward·Attention은 $D^2$에 비례해 줄지만 Embedding은 `D`에 비례하므로 Embedding 비율이 커집니다.
     `520 / 8 = 65`는 홀수라 RoPE의 절반 나누기(앞 절반·뒤 절반 짝)가 맞지 않아 오류가 납니다.
     """),
-        "과제 5. MoE top-2 (11절)": mo.md("""
+        "과제 5. MoE top-2 (11절)": mo.md(r"""
     `num_experts_per_tok=2`로 바꾸면 11절의 직접 계산과 원본이 왜 달라지나요? 직접 계산을 어떻게 고쳐야 할까요?
 
     *해설:* top-2에서는 두 전문가의 출력을 router 확률(합이 1이 되도록 정규화)로 가중합합니다.
-    `torch.topk(router_probs, 2)`로 두 전문가와 확률을 구하고, `p1·E1(x) + p2·E2(x)`로 바꾸면 같아집니다.
+    `torch.topk(router_probs, 2)`로 두 전문가와 확률을 구하고, $p_1E_1(x)+p_2E_2(x)$로 바꾸면 같아집니다.
     """),
     })
     return

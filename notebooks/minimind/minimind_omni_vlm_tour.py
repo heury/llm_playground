@@ -6,6 +6,29 @@ app = marimo.App(width="medium")
 
 @app.cell
 def _():
+    import sys as _display_sys
+    from pathlib import Path as _DisplayPath
+
+    _display_dir = str(_DisplayPath(__file__).resolve().parent)
+    if _display_dir not in _display_sys.path:
+        _display_sys.path.insert(0, _display_dir)
+    from notebook_display import result_table
+
+    return (result_table,)
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    **실행 안내:** 저장소 루트에서 `cd notebooks/minimind` → `uv sync --locked` →
+    `uv run marimo edit minimind_omni_vlm_tour.py`. 환경·준비물과 권장 순서는 [공통 README](README.md)를 참고하세요.
+    위젯 변경 시 의존 셀이 다시 실행됩니다. 모델 크기·데이터·학습 설정 변경 전에는 해당 절의 재실행 범위를 확인하세요.
+    """)
+    return
+
+
+@app.cell
+def _():
     import copy
     import io
     import json
@@ -54,11 +77,12 @@ def _():
         buf = io.BytesIO()
         sf.write(buf, np.asarray(wav, dtype=np.float32), sr, format="WAV")
         return buf.getvalue()
+
     return (
         DataLoader,
         Image,
-        MiniMindOmni,
         MimiModel,
+        MiniMindOmni,
         OmniConfig,
         OmniDataset,
         SkipBatchSampler,
@@ -82,7 +106,6 @@ def _():
         pq,
         random,
         re,
-        repo_root,
         setup_seed,
         sf,
         snapshot_download,
@@ -97,46 +120,49 @@ def _():
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(r"""
-    # MiniMind-O: 보고 듣고 말하는 언어 모델 (Omni 모델 따라가기)
+    mo.vstack([
+        mo.md(r"""
+        # MiniMind-O: 보고 듣고 말하는 언어 모델 (Omni 모델 따라가기)
 
-    VLM 노트북에서는 언어 모델에 **눈**을 달았습니다. **Omni 모델**은 여기에 **귀**와 **입**을 더합니다.
-    글·그림·소리를 입력받고, 답을 **글과 목소리로 동시에** 내보냅니다.
+        VLM 노트북에서는 언어 모델에 **눈**을 달았습니다. **Omni 모델**은 여기에 **귀**와 **입**을 더합니다.
+        글·그림·소리를 입력받고, 답을 **글과 목소리로 동시에** 내보냅니다.
 
-    MiniMind-O의 핵심 아이디어는 두 개의 Transformer를 잇는 것입니다.
+        MiniMind-O의 핵심 아이디어는 두 개의 Transformer를 잇는 것입니다.
 
-    - **Thinker(생각하는 쪽):** 지금까지의 MiniMind 언어 모델. 무엇을 말할지 정하고 글로 답합니다.
-    - **Talker(말하는 쪽):** 새로 붙이는 작은 Transformer. Thinker의 속마음(은닉 상태)을 받아 **소리 토큰**을 만듭니다.
-      소리 토큰은 음성 코덱 **Mimi**가 실제 목소리(24kHz 파형)로 바꿉니다.
+        - **Thinker(생각하는 쪽):** 지금까지의 MiniMind 언어 모델. 무엇을 말할지 정하고 글로 답합니다.
+        - **Talker(말하는 쪽):** 새로 붙이는 작은 Transformer. Thinker의 속마음(은닉 상태)을 받아 **소리 토큰**을 만듭니다.
+          소리 토큰은 음성 코덱 **Mimi**가 실제 목소리(24kHz 파형)로 바꿉니다.
 
-    이 노트북은 이미 그림을 보는 법까지 배운 **64M MiniMind-V**
-    [`caspar/MiniMind-V-Dense-64M-LLaVA-Short-v1.0`](https://huggingface.co/caspar/MiniMind-V-Dense-64M-LLaVA-Short-v1.0)을 Thinker로 삼아,
-    `projects/minimind-o/model/model_omni.py`의 `MiniMindOmni`에 Talker를 붙이고 **GPU에서 직접 학습**합니다.
+        이 노트북은 이미 그림을 보는 법까지 배운 **64M MiniMind-V**
+        [`caspar/MiniMind-V-Dense-64M-LLaVA-Short-v1.0`](https://huggingface.co/caspar/MiniMind-V-Dense-64M-LLaVA-Short-v1.0)을 Thinker로 삼아,
+        `projects/minimind-o/model/model_omni.py`의 `MiniMindOmni`에 Talker를 붙이고 **GPU에서 직접 학습**합니다.
 
-    **준비:** **NVIDIA GPU가 필요합니다** (RTX 3080 Ti 12GB에서 확인, 최대 약 8GB 사용). 처음 실행할 때 Hugging Face에서 약 1.6GB를 내려받습니다
-    (학습 데이터 parquet 881MB, Mimi 192MB, 이미지 인코더 189MB, Whisper-tiny 151MB, 베이스 모델 130MB). 학습 실험 3개는 각각 1분 안팎이고,
-    전체 실행은 내려받기를 빼고 약 5~6분입니다.
+        **준비:** **NVIDIA GPU가 필요합니다** (RTX 3080 Ti 12GB에서 확인, 최대 약 8GB 사용). 처음 실행할 때 Hugging Face에서 약 1.6GB를 내려받습니다
+        (학습 데이터 parquet 881MB, Mimi 192MB, 이미지 인코더 189MB, Whisper-tiny 151MB, 베이스 모델 130MB). 학습 실험 3개는 각각 1분 안팎이고,
+        전체 실행은 내려받기를 빼고 약 5~6분입니다.
 
-    **사전 지식:** VLM 노트북(`minimind_vlm_tour.py`)의 "자리표시자 토큰 자리에 다른 벡터를 갈아 끼우기"와 SFT 노트북의 "assistant 답변만 정답" 규칙.
+        **사전 지식:** VLM 노트북(`minimind_vlm_tour.py`)의 "자리표시자 토큰 자리에 다른 벡터를 갈아 끼우기"와 SFT 노트북의 "assistant 답변만 정답" 규칙.
 
-    ## 0. 전체 구조
+        ## 0. 전체 구조
 
-    ```text
-       글 ─────────────────────────────┐
-       그림 → SigLIP2(고정) → vision_proj ─┤  <|image_pad|>×64 자리에 끼움
-       소리 → SenseVoice(고정) → audio_proj ┤  <|audio_pad|>×N 자리에 끼움
-                                         ▼
-                 ┌──────────────────────────────────┐
-                 │ Thinker = MiniMind 8층 (64M)      │ ──▶ 글 토큰 (lm_head)
-                 └──────────────────────────────────┘
-                        │ 4번째 층(bridge_layer=3)의 은닉 상태
-                        ▼
-                 ┌──────────────────────────────────┐
-     지난 소리 ─▶ │ Talker = MiniMind 블록 4층 (47M)  │ ──▶ 소리 토큰 8개/프레임 (코드북 8개)
-     토큰 8줄      └──────────────────────────────────┘
-                                         ▼
-                              Mimi 디코더(고정) ──▶ 🔊 24kHz 목소리
-    ```
+
+
+        **지표 정의:** 이후 표·해설의 WER은 $\min(1,(S+D+I)/\max(1,N))$로 상한을 1로 제한한 값입니다.
+        $S,D,I$는 단어 대치·삭제·삽입 수, $N$은 정답 단어 수입니다. 일반 WER은 삽입 때문에 1을 넘을 수 있습니다.
+        이 표시에서 1은 원래 오류율이 100% 이상이라는 뜻이며, 모든 단어가 다르다는 뜻은 아닙니다.
+        Whisper의 전사 오류도 섞이므로 발음·음질·화자 유사도를 모두 대변하지 않습니다.
+    """),
+        mo.mermaid(r"""
+    flowchart TB
+     TEXT["글 토큰 임베딩"] --> I["모달 특징을 placeholder 위치에 삽입"]
+     IMG["그림"] --> SIG["SigLIP2: 고정"] --> VP["vision_proj"] --> I
+     AUD["소리"] --> SV["SenseVoice: 고정"] --> AP["audio_proj"] --> I
+     I --> TH["Thinker: MiniMind 8층, 약 64M"] --> HEAD["lm_head: 글 토큰"]
+     TH -- "bridge_layer=3의 은닉 상태" --> TALK["Talker: 4층, 약 47M"]
+     PREV["지난 오디오 코드 8줄"] --> TALK
+     TALK --> C["프레임마다 코드북 8개의 토큰"] --> M["Mimi 디코더: 고정"] --> WAV["24kHz 파형"]
+    """),
+        mo.md(r"""
 
     | | VLM (`MiniMindVLM`) | Omni (`MiniMindOmni`) |
     | --- | --- | --- |
@@ -148,6 +174,7 @@ def _(mo):
 
     이 노트북은 Omni만의 부분인 **"말하기"(T2A)** 를 직접 학습하고, 듣기(A2A) 경로는 구조와 코드로 따라갑니다(9절).
     """)
+    ])
     return
 
 
@@ -179,8 +206,21 @@ def _(mo):
     return
 
 
-@app.cell
-def _(MiniMindOmni, OmniConfig, device, hf_hub_download, json, load_file, mo, omni_dir, setup_seed, snapshot_download, torch, warnings):
+@app.cell(hide_code=True)
+def _(
+    MiniMindOmni,
+    OmniConfig,
+    device,
+    hf_hub_download,
+    json,
+    load_file,
+    mo,
+    omni_dir,
+    setup_seed,
+    snapshot_download,
+    torch,
+    warnings,
+):
     mo.stop(device != "cuda", mo.callout(mo.md(
         "**GPU를 찾지 못했습니다.** 이 노트북은 NVIDIA GPU에서 학습하도록 만들었습니다. "
         "`uv run python -c 'import torch; print(torch.cuda.is_available())'`로 확인하세요."), kind="danger"))
@@ -218,11 +258,21 @@ def _(MiniMindOmni, OmniConfig, device, hf_hub_download, json, load_file, mo, om
 
     def count(module):
         return sum(p.numel() for p in module.parameters())
-    return BASE_REPO, base_omni, count, n_talker, n_thinker, omni_config, vision_dir
+
+    return BASE_REPO, base_omni, count, n_talker, n_thinker, omni_config
 
 
 @app.cell(hide_code=True)
-def _(base_omni, count, mo, n_talker, n_thinker, omni_config, torch):
+def _(
+    base_omni,
+    count,
+    mo,
+    n_talker,
+    n_thinker,
+    omni_config,
+    result_table,
+    torch,
+):
     _t = base_omni.talker
     _rows = [
         {"부품": "vision_encoder (SigLIP2)", "매개변수": f"{count(base_omni.vision_encoder) / 1e6:.1f}M", "어디서": "SigLIP2", "이 노트북에서": "항상 고정"},
@@ -236,7 +286,7 @@ def _(base_omni, count, mo, n_talker, n_thinker, omni_config, torch):
     ]
     mo.vstack([
         mo.md(f"실행 장치: **GPU (`{torch.cuda.get_device_name(0)}`)**"),
-        mo.ui.table(_rows, selection=None),
+        result_table(_rows, selection=None),
         mo.md(f"""
     - Talker 전체 **{count(_t) / 1e6:.1f}M** — Thinker({count(base_omni.thinker) / 1e6:.1f}M)에 가까운 크기를 새로 붙입니다.
     - `bridge_layer = {omni_config.bridge_layer}` (= 8 // 2 − 1): Talker는 Thinker의 **마지막 층이 아니라 4번째 층**의 출력을 받습니다(4절).
@@ -293,6 +343,7 @@ def _(device, tokenizer, torch):
         if tokenizer.eos_token_id in text_ids:
             text_ids = text_ids[: text_ids.index(tokenizer.eos_token_id)]
         return {"text": tokenizer.decode(text_ids, skip_special_tokens=True).strip(), "frames": frames, "steps": steps}
+
     return chat_prompt_ids, omni_chat
 
 
@@ -342,7 +393,17 @@ def _(mo):
 
 
 @app.cell
-def _(MimiModel, WhisperForConditionalGeneration, WhisperProcessor, device, hf_hub_download, librosa, re, snapshot_download, torch):
+def _(
+    MimiModel,
+    WhisperForConditionalGeneration,
+    WhisperProcessor,
+    device,
+    hf_hub_download,
+    librosa,
+    re,
+    snapshot_download,
+    torch,
+):
     MIMI_REPO, MIMI_REVISION = "jingyaogong/mimi", "b4e362bbfbba9444b162de486da40af6639e0b98"  # 원본 README가 안내하는 Mimi
     WHISPER_REPO, WHISPER_REVISION = "openai/whisper-tiny.en", "87c7102498dcde7456f24cfd30239ca606ed9063"
     DATA_REPO, DATA_REVISION = "jingyaogong/minimind-o_dataset", "d6588e12ac2ac8ced65eb58a7d7b3eef4aa220de"
@@ -375,7 +436,7 @@ def _(MimiModel, WhisperForConditionalGeneration, WhisperProcessor, device, hf_h
         return re.sub(r"[^a-z0-9' ]", " ", s.lower()).split()
 
     def wer(ref, hyp):
-        """단어 오류율(WER) = 편집 거리 / 정답 단어 수. 1을 넘으면 1로 자릅니다(0 = 완벽, 1 = 전혀 다름)."""
+        """단어 오류율(WER) = 편집 거리 / 정답 단어 수. 1을 넘으면 1로 자릅니다(0 = 전사 일치, 1 = 원래 오류율이 100% 이상)."""
         r, h = _words(ref), _words(hyp)
         dp = list(range(len(h) + 1))
         for i in range(1, len(r) + 1):
@@ -383,11 +444,26 @@ def _(MimiModel, WhisperForConditionalGeneration, WhisperProcessor, device, hf_h
             for j in range(1, len(h) + 1):
                 prev, dp[j] = dp[j], min(dp[j] + 1, dp[j - 1] + 1, prev + (r[i - 1] != h[j - 1]))
         return min(1.0, dp[-1] / max(1, len(r)))
+
     return a2a_path, codes_to_wav, mimi, transcribe, wer
 
 
 @app.cell
-def _(a2a_path, codes_to_wav, device, io, json, librosa, mimi, np, pq, sf, torch, transcribe, wer):
+def _(
+    a2a_path,
+    codes_to_wav,
+    device,
+    io,
+    json,
+    librosa,
+    mimi,
+    np,
+    pq,
+    sf,
+    torch,
+    transcribe,
+    wer,
+):
     _t = pq.read_table(a2a_path, columns=["conversations", "question_audios"]).slice(0, 40)
     _clips = []
     for _k in [0, 7, 13, 21, 30]:
@@ -416,7 +492,18 @@ def _(a2a_path, codes_to_wav, device, io, json, librosa, mimi, np, pq, sf, torch
 
 
 @app.cell(hide_code=True)
-def _(demo_codes, demo_text, demo_wav, mo, orig_hyp, plt, rvq_rows, rvq_wavs, wav_bytes):
+def _(
+    demo_codes,
+    demo_text,
+    demo_wav,
+    mo,
+    orig_hyp,
+    plt,
+    result_table,
+    rvq_rows,
+    rvq_wavs,
+    wav_bytes,
+):
     _fig, _ax = plt.subplots(figsize=(8, 2.2))
     _ax.imshow(demo_codes.numpy(), aspect="auto", cmap="viridis", interpolation="nearest")
     _ax.set_yticks(range(8)); _ax.set_yticklabels([f"codebook {i}" for i in range(8)], fontsize=7)
@@ -428,7 +515,7 @@ def _(demo_codes, demo_text, demo_wav, mo, orig_hyp, plt, rvq_rows, rvq_wavs, wa
         _plot,
         mo.md(f"이 녹음은 `{tuple(demo_codes.shape)}` = 코드북 8개 × {demo_codes.shape[1]}프레임, 즉 **{demo_codes.numel()}개의 소리 토큰**입니다."),
         mo.hstack([mo.vstack([mo.md(f"**코드북 {k}개로 복원**"), mo.audio(wav_bytes(w))]) for k, w in rvq_wavs.items()], widths="equal"),
-        mo.ui.table(rvq_rows, selection=None),
+        result_table(rvq_rows, selection=None),
         mo.md(r"""
     코드북 1개만 쓰면 억양과 리듬은 남지만 발음이 뭉개져 Whisper가 엉뚱하게 받아 적습니다. 코드북을 더할수록 잔차가 채워져
     WER이 내려가고, 8개일 때 가장 정확합니다(짧은 클립에서는 4개로도 충분한 경우가 있습니다).
@@ -447,7 +534,7 @@ def _(mo):
     원본 데이터 한 행에는 `conversations`(대화 JSON)와 `answer_audios`(답변을 읽은 목소리의 Mimi 코드, 프레임마다 8개씩 이어 붙인 정수 목록)가 있습니다.
     이 노트북은 학습을 1분 안팎으로 끝내기 위해 다음 행만 고릅니다.
 
-    - 대화 한 턴, 영어, 답변 목소리 **1.6~4.8초**(20~60프레임), 화자 임베딩(`spk_emb`)이 없는 행(= **목소리 한 종류**)
+    - 대화 한 턴, 영어, 답변 목소리 **1.6~4.8초**(20~60프레임), 화자 임베딩(`spk_emb`)이 없는 행(단일 화자인지는 이 조건만으로 보장되지 않음)
     - 글자 수와 길이가 맞지 않는(잘린) 답변은 제외: 초당 10~22글자
     - 학습용 N개(아래 위젯) + **평가 전용 16개**(학습에 넣지 않음)
 
@@ -481,7 +568,17 @@ def _(mo):
 
 
 @app.cell
-def _(OmniDataset, a2a_path, json, n_train_ui, pa, pq, random, tempfile, tokenizer):
+def _(
+    OmniDataset,
+    a2a_path,
+    json,
+    n_train_ui,
+    pa,
+    pq,
+    random,
+    tempfile,
+    tokenizer,
+):
     from pathlib import Path as _Path
 
     _t = pq.read_table(a2a_path, columns=["conversations", "answer_audios", "spk_emb"])
@@ -518,11 +615,33 @@ def _(OmniDataset, a2a_path, json, n_train_ui, pa, pq, random, tempfile, tokeniz
     assert view_x.shape == (9, OMNI_MAX_LEN - 1) and view_audio_labels.shape == (8, OMNI_MAX_LEN - 1)
     _n_codes = len(train_rows[0]["answer_audios"][0]) // 8
     assert [(view_audio_labels[i] != -100).sum().item() for i in range(8)] == [_n_codes + 1] * 8  # 코드 + stop 1개
-    return OMNI_MAX_LEN, held_rows, pool_size, train_ds, train_rows, view_audio_labels, view_text_labels, view_x
+    return (
+        OMNI_MAX_LEN,
+        held_rows,
+        pool_size,
+        train_ds,
+        train_rows,
+        view_audio_labels,
+        view_text_labels,
+        view_x,
+    )
 
 
 @app.cell(hide_code=True)
-def _(OMNI_MAX_LEN, json, mo, plt, pool_size, tokenizer, train_ds, train_rows, view_audio_labels, view_text_labels, view_x):
+def _(
+    OMNI_MAX_LEN,
+    json,
+    mo,
+    plt,
+    pool_size,
+    result_table,
+    tokenizer,
+    train_ds,
+    train_rows,
+    view_audio_labels,
+    view_text_labels,
+    view_x,
+):
     _x = view_x
     _first_audio = int((_x[0] < 2048).nonzero()[0])         # 코드북 0의 첫 코드 위치 = 답변 시작 + 1
     _ans_start = _first_audio - 1
@@ -556,7 +675,7 @@ def _(OMNI_MAX_LEN, json, mo, plt, pool_size, tokenizer, train_ds, train_rows, v
     아래 표는 `OmniDataset`이 만든 입력(`{tuple(view_x.shape)}`, 최대 길이 {OMNI_MAX_LEN} − 1)에서 답변이 시작되는 부분입니다.
     `·`는 `<|audio_pad|>`(2049)입니다. 코드북 i의 첫 코드가 **i칸씩 늦게** 시작하는 계단을 확인하세요.
     """),
-        mo.ui.table(_rows, selection=None, page_size=15),
+        result_table(_rows, selection=None, page_size=15),
         _plot,
         mo.md(f"""
     - 글 답변은 짧고(정답 **{_n_text}토큰**), 소리는 길어서(정답 **{_n_audio}개** = 8줄 × (코드 + STOP)) 글이 먼저 끝납니다.
@@ -599,7 +718,16 @@ def _(mo):
 
 
 @app.cell
-def _(DataLoader, SkipBatchSampler, base_omni, count, device, omni_collate_fn, torch, train_ds):
+def _(
+    DataLoader,
+    SkipBatchSampler,
+    base_omni,
+    count,
+    device,
+    omni_collate_fn,
+    torch,
+    train_ds,
+):
     talker_batch = next(iter(DataLoader(train_ds, batch_sampler=SkipBatchSampler(list(range(4)), 4, 0), collate_fn=omni_collate_fn)))
     _x = talker_batch[0].to(device)
     _captured = {}
@@ -631,9 +759,9 @@ def _(DataLoader, SkipBatchSampler, base_omni, count, device, omni_collate_fn, t
 
 
 @app.cell(hide_code=True)
-def _(head_params, mo, talker_shapes):
+def _(head_params, mo, result_table, talker_shapes):
     mo.vstack([
-        mo.ui.table([{"텐서": k, "모양": str(v)} for k, v in talker_shapes.items()], selection=None),
+        result_table([{"텐서": k, "모양": str(v)} for k, v in talker_shapes.items()], selection=None),
         mo.md(f"""
     - `TalkerEmbedding`을 "코드북마다 (공통 임베딩 + 어댑터)를 더해 8로 나눔"으로 다시 계산한 값이 원본 출력과 같았습니다.
     - `TalkerHead`: 공통 출력층 {head_params['base'] / 1e6:.2f}M + 어댑터 8개 {head_params['adapters'] / 1e6:.2f}M
@@ -712,7 +840,16 @@ def _(mo):
 
 
 @app.cell
-def _(DataLoader, SkipBatchSampler, device, get_lr, nn, omni_collate_fn, setup_seed, torch):
+def _(
+    DataLoader,
+    SkipBatchSampler,
+    device,
+    get_lr,
+    nn,
+    omni_collate_fn,
+    setup_seed,
+    torch,
+):
     def apply_mode(model, mode):
         """A(talker) / C(blind) / B(all)에 맞춰 requires_grad 설정. 이미지 인코더는 항상 고정"""
         for p in model.parameters():
@@ -769,11 +906,21 @@ def _(DataLoader, SkipBatchSampler, device, get_lr, nn, omni_collate_fn, setup_s
                 if history is not None:
                     history.append((text_loss.item(), audio_loss.item()))
         return model.eval(), n_trainable, epoch
+
     return (run_training,)
 
 
 @app.cell
-def _(base_omni, copy, run_training, setup_seed, steps_ui, time, torch, train_ds):
+def _(
+    base_omni,
+    copy,
+    run_training,
+    setup_seed,
+    steps_ui,
+    time,
+    torch,
+    train_ds,
+):
     torch.cuda.reset_peak_memory_stats()
     histories, train_info, trained = {}, {}, {}
     for _name, _mode, _lr in [("A", "talker", 5e-4), ("C", "blind", 5e-4), ("B", "all", 2e-4)]:
@@ -790,7 +937,7 @@ def _(base_omni, copy, run_training, setup_seed, steps_ui, time, torch, train_ds
 
 
 @app.cell(hide_code=True)
-def _(histories, mo, np, peak_gb, plt, train_info):
+def _(histories, mo, np, peak_gb, plt, result_table, train_info):
     def _smooth(v, k=20):
         return np.convolve(v, np.ones(k) / k, mode="valid")
 
@@ -805,7 +952,7 @@ def _(histories, mo, np, peak_gb, plt, train_info):
     _rows = [{"실험": k, "학습 매개변수": f"{v['학습 매개변수'] / 1e6:.1f}M", "lr": v["lr"], "epochs": v["epochs"],
               "학습 시간 (GPU)": f"{v['시간']:.0f}초", "마지막 20 step 소리 손실": f"{np.mean([a for _, a in histories[k][-20:]]):.3f}",
               "마지막 20 step 글 손실": f"{np.mean([t for t, _ in histories[k][-20:]]):.3f}"} for k, v in train_info.items()]
-    mo.vstack([_plot, mo.ui.table(_rows, selection=None), mo.md(f"GPU 최대 할당: **{peak_gb:.1f}GB**")])
+    mo.vstack([_plot, result_table(_rows, selection=None), mo.md(f"GPU 최대 할당: **{peak_gb:.1f}GB**")])
     return
 
 
@@ -874,11 +1021,23 @@ def _(chat_prompt_ids, codes_to_wav, device, tokenizer, torch):
                 break
             frames.append(f)
         return codes_to_wav(torch.tensor(frames).T) if frames else None
+
     return (read_aloud,)
 
 
 @app.cell
-def _(held_rows, json, model_a, model_b, model_c, np, read_aloud, train_rows, transcribe, wer):
+def _(
+    held_rows,
+    json,
+    model_a,
+    model_b,
+    model_c,
+    np,
+    read_aloud,
+    train_rows,
+    transcribe,
+    wer,
+):
     def score_reading(model, rows):
         out = []
         for r in rows:
@@ -895,7 +1054,7 @@ def _(held_rows, json, model_a, model_b, model_c, np, read_aloud, train_rows, tr
 
 
 @app.cell(hide_code=True)
-def _(mo, reading, reading_summary, wav_bytes):
+def _(mo, reading, reading_summary, result_table, wav_bytes):
     _rows = [{"모델": k, "학습 문장 16개 WER": f"{v['train']:.2f}", "처음 보는 문장 16개 WER": f"{v['held']:.2f}"} for k, v in reading_summary.items()]
 
     def _card(item, title):
@@ -904,8 +1063,8 @@ def _(mo, reading, reading_summary, wav_bytes):
                           mo.md(f"Whisper: *{item['hyp'] or '(없음)'}*<br>WER {item['wer']:.2f}")])
 
     mo.vstack([
-        mo.ui.table(_rows, selection=None),
-        mo.md("WER: 0 = 완벽히 받아 적음, 1 = 전혀 다름. 같은 문장을 세 모델이 읽은 소리:"),
+        result_table(_rows, selection=None),
+        mo.md("WER은 단어 편집 거리/정답 단어 수입니다. 0은 전사 일치이며, 일반적으로 삽입 때문에 1을 넘을 수 있습니다. 이 실습의 WER 함수는 1에서 자릅니다. 같은 문장을 세 모델이 읽은 소리:"),
         mo.hstack([_card(reading["A"]["train"][0], "A · 학습 문장"), _card(reading["C"]["train"][0], "C · 같은 학습 문장"),
                    _card(reading["A"]["held"][1], "A · 처음 보는 문장")], widths="equal", align="start"),
     ])
@@ -923,8 +1082,7 @@ def _(mo):
       (예: "The Statue of Liberty is a famous American landmark.") 중 하나를 말합니다. C도 64개 문장의 소리를 외웠지만,
       **어느 문장을 말할지는 Thinker에게서만 알 수 있습니다.** A와 C의 차이가 곧 "Talker가 Thinker를 보고 말한다"는 증거입니다
       (VLM 노트북의 빈 그림 대조군과 같은 역할).
-    - **처음 보는 문장**은 A·B도 거의 못 읽습니다. 목소리 결은 같지만 단어가 엉뚱하거나 금방 끊깁니다. 64개 문장으로는 "글자 → 소리" 규칙을
-      일반화하지 못하고 문장을 **외운** 것입니다. 원본이 수십만 문장(수백 시간)으로 학습하는 이유입니다.
+    - **처음 보는 문장**은 A·B도 거의 못 읽습니다. 목소리 결은 같지만 단어가 엉뚱하거나 금방 끊깁니다. 이 설정에서는 학습 밖 문장으로의 일반화를 확인하지 못했습니다. 학습 문장과 확인용 문장의 격차를 관찰한 결과이며, 필요한 데이터 규모를 확정하는 근거는 아닙니다.
       (같은 Talker를 5,000문장으로 10분 학습해도 처음 보는 문장의 WER은 1에 가까웠습니다. 일반화에는 훨씬 많은 데이터와 시간이 필요합니다.)
     """)
     return
@@ -942,7 +1100,18 @@ def _(mo):
 
 
 @app.cell
-def _(base_omni, codes_to_wav, json, model_a, model_b, omni_chat, probe_images, torch, train_rows, transcribe):
+def _(
+    base_omni,
+    codes_to_wav,
+    json,
+    model_a,
+    model_b,
+    omni_chat,
+    probe_images,
+    torch,
+    train_rows,
+    transcribe,
+):
     GENERAL_QUESTIONS = ["What is the capital of France?", "What do bees make?", "How many legs does a spider have?"]
 
     def _reply(model, q, image=None, n=80):
@@ -961,11 +1130,11 @@ def _(base_omni, codes_to_wav, json, model_a, model_b, omni_chat, probe_images, 
     pipeline_image = {"base": omni_chat(base_omni, "What is in this image?", image=probe_images[0], max_new_tokens=40)["text"],
                       "B": omni_chat(model_b, "What is in this image?", image=probe_images[0], max_new_tokens=40)["text"]}
     stream_steps = pipeline_rows[0]["B"]["steps"]
-    return GENERAL_QUESTIONS, pipeline_image, pipeline_rows, stream_steps
+    return pipeline_image, pipeline_rows, stream_steps
 
 
 @app.cell(hide_code=True)
-def _(mo, pipeline_image, pipeline_rows, wav_bytes):
+def _(mo, pipeline_image, pipeline_rows, result_table, wav_bytes):
     _cards = []
     for _r in pipeline_rows[:3]:
         _b = _r["B"]
@@ -978,7 +1147,7 @@ def _(mo, pipeline_image, pipeline_rows, wav_bytes):
         mo.md("**학습한 질문** (실험 B): 글과 목소리가 함께 나옵니다."),
         mo.hstack(_cards, widths="equal", align="start"),
         mo.md("**처음 보는 일반 질문**"),
-        mo.ui.table(_gen, selection=None),
+        result_table(_gen, selection=None),
         mo.md(f"**그림 질문** (노란 자동차 사진, *What is in this image?*)<br>베이스: {pipeline_image['base']}<br>B: {pipeline_image['B']}"),
         mo.md(r"""
     - 학습한 질문에서는 Thinker의 글과 Talker의 목소리가 **같은 내용**입니다. 이것이 Omni의 "생각하면서 말하기"입니다.
@@ -1005,7 +1174,7 @@ def _(mo):
 
 
 @app.cell(hide_code=True)
-def _(mo, stream_steps, tokenizer):
+def _(mo, result_table, stream_steps, tokenizer):
     _rows, _n_frames = [], 0
     for _k, (_tok, _has) in enumerate(stream_steps[:16]):
         _n_frames += _has
@@ -1014,7 +1183,7 @@ def _(mo, stream_steps, tokenizer):
     _first = next((k for k, (_, h) in enumerate(stream_steps) if h), None)
     _text_end = next((k for k, (t, _) in enumerate(stream_steps) if t is None), len(stream_steps))
     mo.vstack([
-        mo.ui.table(_rows, selection=None, page_size=16),
+        result_table(_rows, selection=None, page_size=16),
         mo.md(f"""
     - 첫 소리 프레임은 **{_first}번 걸음**(0부터 셈)에 나옵니다. 1걸음 지연 + 계단 7칸 뒤에야 코드북 8개가 한 프레임을 다 채우기 때문입니다.
       답 전체를 기다리지 않고 이때부터 재생할 수 있습니다.
@@ -1030,7 +1199,7 @@ def _(mo):
     mo.md(r"""
     ## 8. Talker가 주로 보는 것: `text_scale`과 `audio_scale`
 
-    Talker 입력 = `embed_proj(bridge) × text_scale + codec_proj(소리) × audio_scale`. 두 값도 학습되므로, 학습 후 값을 보면
+    Talker 입력 = $h_{\mathrm{talker}}=s_t P_t(h_{\mathrm{bridge}})+s_a P_a(c_{\mathrm{audio}})$. 두 값도 학습되므로, 학습 후 값을 보면
     Talker가 Thinker 쪽과 지난 소리 쪽에 어떤 비중을 두게 되었는지 짐작할 수 있습니다(두 벡터의 크기도 함께 봐야 합니다).
     """)
     return
@@ -1057,9 +1226,9 @@ def _(base_omni, device, model_a, model_b, model_c, talker_batch, torch):
 
 
 @app.cell(hide_code=True)
-def _(mo, scale_rows):
+def _(mo, result_table, scale_rows):
     mo.vstack([
-        mo.ui.table(scale_rows, selection=None),
+        result_table(scale_rows, selection=None),
         mo.md(r"""
     C는 `text_scale = 0`으로 고정했으므로 Thinker 쪽이 0입니다. A·B에서 Thinker 쪽 벡터가 소리 쪽과 함께 쓰이는지 확인하세요.
     두 입력은 `embed_proj`/`codec_proj` 끝의 RMSNorm을 거친 뒤 scale이 곱해집니다. RMSNorm의 가중치도 학습되므로 scale만이 아니라
@@ -1163,7 +1332,7 @@ def _(BASE_REPO, mo):
     | `--learning_rate` | 5e-4 | 5e-4 / 5e-4 / 2e-4 |
     | 데이터 | 약 47만 답변, 1 epoch | 32~128문장을 반복 (기본 64문장, 800 step) |
     | `--max_seq_len` | 512 | 160 |
-    | 화자 조건 (`spk_emb`, `ref_audios`) | 데이터에 있으면 사용 | 화자 임베딩 없는 한 목소리만 사용 |
+    | 화자 조건 (`spk_emb`, `ref_audios`) | 데이터에 있으면 사용 | 화자 임베딩 없는 샘플 사용(단일 화자 여부는 별도 확인) |
     | `--dtype` | bfloat16 | bfloat16 autocast |
 
     ## 11. 정리
@@ -1178,7 +1347,7 @@ def _(BASE_REPO, mo):
     | 손실 | 글 CE + 소리 CE(8개 평균, STOP × 10). 답변 위치만 정답 |
     | 소리 입력 | SenseVoice 연속 벡터 → `audio_proj` → `<|audio_pad|>` 자리. 출력용 Mimi와 다른 표현 |
     | 확인 방법 | 정해진 문장 읽기 + 받아쓰기 WER, Thinker 연결을 끊은 대조군, 처음 보는 문장 |
-    | 한계 | 작은 데이터로는 외운 문장만 말함. 일반화에는 수백 시간의 음성이 필요. Thinker를 함께 풀면 망각 |
+    | 한계 | 이 실험에서는 학습 밖 문장 일반화가 미확인. 필요한 데이터 규모는 추가 검증 대상. Thinker 갱신 시 망각 관찰 |
 
     ## 12. 직접 해 볼 과제
 
@@ -1190,11 +1359,11 @@ def _(BASE_REPO, mo):
 @app.cell(hide_code=True)
 def _(mo):
     mo.accordion({
-        "과제 1. 학습 문장 수 바꾸기 (3절 위젯)": mo.md("""
+        "과제 1. 학습 문장 수 바꾸기 (3절 위젯)": mo.md(r"""
     N을 32와 128로 바꿔 A의 학습 문장 WER과 처음 보는 문장 WER을 비교하세요. step 수는 그대로 두면 문장당 반복 횟수가 달라집니다.
 
     *해설:* 문장이 적을수록 같은 step 안에서 더 많이 반복하므로 학습 문장은 더 정확히 외웁니다. 문장이 많으면 외우기는 늦어지지만,
-    처음 보는 문장의 WER은 이 규모에서는 거의 1에 머뭅니다. 일반화가 시작되려면 문장 수가 수천~수만 배 많아야 합니다.
+    처음 보는 문장의 WER은 이 규모에서는 거의 1에 머뭅니다. 일반화에 필요한 데이터·계산 규모는 이 실험만으로 정할 수 없으며, 데이터 양·다양성·학습 설정을 나눠 추가 검증해야 합니다.
     """),
         "과제 2. bridge_layer 바꾸기 (4절)": mo.md("""
     `omni_config.bridge_layer`를 7(마지막 층)이나 0(첫 층)으로 바꿔 1절부터 다시 실행하고, A의 학습 문장 WER을 비교하세요.

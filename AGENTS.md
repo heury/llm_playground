@@ -14,6 +14,7 @@
 │   ├── gpt/                  # GPT 챕터별 실습과 구조 실험
 │   ├── lerobot/              # LeRobot 정책(ACT 등) marimo 실습, lerobot 미설치·코드 이식
 │   ├── minimind/             # MiniMind marimo 실습 (이전 notebooks/)
+│   ├── physicalai/           # MuJoCo SO-101 Physical AI 장별 marimo 실습 (RL·ACT·SmolVLA·LLM Planner)
 │   └── unsloth/              # Qwen 미세 조정·배포 실습
 ├── projects/                 # 독립 모델 구현·학습·추론
 │   ├── minimind/
@@ -86,6 +87,21 @@ CUDA 드라이버가 필요합니다. `notebooks/unsloth/`에서 `uv sync --lock
 `reports/unsloth/<실행 ID>.md`에 저장합니다. `execute_notebook.py`의
 `--output-dir`도 이 규칙에 맞춥니다. Pod 실행 스크립트는 원격 작업 경로를 사용하므로
 결과를 내려받아 같은 규칙으로 정리하세요. 문서 확인만으로 Pod 실행이나 학습을 시작하지 마세요.
+
+## physicalai — Physical AI 장별 실습
+
+```text
+notebooks/physicalai/
+├── README.md                 # 장별 내용·자원, 설치 extra, 공개 체크포인트, 원본과 달라진 점
+├── pyproject.toml / uv.lock  # 기본(1~5장)과 vision·lerobot·llm 추가 옵션
+├── physicalai_common.py      # 장면·SO101Sim·IK·SimCamera·시연 기록·정책 실행 공통 모듈 (실습 노트북 아님)
+└── ch0[1-9]_*.py             # 1~9장 marimo 노트북
+```
+
+`notebooks/physicalai/`에서 `uv sync --locked`(6~8장은 `--extra lerobot`)로 설치합니다.
+SO-101 모델은 처음 실행 시 `third_party/`(Git 제외)에 내려받습니다. 학습·다운로드·반복 평가 셀은 버튼으로만 실행되며,
+문서 확인만으로 이 셀을 실행하지 마세요. 산출물은 `outputs/physicalai/<실행 ID>/`, 공유 데이터셋과 체크포인트는
+`outputs/physicalai/datasets/`, `outputs/physicalai/checkpoints/`, 보고서는 `reports/physicalai/<실행 ID>.md`입니다.
 
 ## minimind — 기본 언어 모델
 

@@ -22,7 +22,7 @@ def main():
  splits=json.loads((ART/'audio_splits.json').read_text())
  for kind in ['t2a','a2a']:
   table=pq.read_table(ROOT/f'data/audio/sft_{kind}_mini.parquet')
-  for j,idx in enumerate(splits[kind]['validation'][:2]):
+  for j,idx in enumerate(splits[kind]['test'][:3]):
    row=table.slice(idx,1).to_pylist()[0];convs=json.loads(row['conversations'])
    # First complete turn avoids accidentally passing a reference assistant answer.
    user=next(t['content'] for t in convs if t['role']=='user')
@@ -114,7 +114,7 @@ Omni model using the exact frozen Thinker, language head, vision projector and t
 from `jingyaogong/minimind-3o-pytorch/sft_omni_768.pth` and aligned to the VLM hidden states.
 The original Omni text embeddings are replaced, never paired with the VLM tokenizer.
 
-Training uses all rows of `sft_t2a_mini` and `sft_a2a_mini`, apart from 128 heldout rows each.
+Training uses all rows of `sft_t2a_mini` and `sft_a2a_mini`, apart from 128 validation and 128 disjoint test rows each.
 One epoch T2A Talker, one epoch A2A audio projector alignment, one epoch A2A Talker+audio projector.
 VLM weights, SenseVoice, SigLIP and Mimi stay frozen. Exact VLM preservation is checked.
 No visual dataset is trained in this run. Speech quality and factual accuracy are experimental.
@@ -136,6 +136,8 @@ See `training_summary.json`, `metrics/`, `samples/results.json`, `initialization
 `vlm_preservation.json` and `REPORT_ko.md` for provenance and actual measurements.
 The included source is Apache-2.0. Upstream weights and datasets retain their original terms.
 ''')
+ card=ART/'README.md'
+ card.write_text(card.read_text().replace('caspar/MiniMind-O-VLM-Audio-Mini-5090-20261110',os.environ.get('OMNI_HF_REPO','caspar/MiniMind-O-VLM-Audio-Mini-5090-20261114')))
  prov=ART/'provenance';prov.mkdir(exist_ok=True)
  shutil.copyfile(REPO/'LICENSE',prov/'MINIMIND_O_CODE_LICENSE')
  shutil.copyfile(ROOT/'vlm/LICENSE-CODE',prov/'MINIMIND_V_CODE_LICENSE')
@@ -154,7 +156,7 @@ The included source is Apache-2.0. Upstream weights and datasets retain their or
   lines += [f"### {r['id']}",'',f"입력: {r['input_text']}",'',f"참고: {r['reference_text']}",'',f"응답: {r['response_text']}",'',f"자동 전사: {r.get('output_audio_asr',r.get('output_audio_asr_error','없음'))}",'',f"프레임: {r['frames']}; 길이 제한 도달: {r['possibly_truncated']}",'']
   if r.get('input_file'):lines += [f"[입력](samples/{r['input_file']})",'']
   if r.get('output_audio'):lines += [f"[생성 음성](samples/{r['output_audio']})",'']
- lines+=['## 한계','','검증은 데이터셋별 128행입니다. 초기 모델 사전학습과의 중복은 알 수 없습니다. 음성은 자동 전사와 비무음 여부를 확인하며, 사람의 청취 품질 평가는 수행하지 않았습니다. 이미지 샘플은 별도 시각 성능 벤치마크가 아닙니다.']
+ lines+=['## 한계','','데이터셋별 검증 128행과 별도의 테스트 128행을 학습에서 제외했습니다. 생성 샘플도 테스트에서 추출했습니다. 초기 모델 사전학습과의 중복은 알 수 없습니다. 음성은 자동 전사와 비무음 여부를 확인하며, 사람의 청취 품질 평가는 수행하지 않았습니다. 이미지 샘플은 별도 시각 성능 벤치마크가 아닙니다.']
  (ART/'REPORT_ko.md').write_text('\n'.join(lines)+'\n')
  smoke=subprocess.run([sys.executable,str(ART/'source/scripts/runpod_vlm_audio/infer.py'),'--model-dir',str(ART),'--prompt','Hello!','--max-new-tokens','2','--device','cpu'],capture_output=True,text=True,timeout=120,check=True)
  (ART/'portable_inference_smoke.txt').write_text(smoke.stdout)

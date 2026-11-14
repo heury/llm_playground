@@ -77,9 +77,9 @@ def _(device, mo):
 
     | 파일 | 내용 |
     | --- | --- |
-    | [`policies/act/configuration_act.py`](https://github.com/huggingface/lerobot/blob/main/src/lerobot/policies/act/configuration_act.py) | `ACTConfig`: 청크 크기, Transformer 크기, VAE, KL 가중치 |
-    | [`policies/act/modeling_act.py`](https://github.com/huggingface/lerobot/blob/main/src/lerobot/policies/act/modeling_act.py) | `ACTPolicy`(손실·행동 큐), `ACTTemporalEnsembler`, `ACT`(신경망), 인코더/디코더 층, 위치 임베딩 |
-    | [`policies/smolvla/`](https://github.com/huggingface/lerobot/tree/main/src/lerobot/policies/smolvla) | 같은 action chunk 구조에 VLM과 flow matching을 붙인 SmolVLA (9절에서 비교) |
+    | [`policies/act/configuration_act.py`](https://github.com/huggingface/lerobot/blob/e6ffde60312365c5452c46189a26872483943154/src/lerobot/policies/act/configuration_act.py) | `ACTConfig`: 청크 크기, Transformer 크기, VAE, KL 가중치 |
+    | [`policies/act/modeling_act.py`](https://github.com/huggingface/lerobot/blob/e6ffde60312365c5452c46189a26872483943154/src/lerobot/policies/act/modeling_act.py) | `ACTPolicy`(손실·행동 큐), `ACTTemporalEnsembler`, `ACT`(신경망), 인코더/디코더 층, 위치 임베딩 |
+    | [`policies/smolvla/`](https://github.com/huggingface/lerobot/tree/e6ffde60312365c5452c46189a26872483943154/src/lerobot/policies/smolvla) | 같은 action chunk 구조에 VLM과 flow matching을 붙인 SmolVLA (9절에서 비교) |
 
     `lerobot` 패키지는 설치하지 않습니다. 이 노트북 환경(`notebooks/lerobot/pyproject.toml`)에는 torch·torchvision·einops만 있으므로,
     `modeling_act.py`의 클래스를 **거의 그대로 셀에 옮겨** 쓰고, 바꾼 곳은 주석으로 표시했습니다.
@@ -89,19 +89,20 @@ def _(device, mo):
     데이터와 가중치를 내려받지 않습니다. 현재 장치는 **`{device}`** 입니다. RTX 3080 Ti 기준 전체 실행에 약 5분(학습 3회)이 걸리고 GPU 메모리는 1GB 미만을 씁니다.
     GPU 연산은 완전히 결정적이지 않아 성공률은 실행마다 몇 %p씩 달라질 수 있습니다(검증 실행 두 번: BC 0~1%, ACT 85~89%).
 
-    **사전 지식:** Transformer의 self-attention·cross-attention, VAE의 재매개변수화(reparameterization)와 KL 항.
+    **학습 목표:** 청크·CVAE 손실·행동 큐·시간 앙상블을 코드와 연결하고, 학습 손실과 폐루프 성공률을 구분합니다.
+    **사전 지식:** Python·PyTorch 텐서, Transformer의 self-attention·cross-attention.
+    CVAE의 재매개변수화(reparameterization)와 KL 항은 4-3절과 5절에서 확인하세요.
+
+    **실행:** `notebooks/lerobot`에서 `uv sync --locked` 후 `uv run marimo edit act_tour.py`를 실행합니다.
+    1~5절은 구조 확인, 6~7절은 필수 학습·평가, 8절 잠재 변수 분석과 11절 추가 학습은 선택 심화입니다.
+    6절 버튼을 누르면 세 모델을 학습합니다. CPU에서는 기본 500 step으로 줄이며 낮은 성공률만으로 구조가 틀렸다고 판단하지 마세요.
+    marimo는 파일 순서가 아니라 변수 의존성에 따라 셀을 실행합니다. 설정·학습 셀을 바꾸면 하위 학습·평가도 다시 실행됩니다.
+    평가 시작 시 `policy.reset()`이 행동 큐와 앙상블을 비웁니다. 처음부터 비교하려면 커널을 재시작하고 같은 시드로 실행하세요.
+    모델·시연은 메모리에만 있으므로 커널 재시작 후에는 다시 만들어야 합니다.
 
     ## 0. 한눈에 보는 ACT
 
-    ```text
-    학습할 때만 사용                          학습·추론 모두 사용
-    ┌───────────────────────┐   z (32차원)   ┌─────────────────────────────────────────────┐
-    │ VAE 인코더            │ ─────────────► │ Transformer 인코더                          │
-    │ [CLS, 상태, a_t..a_t+k-1] │            │ [z, 상태, 이미지 특징 h·w개]                │
-    └───────────────────────┘                │        │ cross-attention                     │
-         (추론 때는 z = 0)                   │ Transformer 디코더: 학습되는 쿼리 k개 ──► k개 행동 │
-                                             └─────────────────────────────────────────────┘
-    ```
+
 
     | 아이디어 | 왜 필요한가 | 코드 위치 |
     | --- | --- | --- |
@@ -110,6 +111,20 @@ def _(device, mo):
     | **Temporal ensembling** | 청크 경계에서 행동이 끊기는 것을 매 step 겹쳐 평균해 부드럽게 함 | `ACTTemporalEnsembler` |
 
     1~2절에서 과제와 데이터를, 3~5절에서 모델 코드를, 6~8절에서 학습·평가·잠재 변수 실험을 다룹니다.
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.mermaid("""
+    flowchart LR
+        A["정답 행동 청크 + 상태 (학습만)"] --> V["CVAE 인코더"]
+        V --> Z["잠재 변수 z; 추론은 0"]
+        Z --> E["Transformer 인코더"]
+        O["이미지 특징 + 상태"] --> E
+        E --> D["Transformer 디코더: 학습 쿼리 k개"]
+        D --> C["행동 청크 k개"]
     """)
     return
 
@@ -1205,7 +1220,7 @@ def _(mo):
 
 @app.cell
 def _(ACTPolicy, device, time, torch, train_batch):
-    TRAIN_STEPS = 3000
+    TRAIN_STEPS = 3000 if device == "cuda" else 500
     BATCH_SIZE = 64
 
 
@@ -1233,19 +1248,29 @@ def _(ACTPolicy, device, time, torch, train_batch):
 
 
 @app.cell
-def _(ACTConfig, train_policy):
+def _(mo):
+    train_button = mo.ui.run_button(label="세 정책 학습·평가 실행")
+    train_button
+    return (train_button,)
+
+
+@app.cell
+def _(ACTConfig, mo, train_button, train_policy):
+    mo.stop(not train_button.value, mo.md("6절 버튼을 누르면 학습합니다."))
     policy_bc, hist_bc = train_policy(ACTConfig(chunk_size=1, n_action_steps=1, use_vae=False))
     return hist_bc, policy_bc
 
 
 @app.cell
-def _(ACTConfig, train_policy):
+def _(ACTConfig, mo, train_button, train_policy):
+    mo.stop(not train_button.value, mo.md("6절 버튼을 누르면 학습합니다."))
     policy_act, hist_act = train_policy(ACTConfig(chunk_size=20, n_action_steps=20, kl_weight=10.0))
     return hist_act, policy_act
 
 
 @app.cell
-def _(ACTConfig, train_policy):
+def _(ACTConfig, mo, train_button, train_policy):
+    mo.stop(not train_button.value, mo.md("6절 버튼을 누르면 학습합니다."))
     policy_act_lowkl, hist_act_lowkl = train_policy(ACTConfig(chunk_size=20, n_action_steps=20, kl_weight=0.01))
     return hist_act_lowkl, policy_act_lowkl
 
@@ -1253,6 +1278,7 @@ def _(ACTConfig, train_policy):
 @app.cell
 def _(hist_act, hist_act_lowkl, hist_bc, np, plt):
     def smooth(values, w=5):
+        w = min(w, len(values))
         return np.convolve(values, np.ones(w) / w, mode="valid")
 
 
@@ -1260,9 +1286,10 @@ def _(hist_act, hist_act_lowkl, hist_bc, np, plt):
     for _hist, _label, _color in [(hist_bc, "A. BC (chunk 1)", "C0"), (hist_act, "B. ACT kl=10", "C1"),
                                   (hist_act_lowkl, "C. ACT kl=0.01", "C2")]:
         _steps = [h["step"] for h in _hist]
-        _axes[0].plot(_steps[4:], smooth([h["l1_loss"] for h in _hist]), label=_label, color=_color)
+        _window = min(5, len(_hist))
+        _axes[0].plot(_steps[_window - 1 :], smooth([h["l1_loss"] for h in _hist]), label=_label, color=_color)
         if "kld_loss" in _hist[0]:
-            _axes[1].plot(_steps[4:], smooth([h["kld_loss"] for h in _hist]), label=_label, color=_color)
+            _axes[1].plot(_steps[_window - 1 :], smooth([h["kld_loss"] for h in _hist]), label=_label, color=_color)
     _axes[0].set(title="L1 loss (normalized actions)", xlabel="step", yscale="log")
     _axes[1].set(title="KL divergence (nats, summed over 32 dims)", xlabel="step", yscale="log")
     for _ax in _axes:
@@ -1293,7 +1320,7 @@ def _(mo):
     | --- | --- |
     | 성공률 | 물체를 든 채 목표 0.05 이내에서 끝남 |
     | 잡기 성공률 | 끝날 때 물체를 들고 있음 |
-    | 멈춤 비율 | 마지막 30 step 동안 0.01도 움직이지 않았고, 성공도 아님 |
+    | 멈춤 비율 | 마지막 최대 30 step의 시작점에서 최대 이탈 거리가 0.01 미만이고, 성공도 아님 |
     """)
     return
 
@@ -1346,7 +1373,9 @@ def _(
             traj.append(pos.copy())
         traj = np.array(traj)  # (max_t+1, n, 2)
         success = carry & (np.linalg.norm(pos - goal, axis=1) < GOAL_TOL)
-        stuck = (np.linalg.norm(traj[-1] - traj[-31], axis=1) < 0.01) & ~success
+        # 끝점만 비교하면 이동 후 복귀한 궤적도 정지로 오인하므로 구간 전체를 봅니다.
+        tail = traj[-min(31, len(traj)) :]
+        stuck = (np.linalg.norm(tail - tail[0], axis=2).max(axis=0) < 0.01) & ~success
         return dict(success=success.mean(), grasp=carry.mean(), stuck=stuck.mean(), model_calls=n_calls,
                     traj=traj, obj=obj, goal=goal, success_mask=success)
     return rollout, set_inference
@@ -1589,14 +1618,14 @@ def _(mo):
 
     추론 때 쓰는 `z = 0`은 사전 분포 N(0, I)의 평균입니다. 그런데 위 산점도에서 C의 `mu`는 0을 중심으로 퍼져 있지 않습니다.
     `kl_weight`가 작아 사후 분포를 사전 분포 쪽으로 끌어당기는 힘이 약하기 때문입니다. 그래서 여기서 `z = 0`은 "평균적인 시연자"가 아니라
-    **짧게 기다리는 시연자** 쪽에 해당합니다. KL 항은 `z`를 비우는 대가로, 추론 때 `z = 0`이 의미 있는 값이 되도록 보장하는 역할도 합니다.
-    `kl_weight`는 이 둘 사이의 균형입니다.
+    **짧게 기다리는 시연자** 쪽에 해당합니다. KL 항은 사후 분포를 표준정규 사전분포에 가깝게 유도하여 학습·추론의 차이를 줄입니다.
+    다만 `z = 0`이 유용한 행동이나 평균 시연에 대응한다는 보장은 없습니다. `kl_weight`로 재구성과 정규화의 균형을 조절합니다.
     이것이 ACT 논문이 말하는 CVAE의 역할입니다. 사람 시연의 **제각각인 부분을 `z`로 빼내** 디코더가 여러 시연을 평균한 흐릿한 행동을 배우지 않게 하고,
     추론 때는 `z = 0`으로 하나의 일관된 행동을 냅니다.
 
     ## 9. SmolVLA와 비교
 
-    [SmolVLA](https://github.com/huggingface/lerobot/tree/main/src/lerobot/policies/smolvla)도 **행동 묶음을 한 번에 예측하고 행동 큐로 실행**합니다.
+    [SmolVLA](https://github.com/huggingface/lerobot/tree/e6ffde60312365c5452c46189a26872483943154/src/lerobot/policies/smolvla)도 **행동 묶음을 한 번에 예측하고 행동 큐로 실행**합니다.
     `SmolVLAPolicy.select_action`은 `ACTPolicy`처럼 큐가 비었을 때만 `predict_action_chunk`를 호출하고
     `actions.transpose(0, 1)[: n_action_steps]`를 큐에 넣습니다. 다른 점은 **무엇을 보고**, **어떻게 묶음을 만드는가**입니다.
 

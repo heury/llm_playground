@@ -75,7 +75,8 @@ def acquire(wait_hours,interval):
   gpu=api('catalog/gpus/'+urllib.parse.quote('NVIDIA GeForce RTX 5090')+'?include=AVAILABILITY&product=POD&cloud=SECURE&minCudaVersion=12.8')
   write('latest-capacity.json',gpu)
   price=gpu.get('price',{}).get('secure')
-  if price is None or price>1.19:raise RuntimeError(f'RTX 5090 price exceeds configured $1.19/hour ceiling: {price}')
+  ceiling=float(os.environ.get('OMNI_MAX_GPU_HOURLY','1.19'))
+  if price is None or price>ceiling:raise RuntimeError(f'RTX 5090 price exceeds configured ${ceiling}/hour ceiling: {price}')
   for dc in gpu.get('dataCenters',[]):
    if str(dc.get('availability','')).upper() not in ['LOW','MEDIUM','HIGH']:continue
    dcinfo=api('catalog/datacenters/'+dc['id'])
@@ -97,7 +98,7 @@ def acquire(wait_hours,interval):
    status('pod_allocated',pod=pid,volume=vid,dc=dc['id'],gpu_price_per_hour=price)
    return pid,vid
   status('waiting_for_capacity',attempt=attempt,next_check=time.time()+interval,deadline=deadline)
-  time.sleep(min(interval,max(0,deadline-time.time())))
+  time.sleep(min(interval,60,max(0,deadline-time.time())))
  status('capacity_wait_expired',wait_hours=wait_hours)
  return None,None
 
@@ -170,7 +171,7 @@ def main():
   ssh_run(ssh,'mkdir -p '+shlex.quote(REMOTE))
   subprocess.run(scp_args(d,key)+[str(bundle),'root@'+d['ip']+':'+REMOTE+'/source.tar.gz'],check=True,timeout=300)
   ssh_run(ssh,'tar --no-same-owner --no-same-permissions --touch -xzf '+REMOTE+'/source.tar.gz -C '+REMOTE)
-  command=f'export TRAINING_POD_ID={shlex.quote(pid)} OMNI_RUN_ROOT={shlex.quote(REMOTE)} TOKENIZERS_PARALLELISM=false OMP_NUM_THREADS=4; setsid timeout 12h bash {REMOTE}/repo/scripts/runpod_vlm_audio/setup.sh >{REMOTE}/run.log 2>&1 </dev/null &'
+  command=f'export TRAINING_POD_ID={shlex.quote(pid)} OMNI_RUN_ROOT={shlex.quote(REMOTE)} OMNI_HF_REPO={shlex.quote(REPO_ID)} TOKENIZERS_PARALLELISM=false OMP_NUM_THREADS=4; setsid timeout 12h bash {REMOTE}/repo/scripts/runpod_vlm_audio/setup.sh >{REMOTE}/run.log 2>&1 </dev/null &'
   ssh_run(ssh,command);started=time.time();errors=0
   while time.time()-started<12*3600:
    try:

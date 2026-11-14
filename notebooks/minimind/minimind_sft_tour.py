@@ -6,6 +6,29 @@ app = marimo.App(width="medium")
 
 @app.cell
 def _():
+    import sys as _display_sys
+    from pathlib import Path as _DisplayPath
+
+    _display_dir = str(_DisplayPath(__file__).resolve().parent)
+    if _display_dir not in _display_sys.path:
+        _display_sys.path.insert(0, _display_dir)
+    from notebook_display import result_table
+
+    return (result_table,)
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    **실행 안내:** 저장소 루트에서 `cd notebooks/minimind` → `uv sync --locked` →
+    `uv run marimo edit minimind_sft_tour.py`. 환경·준비물과 권장 순서는 [공통 README](README.md)를 참고하세요.
+    위젯 변경 시 의존 셀이 다시 실행됩니다. 모델 크기·데이터·학습 설정 변경 전에는 해당 절의 재실행 범위를 확인하세요.
+    """)
+    return
+
+
+@app.cell
+def _():
     import copy
     import json
     import random
@@ -263,11 +286,24 @@ def _(example_conversations, tokenizer, train_pairs):
     _question = [{"role": "user", "content": "Who are you?"}]
     rendered_generation = render(_question, add_generation_prompt=True)
     rendered_generation_think = render(_question, add_generation_prompt=True, open_thinking=True)
-    return rendered_generation, rendered_generation_think, rendered_multi, rendered_reasoning, rendered_single
+    return (
+        rendered_generation,
+        rendered_generation_think,
+        rendered_multi,
+        rendered_reasoning,
+        rendered_single,
+    )
 
 
 @app.cell(hide_code=True)
-def _(mo, rendered_generation, rendered_generation_think, rendered_multi, rendered_reasoning, rendered_single):
+def _(
+    mo,
+    rendered_generation,
+    rendered_generation_think,
+    rendered_multi,
+    rendered_reasoning,
+    rendered_single,
+):
     mo.vstack([
         mo.hstack([
             mo.md(f"**질문 1개 + 답 1개**\n```text\n{rendered_single}```"),
@@ -368,7 +404,17 @@ def _(mo):
 
 
 @app.cell
-def _(IDENTITY, SFTDataset, examples_path, post_processing_chat, pre_processing_chat, random, sft_max_len, tokenizer, torch):
+def _(
+    IDENTITY,
+    SFTDataset,
+    examples_path,
+    post_processing_chat,
+    pre_processing_chat,
+    random,
+    sft_max_len,
+    tokenizer,
+    torch,
+):
     examples_ds = SFTDataset(str(examples_path), tokenizer, max_length=sft_max_len)
 
     def getitem_step_by_step(ds, index):
@@ -399,11 +445,11 @@ def _(IDENTITY, SFTDataset, examples_path, post_processing_chat, pre_processing_
     reason_ids, reason_labels = examples_ds[1]  # system + 생각 과정
     assert labeled_text(multi_labels) == f"{IDENTITY}<|im_end|>\nZentor is a blue planet with two moons.<|im_end|>\n"
     assert labeled_text(reason_labels).startswith("<think>\nThe user asks about Zentor.")
-    return examples_ds, labeled_text, multi_ids, multi_labels, reason_labels
+    return labeled_text, multi_ids, multi_labels, reason_labels
 
 
 @app.cell(hide_code=True)
-def _(mo, multi_ids, multi_labels, tokenizer):
+def _(mo, multi_ids, multi_labels, result_table, tokenizer):
     _n = int((multi_ids != tokenizer.pad_token_id).sum())
     _rows = []
     for _k in range(_n):
@@ -412,7 +458,7 @@ def _(mo, multi_ids, multi_labels, tokenizer):
                       "정답 여부": "✅ 정답" if int(multi_labels[_k]) != -100 else ""})
     mo.vstack([
         mo.md("**여러 턴 대화의 토큰별 정답 여부** (`Ġ`는 공백, `\\n`은 줄바꿈, 패딩은 생략)"),
-        mo.ui.table(_rows, selection=None, page_size=80),
+        result_table(_rows, selection=None, page_size=80),
     ])
     return
 
@@ -492,7 +538,14 @@ def _(mo):
 
 
 @app.cell
-def _(MiniMindConfig, MiniMindForCausalLM, device, hf_hub_download, json, load_file):
+def _(
+    MiniMindConfig,
+    MiniMindForCausalLM,
+    device,
+    hf_hub_download,
+    json,
+    load_file,
+):
     BASE_REPO = "caspar/MiniMind-Dense-64M-Mixed-SFT-v1.0"
     BASE_REVISION = "v1.0"  # 버전 고정
 
@@ -509,7 +562,16 @@ def _(MiniMindConfig, MiniMindForCausalLM, device, hf_hub_download, json, load_f
 
 
 @app.cell
-def _(F, IDENTITY, device, fact_test, general_eval_q, identity_test_q, tokenizer, torch):
+def _(
+    F,
+    IDENTITY,
+    device,
+    fact_test,
+    general_eval_q,
+    identity_test_q,
+    tokenizer,
+    torch,
+):
     def prompt_ids(question):
         """추론 프롬프트. 모델 카드 안내대로 빈 think 블록을 지웁니다."""
         text = tokenizer.apply_chat_template(
@@ -561,7 +623,7 @@ def _(F, IDENTITY, device, fact_test, general_eval_q, identity_test_q, tokenizer
         }
 
     assert "Mimi" in IDENTITY
-    return answer_logp_per_token, ask, continue_raw, evaluate
+    return ask, continue_raw, evaluate
 
 
 @app.cell
@@ -574,11 +636,20 @@ def _(ask, base_model, evaluate, general_eval_q, replay_q):
 
 
 @app.cell(hide_code=True)
-def _(BASE_REPO, base_eval, device, fact_test, identity_test_q, mo, torch):
+def _(
+    BASE_REPO,
+    base_eval,
+    device,
+    fact_test,
+    identity_test_q,
+    mo,
+    result_table,
+    torch,
+):
     _where = f"GPU (`{torch.cuda.get_device_name(0)}`)" if device == "cuda" else "CPU"
     mo.vstack([
         mo.md(f"`{BASE_REPO}`, 실행 장치: **{_where}**. 추가 SFT 전 베이스 모델의 답:"),
-        mo.ui.table(
+        result_table(
             [{"질문 (학습에 없는 표현)": q, "베이스 모델 답": a}
              for q, a in zip(identity_test_q + [q for q, _ in fact_test], base_eval["identity"] + base_eval["facts"])],
             selection=None,
@@ -608,7 +679,15 @@ def _(mo):
 
 
 @app.cell
-def _(DataLoader, SkipBatchSampler, autocast_ctx, device, get_lr, setup_seed, torch):
+def _(
+    DataLoader,
+    SkipBatchSampler,
+    autocast_ctx,
+    device,
+    get_lr,
+    setup_seed,
+    torch,
+):
     def run_training(model, train_ds, args, history=None, logs=None):
         """train_full_sft.py의 '8. 학습 시작' + train_epoch"""
         model.to(device)
@@ -639,6 +718,7 @@ def _(DataLoader, SkipBatchSampler, autocast_ctx, device, get_lr, setup_seed, to
                                 f"loss: {loss.item() * args['accumulation_steps']:.4f}, lr: {lr:.8f}, "
                                 f"grad_norm: {last_grad_norm.item():.3f}")
         return model.eval()
+
     return (run_training,)
 
 
@@ -651,7 +731,19 @@ def _(mo):
 
 
 @app.cell
-def _(MiniMindForCausalLM, base_config, base_model, copy, run_training, setup_seed, sft_ds, sft_epochs, sft_lr, tokenizer, torch):
+def _(
+    MiniMindForCausalLM,
+    base_config,
+    base_model,
+    copy,
+    run_training,
+    setup_seed,
+    sft_ds,
+    sft_epochs,
+    sft_lr,
+    tokenizer,
+    torch,
+):
     sft_args = {"epochs": sft_epochs.value, "batch_size": 4, "accumulation_steps": 1,
                 "learning_rate": sft_lr.value, "grad_clip": 1.0}
 
@@ -685,7 +777,19 @@ def _(base_eval, base_general_pairs, evaluate, model_a, model_b, model_c):
 
 
 @app.cell(hide_code=True)
-def _(fact_test, general_eval_q, hist_a, hist_b, identity_test_q, logs_a, mo, plt, sft_args, sft_evals):
+def _(
+    fact_test,
+    general_eval_q,
+    hist_a,
+    hist_b,
+    identity_test_q,
+    logs_a,
+    mo,
+    plt,
+    result_table,
+    sft_args,
+    sft_evals,
+):
     _fig, _ax = plt.subplots(figsize=(6, 3))
     _ax.plot(hist_a, lw=0.9, label="A: from base (SFT) model")
     _ax.plot(hist_b, lw=0.9, label="B: from scratch")
@@ -706,8 +810,8 @@ def _(fact_test, general_eval_q, hist_a, hist_b, identity_test_q, logs_a, mo, pl
     mo.vstack([
         mo.md(f"설정: lr={sft_args['learning_rate']}, {sft_args['epochs']} epochs"),
         _plot,
-        mo.ui.table(_summary, selection=None),
-        mo.ui.table(_answers, selection=None, page_size=12),
+        result_table(_summary, selection=None),
+        result_table(_answers, selection=None, page_size=12),
         mo.md("**실험 A 로그 (epoch 끝마다, 마지막 3줄)**\n```text\n" + "\n".join(logs_a[-3:]) + "\n```"),
     ])
     return
@@ -749,9 +853,9 @@ def _(base_model, continue_raw, model_a, model_c):
 
 
 @app.cell(hide_code=True)
-def _(mo, user_turn_rows):
+def _(mo, result_table, user_turn_rows):
     mo.vstack([
-        mo.ui.table(user_turn_rows, selection=None),
+        result_table(user_turn_rows, selection=None),
         mo.md(r"""
     C는 학습 데이터의 질문(예: `What is your name?`)을 그대로 지어내고 `<|im_end|>`로 끝맺습니다. **사용자 역할을 흉내 내는 법**을 배운 것입니다.
     실제 대화에서 모델이 혼자 질문하고 답하며 대화를 이어 가는 원인이 됩니다. A와 베이스 모델은 이런 질문을 만들지 않습니다.
@@ -777,7 +881,21 @@ def _(mo):
 
 
 @app.cell
-def _(SFTDataset, base_general_pairs, base_model, chat, copy, evaluate, replay_pairs, run_training, sft_data_dir, sft_ds, tokenizer, train_pairs, write_jsonl):
+def _(
+    SFTDataset,
+    base_general_pairs,
+    base_model,
+    chat,
+    copy,
+    evaluate,
+    replay_pairs,
+    run_training,
+    sft_data_dir,
+    sft_ds,
+    tokenizer,
+    train_pairs,
+    write_jsonl,
+):
     write_jsonl(sft_data_dir / "sft_replay.jsonl", [{"conversations": chat(q, a)} for q, a in train_pairs + replay_pairs])
     replay_ds = SFTDataset(str(sft_data_dir / "sft_replay.jsonl"), tokenizer, max_length=96)
 
@@ -797,10 +915,10 @@ def _(SFTDataset, base_general_pairs, base_model, chat, copy, evaluate, replay_p
 
 
 @app.cell(hide_code=True)
-def _(base_eval, forgetting_rows, mo):
+def _(base_eval, forgetting_rows, mo, result_table):
     mo.vstack([
         mo.md(f"베이스 모델의 원래 일반 답 유지도: `{base_eval['retention']:.3f}` (0에 가까울수록 원래 답을 그대로 낼 가능성이 큼)"),
-        mo.ui.table(forgetting_rows, selection=None),
+        result_table(forgetting_rows, selection=None),
         mo.md(r"""
     - **학습률이 클수록** 정체성은 확실히 배우지만, 일반 질문에도 "I am Mimi"가 섞이고 유지도가 크게 떨어집니다.
       `2e-4`에서는 대부분의 질문에 정체성 답을 냅니다. 새 데이터에 **과적합**하며 원래 능력을 잊은 것입니다.

@@ -6,6 +6,29 @@ app = marimo.App(width="medium")
 
 @app.cell
 def _():
+    import sys as _display_sys
+    from pathlib import Path as _DisplayPath
+
+    _display_dir = str(_DisplayPath(__file__).resolve().parent)
+    if _display_dir not in _display_sys.path:
+        _display_sys.path.insert(0, _display_dir)
+    from notebook_display import result_table
+
+    return (result_table,)
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    **실행 안내:** 저장소 루트에서 `cd notebooks/minimind` → `uv sync --locked` →
+    `uv run marimo edit minimind_dpo_tour.py`. 환경·준비물과 권장 순서는 [공통 README](README.md)를 참고하세요.
+    위젯 변경 시 의존 셀이 다시 실행됩니다. 모델 크기·데이터·학습 설정 변경 전에는 해당 절의 재실행 범위를 확인하세요.
+    """)
+    return
+
+
+@app.cell
+def _():
     import copy
     import json
     import math
@@ -49,16 +72,15 @@ def _():
     tokenizer = AutoTokenizer.from_pretrained(minimind_dir / "model")
     return (
         DPODataset,
-        post_processing_chat,
-        autocast_ctx,
-        device,
         DataLoader,
         F,
         MiniMindConfig,
         MiniMindForCausalLM,
         Path,
         SkipBatchSampler,
+        autocast_ctx,
         copy,
+        device,
         dpo_loss,
         get_lr,
         hf_hub_download,
@@ -68,6 +90,7 @@ def _():
         math,
         mo,
         plt,
+        post_processing_chat,
         setup_seed,
         tempfile,
         tokenizer,
@@ -77,7 +100,8 @@ def _():
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(r"""
+    mo.vstack([
+        mo.md(r"""
     # MiniMind DPO(Direct Preference Optimization) 따라가기
 
     SFT는 "좋은 답 하나"를 보여 주고 따라 하게 합니다. 그런데 좋은 답을 직접 쓰기는 어려워도,
@@ -97,12 +121,15 @@ def _(mo):
 
     ## 0. 큰 그림
 
-    ```text
-    사전 학습 ──▶ SFT ──▶ DPO
-                  │        ├─ policy   : SFT 모델 복사본, 학습됨
-                  │        └─ reference: SFT 모델 복사본, 고정 (기준점)
-                  └ full_sft (이 노트북: caspar/...-Mixed-SFT-v1.0) ──▶ dpo
-    ```
+    """),
+        mo.mermaid(r"""
+    flowchart LR
+     P["사전 학습"] --> S["SFT: full_sft 가중치"]
+     S --> D["DPO"]
+     D --> A["policy: SFT 복사본, 학습"]
+     D --> R["reference: SFT 복사본, 고정"]
+    """),
+        mo.md(r"""
 
     한 쌍에 대해 DPO가 하는 일은 한 문장입니다.
     **"기준 모델보다, chosen의 확률은 상대적으로 올리고 rejected의 확률은 상대적으로 내려라."**
@@ -127,6 +154,7 @@ def _(mo):
 
     별도의 보상 모델도, 학습 중 답을 생성하는 과정(rollout)도 없습니다. 미리 모아 둔 쌍으로만 학습하는 **오프라인** 방식입니다.
     """)
+    ])
     return
 
 
@@ -147,7 +175,14 @@ def _(mo):
 
 
 @app.cell
-def _(MiniMindConfig, MiniMindForCausalLM, device, hf_hub_download, json, load_file):
+def _(
+    MiniMindConfig,
+    MiniMindForCausalLM,
+    device,
+    hf_hub_download,
+    json,
+    load_file,
+):
     BASE_REPO = "caspar/MiniMind-Dense-64M-Mixed-SFT-v1.0"
     BASE_REVISION = "v1.0"  # 버전 고정: 저장소가 바뀌어도 같은 가중치
 
@@ -168,7 +203,15 @@ def _(MiniMindConfig, MiniMindForCausalLM, device, hf_hub_download, json, load_f
 
 
 @app.cell(hide_code=True)
-def _(BASE_REPO, BASE_REVISION, base_config, base_param_count, device, mo, torch):
+def _(
+    BASE_REPO,
+    BASE_REVISION,
+    base_config,
+    base_param_count,
+    device,
+    mo,
+    torch,
+):
     _where = f"GPU (`{torch.cuda.get_device_name(0)}`)" if device == "cuda" else "CPU"
     mo.md(f"""
     `{BASE_REPO}` (`{BASE_REVISION}`): 매개변수 **{base_param_count:,}개**, hidden {base_config.hidden_size},
@@ -199,7 +242,8 @@ def _(device, tokenizer, torch):
         if stopped:
             new = new[: new.index(tokenizer.eos_token_id)]
         return tokenizer.decode(new, skip_special_tokens=True).strip(), len(new), stopped
-    return generate_answer, prompt_ids
+
+    return (generate_answer,)
 
 
 @app.cell(hide_code=True)
@@ -267,7 +311,16 @@ def _(generate_answer, sft_model):
 
 
 @app.cell
-def _(DPODataset, Path, json, model_answers, tempfile, test_qa, tokenizer, train_qa):
+def _(
+    DPODataset,
+    Path,
+    json,
+    model_answers,
+    tempfile,
+    test_qa,
+    tokenizer,
+    train_qa,
+):
     def chat(question, answer):
         return [{"role": "user", "content": question}, {"role": "assistant", "content": answer}]
 
@@ -287,10 +340,10 @@ def _(DPODataset, Path, json, model_answers, tempfile, test_qa, tokenizer, train
 
 
 @app.cell(hide_code=True)
-def _(data_dir, mo, model_answers, train_qa):
+def _(data_dir, mo, model_answers, result_table, train_qa):
     _line = open(data_dir / "dpo_train.jsonl", encoding="utf-8").readline().strip()
     mo.vstack([
-        mo.ui.table(
+        result_table(
             [{"질문": q, "chosen (사람이 씀)": a, "rejected (SFT 모델의 답)": model_answers[q]} for q, a in train_qa],
             selection=None, page_size=8,
         ),
@@ -336,7 +389,7 @@ def _(tokenizer, torch, train_ds):
 
 
 @app.cell(hide_code=True)
-def _(chosen_target, mo, pair, rejected_target, tokenizer):
+def _(chosen_target, mo, pair, rejected_target, result_table, tokenizer):
     def _rows(prefix):
         x, y, m = pair[f"x_{prefix}"], pair[f"y_{prefix}"], pair[f"mask_{prefix}"]
         n = int((x != tokenizer.pad_token_id).sum())
@@ -346,8 +399,8 @@ def _(chosen_target, mo, pair, rejected_target, tokenizer):
 
     mo.vstack([
         mo.hstack([
-            mo.vstack([mo.md("**chosen**"), mo.ui.table(_rows("chosen"), selection=None, page_size=30)]),
-            mo.vstack([mo.md("**rejected**"), mo.ui.table(_rows("rejected"), selection=None, page_size=30)]),
+            mo.vstack([mo.md("**chosen**"), result_table(_rows("chosen"), selection=None, page_size=30)]),
+            mo.vstack([mo.md("**rejected**"), result_table(_rows("rejected"), selection=None, page_size=30)]),
         ], widths="equal"),
         mo.md(f"`mask=1`인 다음 토큰: chosen `{chosen_target!r}` ({int(pair['mask_chosen'].sum())}개), "
               f"rejected `{rejected_target!r}` ({int(pair['mask_rejected'].sum())}개). 질문과 템플릿 부분은 두 시퀀스가 같습니다."),
@@ -382,7 +435,16 @@ def _(mo):
 
 
 @app.cell
-def _(F, device, logits_to_log_probs, pair, post_processing_chat, sft_model, tokenizer, torch):
+def _(
+    F,
+    device,
+    logits_to_log_probs,
+    pair,
+    post_processing_chat,
+    sft_model,
+    tokenizer,
+    torch,
+):
     def fixed_eval_items(ds):
         """평가용 입력. DPODataset.__getitem__과 같은 처리지만 무작위 가공을 끕니다.
 
@@ -425,7 +487,12 @@ def _(F, device, logits_to_log_probs, pair, post_processing_chat, sft_model, tok
         _probs = F.softmax(_logits[0], dim=-1)
         first_logp_manual = sum(torch.log(_probs[t, _y[0, t]]).item() for t in range(_y.shape[1]) if _m[0, t] == 1)
     assert abs(first_logp_orig - first_logp_manual) < 1e-2
-    return first_logp_manual, first_logp_orig, fixed_eval_items, sequence_log_probs
+    return (
+        first_logp_manual,
+        first_logp_orig,
+        fixed_eval_items,
+        sequence_log_probs,
+    )
 
 
 @app.cell
@@ -438,7 +505,14 @@ def _(fixed_eval_items, sequence_log_probs, sft_model, test_ds, train_ds):
 
 
 @app.cell(hide_code=True)
-def _(first_logp_manual, first_logp_orig, mo, ref_train_lp, train_qa):
+def _(
+    first_logp_manual,
+    first_logp_orig,
+    mo,
+    ref_train_lp,
+    result_table,
+    train_qa,
+):
     _rows = []
     for _i, (_q, _) in enumerate(train_qa[:8]):
         _c, _r = ref_train_lp["chosen"][_i].item(), ref_train_lp["rejected"][_i].item()
@@ -447,7 +521,7 @@ def _(first_logp_manual, first_logp_orig, mo, ref_train_lp, train_qa):
                       "토큰당 평균 chosen / rejected": f"{_c / _nc:.2f} / {_r / _nr:.2f}"})
     mo.vstack([
         mo.md(f"첫 쌍 chosen: 원본 `{first_logp_orig:.3f}` = 직접 계산 `{first_logp_manual:.3f}`"),
-        mo.ui.table(_rows, selection=None),
+        result_table(_rows, selection=None),
         mo.md(r"""
     rejected는 **모델 자신의 greedy 답**이라 토큰당 확률이 높습니다(평균 log p가 0에 가까움).
     반면 합으로 보면 rejected가 길어서 더 음수인 경우가 많습니다. DPO는 이 값을 **reference와의 차이**로 비교하므로
@@ -475,11 +549,15 @@ def _(mo):
         return (-F.logsigmoid(beta * logits)).mean()
     ```
 
-    - `logits`(아래에서 **margin**) = `(log π_c − log ref_c) − (log π_r − log ref_r)`.
-      `β·(log π − log ref)`를 **암묵적 보상(implicit reward)** 이라 부르며, margin은 chosen과 rejected의 보상 차이입니다.
-    - 학습 시작 때 policy와 reference가 같으므로 margin = 0, 손실 = `−log σ(0) = ln 2 ≈ 0.693`입니다.
-    - margin이 커질수록 손실이 0에 가까워지고 **기울기가 줄어듭니다.** 기울기 크기는 `β·σ(−β·margin)`에 비례합니다.
-      이미 잘 구분하는 쌍은 거의 학습하지 않고, β가 클수록 **작은 margin에서 일찍 멈춥니다.**
+    - `logits`(아래에서 **margin**) = $m=(\log\pi_c-\log\pi^{\mathrm{ref}}_c)-(\log\pi_r-\log\pi^{\mathrm{ref}}_r)$.
+      $\beta(\log\pi-\log\pi_{\mathrm{ref}})$를 **암묵적 보상(implicit reward)** 이라 부르며, 위에서 정의한 margin $m$에는 β가 없으므로 **암묵적 보상 차이는 $\beta m$**입니다.
+    - 학습 시작 때 policy와 reference가 같으므로 margin = 0, 손실 = $-\log\sigma(0)=\ln2\approx0.693$입니다.
+    - margin이 커질수록 손실이 0에 가까워지고 **기울기가 줄어듭니다.** 기울기 크기는 $\beta\sigma(-\beta m)$에 비례합니다.
+      이미 잘 구분하는 쌍의 갱신은 작아집니다. β는 기울기의 배율과 감소 속도 모두에 영향을 주며, 유한한 margin에서 기울기가 정확히 0이 되는 것은 아닙니다.
+
+
+    한 쌍의 손실 $\mathcal{L}=-\log\sigma(\beta m)$에 대해
+    $\partial\mathcal{L}/\partial m=-\beta\sigma(-\beta m)$입니다. 양의 유한한 $\beta$와 유한한 $m$에서는 0이 아닙니다.
     """)
     return
 
@@ -561,7 +639,20 @@ def _(mo):
 
 
 @app.cell
-def _(DataLoader, SkipBatchSampler, autocast_ctx, copy, device, dpo_loss, get_lr, logits_to_log_probs, setup_seed, sft_model, torch, train_ds):
+def _(
+    DataLoader,
+    SkipBatchSampler,
+    autocast_ctx,
+    copy,
+    device,
+    dpo_loss,
+    get_lr,
+    logits_to_log_probs,
+    setup_seed,
+    sft_model,
+    torch,
+    train_ds,
+):
     def run_dpo(args, history=None):
         model = copy.deepcopy(sft_model).train()                                   # policy
         ref_model = copy.deepcopy(sft_model).eval().requires_grad_(False)          # reference
@@ -603,6 +694,7 @@ def _(DataLoader, SkipBatchSampler, autocast_ctx, copy, device, dpo_loss, get_lr
                             "accuracy": (_diff[:_h] > _diff[_h:]).float().mean().item(),
                         })
         return model.eval()
+
     return (run_dpo,)
 
 
@@ -637,7 +729,16 @@ def _(dpo_beta, dpo_epochs, dpo_lr, run_dpo):
 
 
 @app.cell
-def _(dpo_model, generate_answer, ref_test_lp, sequence_log_probs, sft_model, test_eval_items, test_qa, torch):
+def _(
+    dpo_model,
+    generate_answer,
+    ref_test_lp,
+    sequence_log_probs,
+    sft_model,
+    test_eval_items,
+    test_qa,
+    torch,
+):
     dpo_test_lp = sequence_log_probs(dpo_model, test_eval_items)  # reference와 같은 고정 입력
 
     def preference_rate(lp):
@@ -661,7 +762,17 @@ def _(dpo_model, generate_answer, ref_test_lp, sequence_log_probs, sft_model, te
 
 
 @app.cell(hide_code=True)
-def _(dpo_args, dpo_history, dpo_test_gen, mo, plt, sft_test_gen, test_qa, test_summary):
+def _(
+    dpo_args,
+    dpo_history,
+    dpo_test_gen,
+    mo,
+    plt,
+    result_table,
+    sft_test_gen,
+    test_qa,
+    test_summary,
+):
     _fig, (_a1, _a2) = plt.subplots(1, 2, figsize=(10, 3))
     _a1.plot([h["loss"] for h in dpo_history], label="dpo_loss")
     _a1.plot([h["accuracy"] for h in dpo_history], label="reward accuracy")
@@ -691,9 +802,9 @@ def _(dpo_args, dpo_history, dpo_test_gen, mo, plt, sft_test_gen, test_qa, test_
 
     reference 대비 평균 변화: `Δ log π(chosen)` = {_d['Δ log π(chosen)']:+.2f}, `Δ log π(rejected)` = {_d['Δ log π(rejected)']:+.2f}.
     chosen의 로그 확률이 오히려 떨어진 쌍: **{_d['chosen이 떨어진 쌍']}/8**
-    (선호 판별률 = `σ(log π(chosen) − log π(rejected))`의 평균. 두 모델 모두 빈 think를 지운 같은 고정 입력으로 계산. 최대 60토큰까지 생성)
+    (선호 판별률 = $\\sigma(\\log\\pi_c-\\log\\pi_r)$의 평균. 두 모델 모두 빈 think를 지운 같은 고정 입력으로 계산. 최대 60토큰까지 생성)
     """),
-        mo.ui.table(
+        result_table(
             [{"질문": q, "기대하는 답": a, "SFT 답": s[0], "DPO 후 답": d[0]}
              for (q, a), s, d in zip(test_qa, sft_test_gen, dpo_test_gen)],
             selection=None,
@@ -717,7 +828,8 @@ def _(mo):
       새로 꺼내면 reference와 DPO 모델이 서로 다른 형식을 보게 되어 `Δ log π`가 크게 틀어집니다(`fixed_eval_items`).
     - 하지만 **내용이 맞아지지는 않습니다.** 모델이 모르는 사실(예: 개의 다리 수)은 짧게 틀릴 뿐입니다.
       일부 답이 맞아지기도 하지만, 같은 질문이 학습에 없으므로 짧게 답하다 보니 생긴 변화로 보는 편이 안전합니다.
-      DPO는 이미 할 수 있는 행동 중 **어느 쪽을 더 자주 할지**를 바꾸는 방법이지, 새 지식을 넣는 방법이 아닙니다.
+      이 실험은 **응답 선호 조정**에 초점을 둡니다. 선호 답변의 사실도 학습할 수 있지만,
+      DPO 손실 감소가 사실 정확성이나 새로운 질문의 정답률 개선을 보장하지는 않습니다.
     - **학습률 `2e-5`로 올리면:** 손실과 선호 판별률은 더 좋아지지만, 답이 질문과 무관한 짧은 문장으로 무너집니다(과최적화).
       rejected의 로그 확률이 크게 떨어지면서 모델이 원래 능력까지 잃은 것입니다. **DPO 지표만 보고 판단하면 안 되는 이유**입니다.
     - **학습률 `1e-6`:** 이 정도 데이터·step으로는 거의 변하지 않습니다. 원본의 `4e-8`은 이보다도 훨씬 작습니다.
@@ -730,12 +842,12 @@ def _(mo):
     mo.md(r"""
     ## 7. β와 reference의 역할
 
-    손실 식만 보면 reference 항은 학습 중 바뀌지 않는 상수라서 쓸모없어 보입니다. 그 역할은 **언제 멈출지**를 정하는 데 있습니다.
+    손실 식만 보면 reference 항은 학습 중 바뀌지 않는 상수라서 쓸모없어 보입니다. reference는 각 응답 쌍의 로그 확률비를 비교하는 **고정 기준점**입니다.
 
-    - 손실은 policy가 reference보다 `margin`만큼 더 선호할 때 줄어들고, `β·margin`이 몇 정도가 되면 거의 0이 되어 학습이 멈춥니다.
-    - 따라서 **β가 클수록 작은 변화로 멈추고(reference 근처에 머묾), β가 작을수록 멀리 갑니다.**
-      β는 "reference에서 얼마나 벗어나도 되는가"를 정하는 손잡이입니다(PPO의 KL 패널티와 비슷한 역할).
-    - 기울기에도 β가 곱해지지만, Adam 옵티마이저가 기울기 크기를 정규화하므로 그 효과는 작습니다. 주된 효과는 **포화 시점**입니다.
+    - 손실은 reference 대비 chosen의 상대 로그 확률비가 커질수록 줄어듭니다. $\beta m$이 충분히 크면 기울기가 매우 작아지지만, 유한한 $m$에서 자동으로 학습이 멈추는 것은 아닙니다.
+    - β가 크면 같은 양의 margin에서 기울기가 더 빨리 감소하는 경향이 있습니다. 실제 reference와의 거리는 학습률·학습 횟수·데이터에도 달려 있습니다.
+      β는 선호 최적화와 reference 기준의 절충에 관여합니다. 응답마다 KL 상한을 직접 보장하는 장치는 아닙니다.
+    - 기울기에도 β가 곱해집니다. Adam의 모멘트·epsilon·과거 갱신 상태가 영향을 주므로 그 배율이 항상 상쇄된다고 단정할 수 없습니다.
       그래서 step 수가 적으면 β를 바꿔도 결과가 비슷할 수 있습니다.
 
     위젯에서 β를 0.02와 1.0으로 바꾸어 `Δ log π(rejected)`와 답을 비교해 보세요. 학습률 `2e-5`처럼 많이 움직이는 설정에서 차이가 더 잘 보입니다.
@@ -779,8 +891,8 @@ def _(mo):
     | 데이터 | 같은 질문의 chosen·rejected, 데이터셋에서 한 칸 밀어 `x`, `y`, `mask` |
     | 로그 확률 | 답변 토큰 log p의 **합** (`logits_to_log_probs` + mask) |
     | 모델 | policy(학습) + reference(SFT 모델 고정), chosen·rejected를 한 배치로 붙여 forward |
-    | 손실 | `−log σ(β·[(π_c − π_r) − (ref_c − ref_r)])`, 시작값 ln 2 |
-    | 효과 | 이미 할 수 있는 행동(말투·길이)의 빈도를 바꿈. 새 지식은 넣지 못함 |
+    | 손실 | $-\log\sigma(\beta[(\ell_c-\ell_r)-(\ell^{\mathrm{ref}}_c-\ell^{\mathrm{ref}}_r)])$($\ell$은 응답 로그 확률의 합), 시작값 ln 2 |
+    | 효과 | 응답 선호를 조정하며 선호 데이터의 내용도 학습할 수 있음. 사실 정확성 개선은 보장하지 않음 |
     | 주의 | 학습률이 크면 손실은 좋아져도 답이 무너짐. 손실·판별률만 보지 말고 생성 결과를 확인 |
 
     ## 10. 직접 해 볼 과제
@@ -799,10 +911,10 @@ def _(mo):
     *해설:* 손실은 0에 가깝고 선호 판별률도 오르지만, 답은 질문과 상관없는 짧은 문장이 됩니다.
     rejected 로그 확률이 크게 떨어지면서 모델의 원래 능력까지 무너진 과최적화입니다.
     """),
-        "과제 2. β 비교 (7절)": mo.md("""
+        "과제 2. β 비교 (7절)": mo.md(r"""
     학습률 `2e-5`에서 β를 0.02와 1.0으로 바꿔 보세요. 어느 쪽이 SFT 모델의 답에 더 가깝게 남을까요?
 
-    *해설:* β가 클수록 작은 margin에서 손실이 포화되어 일찍 멈추므로 reference(SFT 모델) 근처에 머무는 경향이 있습니다.
+    *해설:* β가 크면 같은 양의 margin에서 기울기가 더 빨리 작아지는 경향이 있습니다. 생성 결과와 로그 확률 변화를 함께 확인하고, 학습률과 step 수를 고정해 비교하세요.
     """),
         "과제 3. chosen과 rejected 바꾸기 (2절)": mo.md("""
     `pair_rows`에서 chosen과 rejected를 서로 바꾸면 어떻게 될까요?

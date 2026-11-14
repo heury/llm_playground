@@ -188,14 +188,21 @@ def main():
  model,tok=build_model();assert model.audio_encoder is not None and model.vision_encoder is not None
  model.cuda();model.audio_encoder.cuda().eval();model.vision_encoder.cuda().eval()
  tok.save_pretrained(ART/'tokenizer');model.config.save_pretrained(ART)
+ original=AutoTokenizer.from_pretrained(ROOT/'vlm',local_files_only=True)
+ saved=AutoTokenizer.from_pretrained(ART/'tokenizer',local_files_only=True)
+ assert original.get_vocab()==saved.get_vocab()
+ assert original.backend_tokenizer.to_str()==saved.backend_tokenizer.to_str()
+ write(ART/'tokenizer_preservation.json',dict(exact_vocab_match=True,exact_backend_match=True,source_sha256=sha(ROOT/'vlm/tokenizer.json'),saved_sha256=sha(ART/'tokenizer/tokenizer.json'),vocab_size=len(saved)))
  shutil.copyfile(ROOT/'revisions.json',ART/'revisions.json')
  write(ART/'run_config.json',dict(base='caspar/MiniMind-V-Dense-64M-LLaVA-Short-v1.0',audio_donor='jingyaogong/minimind-3o-pytorch/sft_omni_768.pth',revisions=REVISIONS,seed=42,gpu=torch.cuda.get_device_name(),torch=torch.__version__,cuda=torch.version.cuda,precision='bfloat16 autocast, FP32 trainable weights',audio_sequence_length=1024,audio_stop_loss_weight=10,scheduled_sampling=0,audio_augmentation=False,a2a_prompt='audio-only',frozen=['model','lm_head','vision_proj','audio_encoder','vision_encoder'],pod=os.environ.get('TRAINING_POD_ID')))
  splits={};datasets={};summaries=[]
  for kind in ['t2a','a2a']:
   phase('load_dataset',dataset=kind);ds=make_dataset(ROOT/f'data/audio/sft_{kind}_mini.parquet',model,tok,kind)
-  order=np.random.default_rng(42).permutation(len(ds));val=order[:128].tolist();tr=order[128:].tolist()
-  splits[kind]=dict(total=len(ds),train=tr,validation=val);datasets[kind]=(ds,Subset(ds,tr),Subset(ds,val))
+  order=np.random.default_rng(42).permutation(len(ds));val=order[:128].tolist();test=order[128:256].tolist();tr=order[256:].tolist()
+  assert not (set(val)&set(test) or set(val)&set(tr) or set(test)&set(tr))
+  splits[kind]=dict(total=len(ds),train=tr,validation=val,test=test);datasets[kind]=(ds,Subset(ds,tr),Subset(ds,val),Subset(ds,test))
   validate(model,datasets[kind][2],f'base_{kind}')
+  validate(model,datasets[kind][3],f'base_test_{kind}')
  write(ART/'audio_splits.json',splits)
  for name,kind,mode,lr in [('t2a','t2a','talker',2e-5),('a2a_align','a2a','audio_proj',1e-4),('a2a','a2a','audio',2e-5)]:
   summaries.append(train_stage(model,datasets[kind][1],name,mode,lr,16,2))
@@ -211,7 +218,8 @@ def main():
    preserved.append(k)
  write(ART/'vlm_preservation.json',dict(exact_match=True,tensors=preserved))
  final=ART/'sft_omni_768.pth';save(model,final);model.load_state_dict(torch.load(final,map_location='cpu',weights_only=True),strict=True)
- write(ART/'training_summary.json',dict(stages=summaries,final_checkpoint_sha256=sha(final),validation_note='128 row-heldout samples per audio dataset; base pretraining overlap unknown. VLM weights frozen and verified exactly.'))
+ for eval_kind in ['t2a','a2a']:validate(model,datasets[eval_kind][3],f'final_test_{eval_kind}')
+ write(ART/'training_summary.json',dict(stages=summaries,final_checkpoint_sha256=sha(final),validation_note='128 validation and 128 disjoint test rows per audio dataset; excluded from training. Base pretraining overlap unknown. VLM weights frozen and verified exactly.'))
  (ROOT/'TRAINED').write_text(str(time.time()));phase('trained',checkpoint_sha256=sha(final))
 if __name__=='__main__':
  try:main()
