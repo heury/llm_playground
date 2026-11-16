@@ -9,6 +9,7 @@ dependencies = [
     "einops>=0.8",
     "numpy",
     "matplotlib",
+    "transformers>=5.22,<6",
 ]
 
 [tool.uv]

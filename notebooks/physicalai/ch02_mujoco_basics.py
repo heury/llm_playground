@@ -18,11 +18,32 @@ def _():
     import matplotlib.pyplot as plt
     import numpy as np
 
-    import physicalai_common as pc   # MUJOCO_GL을 먼저 정한 뒤 mujoco를 import한다
+    import physicalai_common as common_runtime   # MUJOCO_GL을 먼저 정한 뒤 mujoco를 import한다
     import mujoco
 
-    RUN_DIR = pc.make_run_dir("ch02-mujoco")
-    return RUN_DIR, mo, mujoco, np, pc, platform, plt, sys
+    RUN_DIR = common_runtime.make_run_dir("ch02-mujoco")
+    return RUN_DIR, mo, mujoco, np, common_runtime, platform, plt, sys
+
+
+@app.cell
+def _(mo):
+    robot_assets_btn = mo.ui.run_button(label="SO-101 모델 준비 (없으면 다운로드)")
+    robot_assets_btn
+    return (robot_assets_btn,)
+
+
+@app.cell
+def _(common_runtime, mo, robot_assets_btn):
+    _model_root = common_runtime.Path(common_runtime.os.environ.get(
+        "MENAGERIE_DIR", common_runtime.DEFAULT_MENAGERIE_DIR))
+    _cached = (_model_root / "robotstudio_so101").is_dir()
+    mo.stop(not _cached and not robot_assets_btn.value, mo.md(
+        "SO-101 모델이 없습니다. 위 준비 버튼을 누르면 수십 MB를 내려받습니다. "
+        "다운로드 없이 설명을 읽거나, 기존 사본을 MENAGERIE_DIR로 지정할 수 있습니다."))
+    if not _cached:
+        common_runtime.menagerie_dir()
+    pc = common_runtime
+    return (pc,)
 
 
 @app.cell(hide_code=True)
@@ -40,6 +61,24 @@ def _(RUN_DIR, mo):
 
     영상과 그림은 `{RUN_DIR.relative_to(RUN_DIR.parents[2])}`에 저장됩니다.
     화면이 없는 Linux에서는 `MUJOCO_GL=egl`을 자동으로 씁니다(`physicalai_common.py` 첫 부분).
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### 이 장의 학습 경로
+
+    셀 재실행·환경별 대안은 [README의 학습 경로와 재실행](README.md#학습-경로와-재실행)을 참고하세요.
+
+    **목표**: 설계도와 상태를 구분하고, 목표각 명령과 실제 관절각의 차이를 설명합니다.
+    **선수 지식**: 1장의 Episode·상태, NumPy 배열. 중력은 월드 좌표의 아래 방향($-z$)입니다.
+    **필수**: 2-1 환경 확인 → 2-2 낙하 → 2-4 관절 표. 유체 계수·바람 실험은 선택입니다.
+
+    **읽을 코드**: 이 파일의 MJCF는 교육용 장면이고 `pc.so101_xml`은 Menagerie 모델 경로를 찾습니다.
+    실제 계산은 MuJoCo의 `MjModel`, `MjData`, `mj_step`, `mj_forward`입니다.
+    단위는 길이 m·시간 s·관절각 rad이며, 슬라이더에 deg가 적혀 있으면 코드에서 rad로 변환합니다.
     """)
     return
 
@@ -143,7 +182,7 @@ def _(first_t, first_z, np, plt):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    공은 반지름 5 cm라서 중심이 z = 0.05에서 멈춥니다. 바닥과 닿기 전까지는 공식과 거의 겹칩니다.
+    공은 반지름 5 cm라서 중심이 $z=0.05$ m에서 멈춥니다. 바닥과 닿기 전까지는 공식과 거의 겹칩니다.
 
     ## 2-3. 책상 위에 물체 떨어뜨리기
 
@@ -275,7 +314,7 @@ def _(mo):
     ## 2-4. SO-101 로봇팔 불러오기
 
     [MuJoCo Menagerie](https://github.com/google-deepmind/mujoco_menagerie)의 [`robotstudio_so101`](https://live.mujoco.org/?model=github:google-deepmind/mujoco_menagerie/main/robotstudio_so101/scene.xml) 모델을 씁니다.
-    처음 실행하면 SO-101 폴더만 `notebooks/physicalai/third_party/`에 내려받습니다(수십 MB).
+    모델이 없을 때 준비 버튼을 누르면 SO-101 폴더만 `notebooks/physicalai/third_party/`에 내려받습니다(수십 MB).
     SO-101은 오픈소스 저가형 로봇팔이며 LeRobot 커뮤니티가 많이 씁니다.
 
     - **joint**(관절): 움직일 수 있는 축. `qpos`에 각도가 저장됩니다.
@@ -412,6 +451,11 @@ def _(mo):
 
     1. `timestep`을 0.01로 키우면 공의 낙하 곡선은 어떻게 달라지나요? 너무 키우면 어떤 문제가 생길까요?
     2. `shoulder_pan`만 움직였을 때 손의 z 좌표가 거의 그대로인 이유는 무엇인가요?
+
+    ### 확인 문제 판정 기준
+
+    1. 접촉 전 이론 곡선은 같지만 적분 오차와 접촉 관통·불안정이 커질 수 있습니다. 작은 `timestep` 기준과 비교해 오차를 확인하며 방향을 단정하지 않습니다.
+    2. `shoulder_pan`은 기저의 수직축 주위 회전입니다. 다른 관절을 고정하면 주로 x·y가 바뀌고 높이는 거의 같습니다. 동역학의 처짐까지 정확히 0이라는 뜻은 아닙니다.
 
     다음 [3장](ch03_kinematics_pick_place.py)에서는 관절각과 손끝 위치의 관계(FK·IK)를 배우고 블록을 집어 상자에 넣습니다.
     """)

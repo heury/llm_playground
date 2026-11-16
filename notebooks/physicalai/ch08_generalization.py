@@ -20,12 +20,33 @@ def _():
     import matplotlib.pyplot as plt
     import numpy as np
 
-    import physicalai_common as pc
+    import physicalai_common as common_runtime
     import torch
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    RUN_DIR = pc.make_run_dir("ch08-generalization")
-    return Path, RUN_DIR, device, json, mo, np, pc, plt, shutil, time, torch
+    RUN_DIR = common_runtime.make_run_dir("ch08-generalization")
+    return Path, RUN_DIR, device, json, mo, np, common_runtime, plt, shutil, time, torch
+
+
+@app.cell
+def _(mo):
+    robot_assets_btn = mo.ui.run_button(label="SO-101 모델 준비 (없으면 다운로드)")
+    robot_assets_btn
+    return (robot_assets_btn,)
+
+
+@app.cell
+def _(common_runtime, mo, robot_assets_btn):
+    _model_root = common_runtime.Path(common_runtime.os.environ.get(
+        "MENAGERIE_DIR", common_runtime.DEFAULT_MENAGERIE_DIR))
+    _cached = (_model_root / "robotstudio_so101").is_dir()
+    mo.stop(not _cached and not robot_assets_btn.value, mo.md(
+        "SO-101 모델이 없습니다. 위 준비 버튼을 누르면 수십 MB를 내려받습니다. "
+        "다운로드 없이 설명을 읽거나, 기존 사본을 MENAGERIE_DIR로 지정할 수 있습니다."))
+    if not _cached:
+        common_runtime.menagerie_dir()
+    pc = common_runtime
+    return (pc,)
 
 
 @app.cell(hide_code=True)
@@ -43,9 +64,26 @@ def _(device, mo):
 
     현재 장치 **`{device}`**. 6·7장에서 내려받은 공개 체크포인트(`outputs/physicalai/checkpoints/`)를 그대로 씁니다.
 
-    ```text
-    Training Environment ≠ Test Environment
-    ```
+    평가 입력 분포 $p_{{\rm test}}(o)$가 학습 입력 분포 $p_{{\rm train}}(o)$와 다를 때의 성능을 확인합니다.
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### 이 장의 학습 경로
+
+    셀 재실행·환경별 대안은 [README의 학습 경로와 재실행](README.md#학습-경로와-재실행)을 참고하세요.
+
+    **목표**: 색 선택·집기 수행·분포 변화에 대한 성능을 서로 구분합니다.
+    **선수 지식**: 6·7장의 정책 평가와 noise seed, 성공 횟수/시도 횟수의 비율.
+    **필수**: 8-1 판정 읽기 → 8-2 비교 조건 → 8-3 변형 이미지.
+    데이터 기록·재학습·모델 다운로드·반복 평가는 선택 실행입니다. 모델이 없으면 비교 설계를 읽는 경로로 진행합니다.
+
+    **읽을 코드**: `physicalai_common.random_layout`, `run_policy_episode`, `wilson`과 각 평가 셀을 대조합니다.
+    같은 배치에서 세 색을 평가한 결과는 서로 연관될 수 있습니다. 배치를 독립 단위로 다시 표집하거나
+    독립 배치를 늘려 확인해야 하며, 단순 성공 비율이나 신뢰구간 하나로 언어 이해를 확정하지 않습니다.
     """)
     return
 
@@ -62,7 +100,7 @@ def _(mo):
     ## 8-1. 색을 지정해 집게 하기
 
     장면에 빨강·초록·노랑 블록이 서로 7 cm 이상 떨어져 놓입니다. 명령은 `"Pick up the {color} cube and put it in the blue box."`입니다.
-    7장에서 본 것처럼 문장이 하나뿐인 데이터로 학습하면 VLA는 문장을 무시합니다. 그래서 **시연마다 집을 색을 바꾸고 문장에 그 색을 넣어**
+    7장에서 본 것처럼 문장이 하나뿐인 데이터는 VLA가 언어 조건을 활용하도록 하는 학습 신호가 부족합니다. 그래서 **시연마다 집을 색을 바꾸고 문장에 그 색을 넣어**
     데이터를 모읍니다.
 
     판정은 세 가지입니다. **성공**: 지정한 색만 상자 안 / **오답**: 다른 색이 상자 안 / **실패**: 12초 안에 아무것도 넣지 못함.
@@ -198,6 +236,7 @@ def _(
     RUN_DIR,
     device,
     json,
+    mc_eval_btn,
     mc_layouts,
     mc_loaded,
     mc_policy,
@@ -207,6 +246,7 @@ def _(
     np,
     pc,
 ):
+    mo.stop(not mc_eval_btn.value, mo.md("배치 수를 바꾼 뒤에는 색 지정 평가 버튼을 다시 누르세요."))
     _rng = np.random.default_rng(2000)
     _stats = {c: {"성공": 0, "오답": 0, "실패": 0} for c in pc.COLORS}
     _records, _closest = [], []
@@ -242,9 +282,11 @@ def _(
 
     - 전체 성공률 **{_ok}/{_n} = {100 * _ok / _n:.0f}%**
     - 손끝이 가장 가까이 간 블록이 명령한 색과 일치한 비율 **{_hit}/{_n} = {100 * _hit / _n:.0f}%**
-      (95% 신뢰구간 {100 * _lo:.0f}~{100 * _hi:.0f}%). 문장과 무관하게 움직이면 33% 근처입니다.
+      (독립 시행을 가정한 참고용 Wilson 95% 구간 {100 * _lo:.0f}~{100 * _hi:.0f}%).
+      세 색이 균형을 이루고 선택 편향이 없는 무작위 선택의 기준은 약 33%입니다.
 
-    집기 성공률이 낮더라도 두 번째 지표가 33%보다 뚜렷하게 높으면 "문장을 보고 대상을 고르기는 한다"고 볼 수 있습니다.
+    두 번째 지표는 언어 입력과 접근 대상의 연관성을 보는 대리지표입니다. 33% 초과만으로 의미 이해를 확정하지 않습니다.
+    위치·색 편향을 점검하고 배치를 독립 단위로 반복해야 합니다. 같은 배치의 세 명령은 서로 연관될 수 있어 위 구간을 그대로 확정적 추론에 쓰면 안 됩니다.
     책의 측정에서 SmolVLA는 3색 시연 179~240개, 최대 20,000 step 학습으로도 이 과제를 거의 해내지 못했습니다(9장에서 LLM Planner와 비교).
     """)
     return
@@ -266,6 +308,10 @@ def _(mo):
     | R | 무작위 (seed 1000) |
 
     고정 위치 데이터로 학습하면 `observation.state`·이미지와 무관하게 "늘 같은 궤적"을 외우기 쉽습니다.
+
+    **비교의 한계**: 아래 고정 모델은 시연 20개·8,000 step이고 공개 무작위 모델은 시연 117개·30,000 step입니다.
+    데이터 수와 학습량도 달라 위치 다양성만의 인과 효과로 해석할 수 없습니다. 엄밀히 비교하려면
+    시연 수·학습 step·초기화·카메라·평가 위치를 맞추고 여러 학습 seed를 반복해야 합니다.
     """)
     return
 
@@ -359,7 +405,7 @@ def _(
     for _m in _models:
         _rows.append(f"| {_m} | " + " | ".join(f"{_table[(_m, p)]}/{gen_episodes.value}" for p in _positions) + " |")
     mo.md("\n".join(_rows) + "\n\n블록 위치가 고정된 A에서는 같은 위치를 반복해도 결과가 거의 같습니다(ACT는 결정적). "
-          "R의 성공률이 \"처음 보는 위치\"에 대한 실제 실력입니다.")
+          "R은 지정한 무작위 위치 분포에서 측정한 성공 비율이며 전체 환경으로 일반화할 수는 없습니다.")
     return
 
 
@@ -442,7 +488,7 @@ def _(mo):
     ### ACT는 어떻게 되나
 
     6장 ACT(무작위 위치 학습)를 모든 변형에서 **같은 블록 위치들(seed 3000)** 로 평가합니다.
-    ACT는 이미지를 직접 보고 행동을 내므로, 카메라 위치가 바뀌면 "카메라가 옮겨졌다"는 것을 알 방법이 없습니다.
+    ACT 입력에는 카메라 외부 보정값이 없습니다. 카메라가 옮겨지면 입력 영상의 분포와 행동의 대응이 달라져 성능이 떨어질 수 있습니다.
     """)
     return
 
@@ -514,9 +560,9 @@ def _(mo):
 
     | 무엇이 바뀌었나 | Rule 기반 (4장) | 학습 정책 (ACT/SmolVLA) |
     | --- | --- | --- |
-    | 블록 위치 | 정답 좌표만 맞으면 됨 | 학습 때 본 범위 안에서만 |
+    | 블록 위치 | 정답 좌표만 맞으면 됨 | 학습 범위 밖은 별도 평가 필요 |
     | 조명·바닥 | HSV 범위가 맞으면 됨, 아니면 명확히 실패 | 이미지 분포가 바뀌면 조용히 성능 저하 |
-    | 카메라 위치 | 보정값을 고치면 됨 | 다시 시연하고 학습해야 함 |
+    | 카메라 위치 | 보정값을 고치면 됨 | 추가 시연·보정·증강 등을 검토 |
     | 문장(색 지정) | 해당 없음 | 문장마다 다른 시연이 충분히 있어야 함 |
 
     일반화를 높이는 일반적인 방법은 **학습 데이터를 다양하게** 만드는 것입니다(도메인 랜덤화: 조명·색·카메라를 무작위로 바꿔 기록).
@@ -526,6 +572,11 @@ def _(mo):
 
     1. 8-3에서 가장 크게 성능이 떨어진 변형은 무엇이고, ACT 입력의 어느 부분 때문일까요?
     2. 8-1에서 손끝이 명령한 색으로 가는 비율은 높지만 집기는 실패한다면, 데이터나 학습을 어떻게 바꿔야 할까요?
+
+    ### 확인 문제 판정 기준
+
+    1. 실제 표에서 기준 환경 대비 성공 횟수가 줄어든 변형을 찾습니다. 조명·바닥은 영상 분포, 카메라는 시점·배치 대응을 바꿉니다. 최고 하락 변형은 실행 결과로 정하며 미리 단정하지 않습니다.
+    2. 색 선택 대리지표가 높고 집기에 실패하면 접근 후 그립·Lift 구간을 영상으로 점검하고 그 구간의 시연과 상태·행동 시간 정렬을 보강합니다. 언어 조건 문제와 조작 문제를 분리합니다.
 
     다음 [9장](ch09_llm_planner.py)에서는 정책을 학습하지 않고, LLM이 3장의 도구를 골라 쓰게 해서 8-1의 색 지정 과제에 다시 도전합니다.
     """)

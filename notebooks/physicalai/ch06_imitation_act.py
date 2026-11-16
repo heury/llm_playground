@@ -21,12 +21,33 @@ def _():
     import matplotlib.pyplot as plt
     import numpy as np
 
-    import physicalai_common as pc
+    import physicalai_common as common_runtime
     import torch
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    RUN_DIR = pc.make_run_dir("ch06-act")
-    return Path, RUN_DIR, device, json, mo, np, pc, plt, re, shutil, time, torch
+    RUN_DIR = common_runtime.make_run_dir("ch06-act")
+    return Path, RUN_DIR, device, json, mo, np, common_runtime, plt, re, shutil, time, torch
+
+
+@app.cell
+def _(mo):
+    robot_assets_btn = mo.ui.run_button(label="SO-101 모델 준비 (없으면 다운로드)")
+    robot_assets_btn
+    return (robot_assets_btn,)
+
+
+@app.cell
+def _(common_runtime, mo, robot_assets_btn):
+    _model_root = common_runtime.Path(common_runtime.os.environ.get(
+        "MENAGERIE_DIR", common_runtime.DEFAULT_MENAGERIE_DIR))
+    _cached = (_model_root / "robotstudio_so101").is_dir()
+    mo.stop(not _cached and not robot_assets_btn.value, mo.md(
+        "SO-101 모델이 없습니다. 위 준비 버튼을 누르면 수십 MB를 내려받습니다. "
+        "다운로드 없이 설명을 읽거나, 기존 사본을 MENAGERIE_DIR로 지정할 수 있습니다."))
+    if not _cached:
+        common_runtime.menagerie_dir()
+    pc = common_runtime
+    return (pc,)
 
 
 @app.cell(hide_code=True)
@@ -57,10 +78,27 @@ def _(device, mo):
     | 6-6 | Action chunk 실행 길이와 Temporal Ensembling 비교 | GPU 권장 |
 
     현재 장치 **`{device}`**, {_lerobot}. GPU가 없으면 6-4를 건너뛰고 6-5에서 공개 체크포인트(약 190 MB)를 내려받아 평가하세요.
-    ACT 신경망 내부(인코더·디코더·CVAE)는 [`notebooks/lerobot/act_tour.py`](../lerobot/act_tour.py)에서 자세히 다룹니다.
 
     데이터셋은 `outputs/physicalai/datasets/`, 학습 결과와 공개 체크포인트는 `outputs/physicalai/checkpoints/`에 두어
     7·8장에서 다시 씁니다.
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### 이 장의 학습 경로
+
+    셀 재실행·환경별 대안은 [README의 학습 경로와 재실행](README.md#학습-경로와-재실행)을 참고하세요.
+
+    **목표**: 시연의 관측·정답 행동·청크가 어떻게 연결되는지, 청크 실행 길이가 피드백에 주는 영향을 설명합니다.
+    **선수 지식**: 3장 집기 단계, 4장 이미지 배열, 5장 학습과 평가 구분. Transformer 내부 증명은 요구하지 않습니다.
+    **필수**: 6-0 → 6-3 데이터 확인 → 6-4 목적함수 읽기 → 6-5 평가 원리.
+    데이터 기록·학습·다운로드·반복 평가는 선택 실행이며, 로컬 데이터가 없으면 설명과 코드 추적으로 진행합니다.
+
+    **읽을 코드**: `physicalai_common.RecordingRobot`이 시연을 만들고 `load_act`가
+    LeRobot 0.7의 `ACTPolicy`와 정규화 전·후처리기를 불러옵니다. `run_policy_episode`가 공통 평가 루프입니다.
     """)
     return
 
@@ -73,22 +111,69 @@ def _():
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(r"""
+    mo.vstack([
+        mo.md(r"""
     ## 6-0. 모방학습과 ACT 한눈에 보기
 
-    ```mermaid
+    """),
+        mo.mermaid(r"""
     flowchart LR
       S[시연자<br/>3장 Rule 기반] -->|관측·행동 기록 20 Hz| D[(LeRobotDataset)]
       D -->|lerobot-train| P[ACT 정책]
       O[관측: 관절각 6 + top·wrist 이미지] --> P
       P -->|50스텝 행동 묶음| R[로봇 ctrl 6개]
       R --> O
-    ```
+    """),
+        mo.md(r"""
 
     - **관측**: 관절각 6개(`observation.state`) + 위·손목 카메라 이미지 2장(240×320).
     - **행동**: 6개 구동기의 목표 각도(`action`). 시연 당시 컨트롤러가 그 순간 명령하던 값입니다.
     - **ACT**(Action Chunking with Transformers): 행동 하나가 아니라 **앞으로 50스텝(2.5초)의 행동 묶음**을 한 번에 예측합니다.
       한 스텝씩 고르면 작은 오차가 쌓여 시연 분포 밖으로 벗어나기 쉬운데(compounding error), 묶음으로 예측하면 그 횟수가 줄어듭니다.
+    """),
+    ])
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### ACT가 학습하는 정답과 손실
+
+    한 배치의 상태는 $(B,6)$, 두 이미지는 각각 $(B,3,240,320)$입니다.
+    `RecordingRobot`은 시연 중 20 Hz로 **그때의 관절 상태와 컨트롤러 목표각**을 함께 기록합니다.
+    현재 상태를 다음 행동으로 복사하는 문제가 아닙니다. 데이터 전처리기는 통계에 맞춰 상태·행동을 정규화하고,
+    추론 후처리기는 예측 행동을 제어기에 넣을 단위로 되돌립니다.
+    정답은 현재부터 $H=50$스텝의 목표각 $a\in\mathbb R^{B\times H\times6}$입니다.
+
+    ACT의 CVAE(조건부 변분 오토인코더)는 시연에 나타나는 여러 동작 방식을 잠재변수 $z$로 표현합니다.
+    학습에서는 현재 상태와 정답 행동 청크를 encoder에 넣어 $q_\psi(z\mid s,a)$의 평균·분산을 얻고
+    그 분포에서 $z$를 표집합니다. decoder는 이미지·상태·$z$로 청크 $\hat a$를 예측합니다.
+    추론에는 정답 행동이 없으므로 LeRobot ACT는 $z=0$을 넣습니다. 이미지·상태는 학습과 추론 모두 사용합니다.
+
+    $$
+    L_{\rm ACT}=\frac{\sum_{b,h,j}m_{bh}|\hat a_{bhj}-a_{bhj}|}
+    {6\sum_{b,h}m_{bh}}+
+    \beta\,\mathbb E_b\!\left[D_{\rm KL}\big(q_\psi(z\mid s,a)\Vert\mathcal N(0,I)\big)\right]
+    $$
+
+    $m_{bh}=1$은 Episode 안의 유효 시연이고, 끝을 넘겨 채운 프레임은 0입니다.
+    실제 분모는 최소 1로 제한합니다. LeRobot의 `action_is_pad`를 반전한 마스크가 이 $m$입니다.
+    L1은 정답 행동과의 오차, KL은 잠재분포가 표준정규분포에서 너무 멀어지지 않게 하는 항입니다.
+    $\beta$는 `kl_weight`이며, KL이 너무 크면 시연 재구성이 나빠질 수 있습니다.
+    `use_vae=False`에서는 KL 없이 L1만 사용합니다.
+
+    작은 예로 유효 행동 오차가 1과 3이고 padding 오차가 100이면 L1 평균은 $(1+3)/2=2$입니다.
+    padding 100을 포함해 평균내면 Episode 길이에 따라 정답과 무관한 손실이 생깁니다.
+    `lerobot-train`은 ACT 이미지 백본·Transformer·CVAE의 학습 가능 매개변수를 갱신합니다.
+    원하는 동결 범위는 설정과 `requires_grad`로 확인해야 합니다. 손실 감소는 집기 성공을 보장하지 않으므로 6-5에서 별도로 평가합니다.
+
+    청크 길이 50은 20 Hz에서 2.5초입니다. `n_action_steps`를 줄이면 관측에 더 자주 반응하는 대신 추론 횟수가 늘어납니다.
+    Temporal Ensembling은 매 스텝 재추론하여 같은 시각의 겹친 예측을 평균냅니다.
+    LeRobot은 오래된 예측부터 $w_i=\exp(-k i)$로 가중치를 주므로 $k>0$일 때 오래된 예측 쪽 가중치가 더 큽니다.
+
+    출처: [ACT 논문 IV-A~C](https://arxiv.org/abs/2304.13705).
+    실제 계산은 LeRobot `ACTPolicy.forward`, `ACT.forward`, `ACTTemporalEnsembler`와 대응합니다.
     """)
     return
 
@@ -364,7 +449,7 @@ def _(mo):
     ## 6-5. 학습한 ACT로 Pick and Place
 
     평가 루프는 1장의 세 줄과 같습니다. 1/20초마다 관측(관절각 + 카메라 2장)을 찍어 정책에 넣고, 나온 목표 각도 6개를
-    `data.ctrl`에 씁니다. 매번 새 관측을 쓰는 **닫힌 고리(closed loop)** 입니다.
+    `data.ctrl`에 씁니다. 관측은 매번 만들지만 기본 `n_action_steps=50`에서는 `select_action`이 청크를 처음 만들 때만 새 관측을 사용하고 이후에는 큐에서 행동을 꺼냅니다. 따라서 **청크 경계에서 피드백하는 루프**이며, 6-6의 Temporal Ensembling은 매 스텝 재추론합니다.
     12초 안에 블록이 상자 안(`is_in_box`)에 처음 들어오면 성공입니다.
 
     ```python
@@ -561,12 +646,17 @@ def _(mo):
 
     - 모방학습은 **좋은 시연 데이터**가 성능을 좌우합니다. 시연 수, 블록 위치의 다양성, 실패 시연 제거가 모두 중요합니다.
     - ACT는 행동 묶음을 예측해 오차 누적을 줄입니다. 실행 길이는 반응성과 매끄러움 사이의 선택입니다.
-    - 학습한 정책은 시연에서 본 범위(블록 위치·조명·카메라) 안에서만 믿을 수 있습니다. 8장에서 그 경계를 시험합니다.
+    - 학습한 정책의 신뢰도를 시연에서 본 범위(블록 위치·조명·카메라) 밖으로 확대하려면 별도 평가가 필요합니다. 8장에서 그 경계를 시험합니다.
 
     **확인 문제**
 
     1. 시연을 10개만 기록해 학습하면 성공률이 어떻게 될까요? 6-2와 6-4를 작은 설정으로 돌려 확인해 보세요.
     2. 행동으로 "목표 각도" 대신 "다음 프레임의 관절각"을 기록하면 무엇이 달라질까요?
+
+    ### 확인 문제 판정 기준
+
+    1. 시연 10개는 관측 분포를 덜 덮어 일반화가 나빠질 가능성이 있지만 수치나 하락을 보장하지 않습니다. 평가 위치·학습량·seed를 맞추고 성공 횟수와 과적합 여부를 봅니다.
+    2. 현재의 `action`은 시연 컨트롤러의 목표각입니다. 다음 프레임 `qpos`는 관성·중력·지연이 반영된 결과라 서로 다른 정답 신호입니다. 바꾼다면 학습과 제어 인터페이스를 함께 점검해야 합니다.
 
     다음 [7장](ch07_smolvla.py)에서는 이미지와 함께 **자연어 명령**을 입력으로 받는 VLA 모델 SmolVLA를 다룹니다.
     """)

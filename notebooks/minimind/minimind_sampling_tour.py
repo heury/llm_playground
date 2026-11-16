@@ -1,3 +1,10 @@
+# /// script
+# requires-python = ">=3.13"
+# dependencies = [
+#     "marimo>=0.25.2",
+# ]
+# ///
+
 import marimo
 
 __generated_with = "0.25.2"
@@ -170,7 +177,16 @@ def _(
 
 
 @app.cell(hide_code=True)
-def _(EOS_ID, MODEL_REPO, MODEL_REVISION, mo, model, model_config, tokenizer, torch):
+def _(
+    EOS_ID,
+    MODEL_REPO,
+    MODEL_REVISION,
+    mo,
+    model,
+    model_config,
+    tokenizer,
+    torch,
+):
     # ▸ 결과 표시
     _n_params = sum(p.numel() for p in model.parameters())
     mo.md(f"""
@@ -246,10 +262,10 @@ def _(mo):
     $$
     p_i = \frac{e^{z_i}}{\sum_{j=1}^{V} e^{z_j}}, \qquad
     H(p) = -\sum_i p_i \log p_i, \qquad
-    \text{유효 후보 수} = e^{H}
+    \text{perplexity}(p) = e^{H}
     $$
 
-    **엔트로피** $H$는 분포가 퍼진 정도입니다. $e^H$는 같은 불확실성을 갖는 균등 분포의 후보 수입니다.
+    **엔트로피** $H$는 분포가 퍼진 정도입니다. **perplexity** $e^H$는 같은 불확실성을 갖는 균등 분포의 후보 수입니다.
     분포 모양은 **질문에 따라 크게 다릅니다**. 질문을 바꿔 비교해 보세요.
     """)
     return
@@ -279,7 +295,16 @@ def _(chat_ids, model, prompt_choice, torch):
 
 
 @app.cell(hide_code=True)
-def _(entropy, focus_logits, focus_probs, math, mo, plt, result_table, show_tok):
+def _(
+    entropy,
+    focus_logits,
+    focus_probs,
+    math,
+    mo,
+    plt,
+    result_table,
+    show_tok,
+):
     # ▸ 결과 표시
     _p, _i = focus_probs[0].topk(15)
     _cum = _p.cumsum(0)
@@ -296,7 +321,7 @@ def _(entropy, focus_logits, focus_probs, math, mo, plt, result_table, show_tok)
     _ax.set_title(f"next-token distribution (top 15 of {focus_probs.shape[-1]})")
     _fig.tight_layout()
     mo.vstack([
-        mo.md(f"엔트로피 $H$ = **{_H:.2f} nat**, 유효 후보 수 $e^H$ ≈ **{math.exp(_H):.1f}**개. "
+        mo.md(f"엔트로피 $H$ = **{_H:.2f} nat**, perplexity $e^H$ ≈ **{math.exp(_H):.1f}**개. "
               f"상위 15개가 확률의 **{float(_cum[-1]):.1%}**를 차지합니다."),
         _fig,
         result_table(_rows, selection=None),
@@ -459,7 +484,16 @@ def _(mo):
 
 
 @app.cell(hide_code=True)
-def _(entropy, focus_logits, math, mo, plt, show_tok, temperature_slider, torch):
+def _(
+    entropy,
+    focus_logits,
+    math,
+    mo,
+    plt,
+    show_tok,
+    temperature_slider,
+    torch,
+):
     # ▸ 결과 표시
     _T = temperature_slider.value
     _p1 = focus_logits[0].softmax(-1)
@@ -483,7 +517,7 @@ def _(entropy, focus_logits, math, mo, plt, show_tok, temperature_slider, torch)
     mo.vstack([
         _fig,
         mo.md(f"T = {_T:g}: 1등 확률 {float(_p1.max()):.3f} → **{float(_pT.max()):.3f}**, "
-              f"유효 후보 수 {math.exp(entropy(_p1)):.1f} → **{math.exp(entropy(_pT)):.1f}**, "
+              f"perplexity {math.exp(entropy(_p1)):.1f} → **{math.exp(entropy(_pT)):.1f}**, "
               f"상위 12개 밖 확률 {float(1 - _p1[_idx].sum()):.3f} → **{float(1 - _pT[_idx].sum()):.3f}**"),
         mo.md(r"""
     오른쪽 그림은 로그 축입니다. $T$가 2를 넘으면 후보가 수백 개 이상으로 늘어납니다.
@@ -526,7 +560,7 @@ def _(PROMPTS, chat_ids, next_logits):
 
 
 @app.cell(hide_code=True)
-def _(mo, prompt_logits, result_table, show_tok, top_k_slider, torch):
+def _(prompt_logits, result_table, show_tok, top_k_slider, torch):
     # ▸ 결과 표시
     _k = top_k_slider.value
     _rows = []
@@ -596,7 +630,15 @@ def _(torch):
 
 
 @app.cell(hide_code=True)
-def _(apply_top_p, mo, prompt_logits, result_table, show_tok, top_p_slider, torch):
+def _(
+    apply_top_p,
+    mo,
+    prompt_logits,
+    result_table,
+    show_tok,
+    top_p_slider,
+    torch,
+):
     # ▸ 결과 표시
     _pv = top_p_slider.value
     _rows = []
@@ -717,7 +759,13 @@ def _(torch):
 
 
 @app.cell
-def _(apply_repetition_penalty, decode_loop, greedy_prompt_ids, penalty_slider, torch):
+def _(
+    apply_repetition_penalty,
+    decode_loop,
+    greedy_prompt_ids,
+    penalty_slider,
+    torch,
+):
     def greedy_with_penalty(logits, input_ids):
         logits = apply_repetition_penalty(logits, input_ids, penalty_slider.value)
         return torch.argmax(logits, dim=-1, keepdim=True)
@@ -947,7 +995,7 @@ def _(
 
     preset_results = {name: run_preset(PROMPTS["창작: Tell me a story about a cat."], seed=0, **s)
                       for name, s in PRESETS.items()}
-    return PRESETS, preset_results
+    return (preset_results,)
 
 
 @app.cell(hide_code=True)

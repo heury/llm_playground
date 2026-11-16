@@ -2,5 +2,34 @@
   "workbench.editorAssociations": {
     "*_mo.py": "marimo-notebook",
     "**/notebooks/**/*.py": "marimo-notebook"
-  }
+  },
+  "claudeCode.preferredLocation": "panel",
+    "vim.easymotion": true,
+    "vim.handleKeys": {
+        "<C-p>": false,
+        "<C-f>": false,
+        "<C-d>": false,
+        "<C-c>": false,
+        "<C-v>": false,
+        "<C-a>": false,
+        "<C-x>": false,
+        "<C-l>": false
+    },
+    "python.venvFolders": [".venv", "venv"],
+    "python.locator": "native",
+    "markdown-preview-enhanced.automaticallyShowPreviewOfMarkdownBeingEdited": true,
+    "security.workspace.trust.untrustedFiles": "open",
+    "hediet.vscode-drawio.resizeImages": null,
+    "git.enableSmartCommit": true,
+    "git.confirmSync": false,
+    "workbench.colorTheme": "Light 2026",
+    "python.analysis.typeCheckingMode": "standard",
+    "files.watcherExclude": {
+        "**/.git/objects/**": true,
+        "**/.git/subtree-cache/**": true,
+        "**/node_modules/**": true,
+        "**/.venv/**": true,
+        "**/checkpoints/**": true
+    },
+    "editor.inlayHints.enabled": "off"
 }

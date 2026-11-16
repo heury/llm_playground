@@ -58,6 +58,23 @@ def _(mo):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
+    ### 이 장의 학습 경로
+
+    셀 재실행·환경별 대안은 [README의 학습 경로와 재실행](README.md#학습-경로와-재실행)을 참고하세요.
+
+    **목표**: `observe → policy → step`을 직접 추적하고, 성공률과 보상을 구분합니다.
+    **선수 지식**: Python 함수·딕셔너리·반복문. 이 장의 `LineWorld`에서 시작하면 됩니다.
+    **필수**: 1-1의 한 Episode → 1-2의 용어 → 랜덤·규칙 비교. `my_policy` 수정은 선택입니다.
+
+    **읽을 코드**: 이 파일의 `LineWorld`, `GridWorld`, `run_episode`는 교육용 독립 구현입니다.
+    격자는 로봇의 역학·시각 노이즈를 생략하므로 높은 성공률을 실물 로봇 성능으로 옮길 수 없습니다.
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
     ## 1-1. 세 줄의 코드로 움직이는 Agent
 
     가장 단순한 세계는 0~9 눈금이 있는 1차원 직선(`LineWorld`)입니다.
@@ -137,7 +154,7 @@ def _(mo):
     | **Reward** | 도달 +10, 매 스텝 -0.1, 시간 초과 -1 | 5장의 dense/sparse/shaped 보상 |
     | **Episode** | reset부터 도달 또는 시간 초과까지 | Pick and Place 한 번 |
 
-    여기서는 State와 Observation이 같습니다. 4장부터 Observation이 카메라 이미지가 되면 둘이 달라집니다.
+    여기서는 Agent·Goal 좌표를 그대로 관측하지만, State에 포함한 경과 시간은 `observe()`가 내보내지 않습니다. 따라서 전체 State와 Observation이 완전히 같지는 않습니다. 4장부터 Observation이 카메라 이미지가 되면 둘이 달라집니다.
     """)
     return
 
@@ -324,6 +341,11 @@ def _(mo):
 
     1. `GridWorld.step`에서 매 스텝 벌점을 0으로 바꾸면 랜덤 Policy와 규칙 Policy의 평균 보상 차이는 어떻게 되나요?
     2. Goal을 매 Episode 무작위 위치에 두려면 어디를 고쳐야 하나요? 그때 `rule_policy`는 여전히 100%인가요?
+
+    ### 확인 문제 판정 기준
+
+    1. 성공/시간 초과 판정은 그대로이고, 걸음당 벌점을 없애면 오래 걸리는 정책이 받던 추가 벌점이 사라집니다. 같은 성공 여부라면 경로 길이에 따른 보상 차이가 줄어듭니다.
+    2. `GridWorld.reset`에서 Agent와 다른 유효 좌표를 Goal로 표집합니다. 빈 격자에서 규칙 정책은 Manhattan 거리만큼 이동하므로 그 거리가 `max_steps` 이내일 때 도달합니다. 시간 제한을 넘는 크기에서는 100%를 보장하지 않습니다.
 
     다음 [2장](ch02_mujoco_basics.py)에서는 MuJoCo로 물리 법칙이 있는 가상 세계를 만듭니다.
     """)

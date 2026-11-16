@@ -19,12 +19,33 @@ def _():
     import matplotlib.pyplot as plt
     import numpy as np
 
-    import physicalai_common as pc
+    import physicalai_common as common_runtime
     import mujoco
 
     np.set_printoptions(precision=3, suppress=True)
-    RUN_DIR = pc.make_run_dir("ch03-kinematics")
-    return RUN_DIR, inspect, json, mo, mujoco, np, pc, plt
+    RUN_DIR = common_runtime.make_run_dir("ch03-kinematics")
+    return RUN_DIR, inspect, json, mo, mujoco, np, common_runtime, plt
+
+
+@app.cell
+def _(mo):
+    robot_assets_btn = mo.ui.run_button(label="SO-101 모델 준비 (없으면 다운로드)")
+    robot_assets_btn
+    return (robot_assets_btn,)
+
+
+@app.cell
+def _(common_runtime, mo, robot_assets_btn):
+    _model_root = common_runtime.Path(common_runtime.os.environ.get(
+        "MENAGERIE_DIR", common_runtime.DEFAULT_MENAGERIE_DIR))
+    _cached = (_model_root / "robotstudio_so101").is_dir()
+    mo.stop(not _cached and not robot_assets_btn.value, mo.md(
+        "SO-101 모델이 없습니다. 위 준비 버튼을 누르면 수십 MB를 내려받습니다. "
+        "다운로드 없이 설명을 읽거나, 기존 사본을 MENAGERIE_DIR로 지정할 수 있습니다."))
+    if not _cached:
+        common_runtime.menagerie_dir()
+    pc = common_runtime
+    return (pc,)
 
 
 @app.cell(hide_code=True)
@@ -41,6 +62,25 @@ def _(mo):
     이 Rule 기반 Pick and Place는 6장에서 **시연 데이터를 만드는 시연자**가 되고, 9장에서 LLM과 비교하는 기준이 됩니다.
 
     장면은 `physicalai_common.load_scene()`이 만듭니다. SO-101 + 바닥 + 빨간 블록(한 변 3 cm) + 파란 상자 + 카메라 5대입니다.
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### 이 장의 학습 경로
+
+    셀 재실행·환경별 대안은 [README의 학습 경로와 재실행](README.md#학습-경로와-재실행)을 참고하세요.
+
+    **목표**: FK와 IK를 구분하고 IK 잔차·실제 도달 오차·집기 성공을 각각 해석합니다.
+    **선수 지식**: 2장의 `qpos/ctrl`, NumPy 행렬곱·전치·선형 연립방정식. 먼저 3-2의 2관절 예를 봅니다.
+    **필수**: 3-2 FK → 3-3 DLS → 3-5 집기 한 번. 3-6 반복 평가와 3-7 작업 영역 훑기는 선택입니다.
+
+    **읽을 코드**: `fk_2link`는 교육용 평면 예제, `ik_with_trace`는 `physicalai_common.solve_ik`에 오차 기록을 더한 버전입니다.
+    5개 팔 관절에서 위치만 맞추면 $J\in\mathbb{R}^{3\times5}$, 방향 제약까지 쓰면 $J\in\mathbb{R}^{6\times5}$입니다.
+    방향 오차는 두 방향 벡터의 외적이며 완전한 자세 3축 일치와는 다릅니다.
+    IK는 현재 자세 주변의 선형 근사이므로 초기값·관절 한계·도달 가능 영역에 따라 실패할 수 있습니다.
     """)
     return
 
@@ -99,7 +139,9 @@ def _(mo, mujoco, np, pc, pose_yaw, quat_to_rpy):
     mo.md("\n".join(_rows) + f"""
 
     - 손끝 기준점 site `gripperframe` 위치 {np.round(_data.site_xpos[_site], 3)}, x축(손가락 방향) {np.round(_R[:, 0], 3)}
-    - 로봇 base 좌표계에서 본 블록 위치 `R_baseᵀ (p_cube − p_base)` = {np.round(_rel, 3)}
+    - 로봇 base 좌표계에서 본 블록 위치 $R_b^T(p_c-p_b)$ = {np.round(_rel, 3)}
+
+    $R_b$는 base의 월드 회전행렬, $p_c$와 $p_b$는 블록과 base의 월드 위치입니다.
 
     SO-101의 base는 월드 원점에 회전 없이 놓여 있어 두 좌표가 같습니다. 로봇을 옮기거나 돌리면 달라집니다.
     """)
@@ -241,7 +283,8 @@ def _(mo):
 
     - $J$: Jacobian. 손가락 방향까지 맞출 때는 위치 3행 + 방향 3행 = 6행입니다.
     - $\lambda$(damping): 팔이 쭉 펴진 특이 자세 근처에서 $\Delta q$가 폭발하지 않게 막습니다.
-    - clip: 관절 가동 범위 밖으로 나가지 않게 자릅니다.
+    - $I$: $JJ^\top$와 같은 크기의 단위행렬입니다. $\alpha$는 한 번의 보정에 적용하는 step 크기(기본 0.5)입니다.
+    - clip: 관절 가동 범위 밖으로 나가지 않게 자릅니다. 위치 오차(m)와 방향 외적을 함께 쓰는 가중치는 이 구현의 근사 선택입니다.
 
     아래는 반복마다 오차를 기록하도록 조금 고친 IK입니다. 원본은 `physicalai_common.solve_ik`에 있습니다.
     """)
@@ -371,7 +414,8 @@ def _(RUN_DIR, mo, np, pc):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(r"""
+    mo.vstack([
+        mo.md(r"""
     IK 잔차는 계산상의 오차, 실제 거리는 시뮬레이션 후의 오차입니다. 둘이 다른 이유는 위치 제어기가 중력을 이기며 따라가는
     동안 생기는 작은 처짐 때문입니다.
 
@@ -380,15 +424,18 @@ def _(mo):
     다섯 단계를 차례로 실행하는 **상태 기계(state machine)** 입니다. 블록과 상자 위치는 시뮬레이터에서 직접 읽습니다.
     4장에서는 이 두 줄만 카메라 추정으로 바꿉니다.
 
-    ```mermaid
+    """),
+        mo.mermaid(r"""
     flowchart LR
       A[1 Approach<br/>블록 위 8 cm] --> B[2 Grasp<br/>2 cm로 내려가 닫기]
       B --> C[3 Lift<br/>12 cm로 들기]
       C -->|블록 z > 6 cm| D[4 Move<br/>상자 위로]
       C -->|놓침| X[실패]
       D --> E[5 Place<br/>6 cm에서 벌리기]
-    ```
-    """)
+    """),
+        mo.md(r"""
+    """),
+    ])
     return
 
 
@@ -473,7 +520,7 @@ def _(mo):
     ## 3-6. 무작위 위치에서 성공률 재기
 
     한 번의 성공은 우연일 수 있습니다. 블록을 로봇 앞 부채꼴(반지름 0.17~0.27 m, 각도 ±40°)에 무작위로 놓고 여러 번 반복합니다.
-    5장 이후의 강화학습·모방학습 정책도 같은 영역, 같은 판정(`is_in_box`)으로 평가합니다.
+    6장 이후의 집기 정책도 같은 영역, 같은 판정(`is_in_box`)으로 평가합니다. 5장 강화학습은 손끝을 목표 가까이 보내는 별도 reach 과제이며 성공 기준도 다릅니다.
     """)
     return
 
@@ -595,6 +642,11 @@ def _(mo):
 
     1. `GRASP_Z`를 0.03으로 올리면 어떻게 되나요? 0.01로 내리면요? (힌트: 블록 중심은 0.015)
     2. Lift 단계에서 `move_to`의 `seconds`를 0.3으로 줄이면 성공률이 어떻게 변할까요? 직접 바꿔 3-6을 다시 실행해 보세요.
+
+    ### 확인 문제 판정 기준
+
+    1. `GRASP_Z`를 올리면 손가락이 블록을 충분히 감싸지 못할 수 있고, 낮추면 바닥 접촉이 생길 수 있습니다. 블록 중심 높이만으로 성공을 보장하지 말고 영상·Lift 후 블록 높이·최종 판정을 함께 봅니다.
+    2. 빠른 Lift는 관성·제어 추종 오차 때문에 놓침을 늘릴 수 있습니다. 같은 위치·seed에서 시간만 바꾸고 성공 횟수와 실패 단계를 기록하면 가설을 검증할 수 있습니다.
 
     다음 [4장](ch04_vision.py)에서는 블록 위치를 시뮬레이터에서 읽는 대신 카메라 이미지로 찾습니다.
     """)

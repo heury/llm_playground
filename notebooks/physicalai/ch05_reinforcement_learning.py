@@ -19,7 +19,7 @@ def _():
     import matplotlib.pyplot as plt
     import numpy as np
 
-    import physicalai_common as pc
+    import physicalai_common as common_runtime
     import gymnasium as gym
     import mujoco
     import torch
@@ -29,7 +29,7 @@ def _():
     from stable_baselines3.common.vec_env import DummyVecEnv
 
     torch.set_num_threads(4)   # 작은 MLP는 CPU 스레드를 많이 쓰면 오히려 느려진다
-    RUN_DIR = pc.make_run_dir("ch05-rl")
+    RUN_DIR = common_runtime.make_run_dir("ch05-rl")
     return (
         DummyVecEnv,
         Monitor,
@@ -40,27 +40,51 @@ def _():
         mo,
         mujoco,
         np,
-        pc,
+        common_runtime,
         plt,
         spaces,
         time,
     )
 
 
+@app.cell
+def _(mo):
+    robot_assets_btn = mo.ui.run_button(label="SO-101 모델 준비 (없으면 다운로드)")
+    robot_assets_btn
+    return (robot_assets_btn,)
+
+
+@app.cell
+def _(common_runtime, mo, robot_assets_btn):
+    _model_root = common_runtime.Path(common_runtime.os.environ.get(
+        "MENAGERIE_DIR", common_runtime.DEFAULT_MENAGERIE_DIR))
+    _cached = (_model_root / "robotstudio_so101").is_dir()
+    mo.stop(not _cached and not robot_assets_btn.value, mo.md(
+        "SO-101 모델이 없습니다. 위 준비 버튼을 누르면 수십 MB를 내려받습니다. "
+        "다운로드 없이 설명을 읽거나, 기존 사본을 MENAGERIE_DIR로 지정할 수 있습니다."))
+    if not _cached:
+        common_runtime.menagerie_dir()
+    pc = common_runtime
+    return (pc,)
+
+
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(r"""
+    mo.vstack([
+        mo.md(r"""
     # 5장. 강화학습으로 로봇팔 움직이기
 
     3·4장의 Policy는 사람이 단계를 적은 상태 기계였습니다. 강화학습(Reinforcement Learning, RL)은 **보상(reward)만 정해 주고**
     시행착오로 Policy를 학습합니다. 1장의 루프에 보상과 학습이 붙습니다.
 
-    ```mermaid
+    """),
+        mo.mermaid(r"""
     flowchart LR
       E[환경 env] -- observation, reward --> A[Policy 신경망]
       A -- action --> E
       A -. 보상이 커지는 쪽으로 가중치 갱신 .-> A
-    ```
+    """),
+        mo.md(r"""
 
     | 절 | 내용 |
     | --- | --- |
@@ -71,6 +95,26 @@ def _(mo):
 
     학습은 [Stable-Baselines3](https://stable-baselines3.readthedocs.io/)의 PPO를 CPU에서 돌립니다.
     학습 셀은 버튼을 눌러야 실행됩니다. 결과(모델·곡선·지표)는 실행 폴더에 저장됩니다.
+    """),
+    ])
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### 이 장의 학습 경로
+
+    셀 재실행·환경별 대안은 [README의 학습 경로와 재실행](README.md#학습-경로와-재실행)을 참고하세요.
+
+    **목표**: 보상·학습 손실·성공률을 구분하고, 같은 seed의 랜덤 정책과 PPO를 비교합니다.
+    **선수 지식**: 1장의 Episode·보상, 2장의 관절 제어, 기초 평균·신경망 가중치 갱신.
+    **필수**: 5-1 환경 → 5-2 PPO 계산 읽기. 학습 버튼과 5-4 보상별 재학습은 선택입니다.
+    GPU 없이 설명과 `PointReachEnv.step`을 추적할 수 있습니다. 학습하지 않은 결과를 학습 성과로 해석하지 마세요.
+
+    **읽을 코드**: `PointReachEnv`, `ArmReachEnv`는 이 파일의 교육용 환경입니다.
+    학습은 설치된 Stable-Baselines3 `PPO.train`, 평가는 이 파일의 `evaluate`입니다.
+    5장의 목표는 손끝 도달이며, 3·6장의 집어 상자에 넣기와 성공률을 직접 비교할 수 없습니다.
     """)
     return
 
@@ -198,6 +242,48 @@ def _(PointReachEnv, evaluate, mo, np):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
+    ### 보상에서 PPO 갱신까지
+
+    보상 $r_t$는 환경이 주는 숫자이고, 학습 손실과 성공률은 별개입니다.
+    할인 return은 $G_t=\sum_{k=0}^{T-t-1}\gamma^k r_{t+k}$입니다.
+    시간 제한으로 잘린 rollout은 마지막 가치로 bootstrap하며, 진짜 종료에서는 뒤의 가치를 0으로 둡니다.
+    가치망 $V_\phi(s_t)$는 앞으로 얻을 return의 기준선을 추정하고,
+    advantage $\hat A_t$는 그 기준선보다 행동 결과가 얼마나 좋았는지 나타냅니다.
+    SB3는 GAE로 advantage를 계산하고, `PPO.train`에서 미니배치 advantage를 정규화합니다.
+
+    $$
+    \rho_t=\frac{\pi_\theta(a_t\mid s_t)}{\pi_{\mathrm{old}}(a_t\mid s_t)},\qquad
+    L_{\rm clip}=\mathbb E_t\left[\min\left(\rho_t\hat A_t,
+    \operatorname{clip}(\rho_t,1-\epsilon,1+\epsilon)\hat A_t\right)\right]
+    $$
+
+    $\rho_t$는 **같은 관측·같은 행동**의 새/이전 정책 확률비입니다. 양의 advantage에서
+    $\epsilon=0.2$, $\hat A=2$, $\rho=1.5$라면 두 항은 3과 2.4여서 작은 값 2.4를 씁니다.
+    clip은 행동 각도를 자르는 연산과 다릅니다. 이 항만으로 모든 정책 변화가 엄격히 제한되지는 않습니다.
+
+    구현은 최대화 대신 다음 손실을 최소화합니다.
+
+    $$
+    L=-L_{\rm clip}+c_v\,\mathbb E[(V_\phi-\hat G)^2]-c_e\,\mathbb E[\mathcal H(\pi_\theta)]
+    $$
+
+    $\hat G$는 rollout에서 구한 return 표적, $c_v$는 가치 손실 계수, $c_e$는 탐색을 돕는
+    entropy 계수입니다. 이 실습의 `PPO(...)`는 기본 `ent_coef=0`이므로 entropy 항의 가중치는 0입니다.
+    관측은 Point $(B,4)$ / Arm $(B,14)$, 행동은 $(B,2)$ / $(B,5)$이고 $B$는 미니배치 크기입니다.
+    역전파는 정책망과 가치망을 갱신하며 MuJoCo를 미분하지 않습니다. 추론 `predict(..., deterministic=True)`는
+    가중치를 고정하고 행동을 고릅니다. 보상을 바꾼 실험에서는 같은 평가 seed의 **성공률·거리**를 비교합니다.
+    `shaped`의 거리 진전 항은 할인된 potential shaping의 일반적 보장과 같지 않아 최적 정책 불변을 보장하지 않습니다.
+
+    **작은 확인**: 위 예에서 $\rho=1$이면 목적 항은 2입니다. 확률비 증가가 언제부터 보너스를 더 주지 않는지 설명해 보세요.
+    기대 답은 양의 advantage일 때 $\rho>1+\epsilon$ 구간입니다.
+    출처: [PPO 논문 §3](https://arxiv.org/abs/1707.06347), 실제 연산은 설치 패키지 `stable_baselines3/ppo/ppo.py:PPO.train`입니다.
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
     ## 5-2. PPO로 첫 학습
 
     **PPO**(Proximal Policy Optimization)는 현재 Policy로 경험을 모은 뒤, 좋은 결과를 낸 행동의 확률을 높이되
@@ -296,7 +382,7 @@ def _(mo):
     mo.md(r"""
     ## 5-3. SO-101을 Gymnasium 환경으로: 손끝을 블록 위로
 
-    이제 `env`가 MuJoCo 로봇팔입니다. 집기까지는 너무 어려우니 **손끝을 블록 위 2 cm로 보내는(reach)** 과제만 학습합니다.
+    이제 `env`가 MuJoCo 로봇팔입니다. 집기까지는 너무 어려우니 **손끝을 블록의 x·y와 월드 높이 z=0.02 m로 보내는(reach)** 과제만 학습합니다.
 
     | 요소 | ArmReachEnv |
     | --- | --- |
@@ -310,16 +396,20 @@ def _(mo):
 
     `reward_mode`
 
-    - `sparse`: 성공했을 때만 +10
-    - `dense`: 매 스텝 −거리
-    - `shaped`: 매 스텝 −거리 + 10 × (이번 스텝에 가까워진 거리) + 성공 시 +10
+    목표 거리 $d_t$와 성공 여부 $I_t=\mathbf 1[d_t<0.02]$에 대해
+
+    - `sparse`: $r_t=10I_t$
+    - `dense`: $r_t=-d_t$
+    - `shaped`: $r_t=-d_t+10(d_{t-1}-d_t)+10I_t$
+
+    위 식은 Arm 환경의 보상입니다. Point 환경의 dense 보상에는 도달 시 +10도 포함됩니다.
     """)
     return
 
 
 @app.cell
 def _(gym, mujoco, np, pc, spaces):
-    TARGET_ABOVE = 0.02   # 블록 중심 위 높이 (3장의 GRASP_Z와 같은 값)
+    TARGET_ABOVE = 0.02   # 월드 좌표의 목표 높이 (3장의 GRASP_Z와 같은 값)
 
 
     class ArmReachEnv(gym.Env):
@@ -539,6 +629,11 @@ def _(mo):
 
     1. `ArmReachEnv.step`의 행동 배율 0.05를 0.2로 키우면 학습이 빨라질까요, 불안정해질까요? 직접 바꿔 학습해 보세요.
     2. 관측에서 `(목표 − 손끝)` 3개를 빼면 무엇이 어려워질까요?
+
+    ### 확인 문제 판정 기준
+
+    1. 큰 행동 배율은 탐색 범위를 넓히지만 목표를 지나치거나 관절 추종이 불안정해질 수 있습니다. 속도 향상을 보장하지 않으므로 같은 평가 seed·학습 step에서 성공률과 최종 거리를 비교합니다.
+    2. 목표와 손끝 좌표 자체는 남으므로 정보가 사라지는 것은 아닙니다. 네트워크가 두 좌표의 차를 스스로 학습해야 하므로 학습 효율이 달라질 수 있습니다. 관측 공간 shape와 반환 배열을 함께 14에서 11로 바꿔야 비교가 유효합니다.
 
     다음 [6장](ch06_imitation_act.py)에서는 LeRobot으로 시연 데이터셋을 만들고 ACT 정책을 학습·평가합니다.
     """)

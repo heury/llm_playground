@@ -21,12 +21,33 @@ def _():
     import matplotlib.pyplot as plt
     import numpy as np
 
-    import physicalai_common as pc
+    import physicalai_common as common_runtime
     import torch
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    RUN_DIR = pc.make_run_dir("ch07-smolvla")
-    return Path, RUN_DIR, device, itertools, json, mo, np, pc, plt, re, time
+    RUN_DIR = common_runtime.make_run_dir("ch07-smolvla")
+    return Path, RUN_DIR, device, itertools, json, mo, np, common_runtime, plt, re, time
+
+
+@app.cell
+def _(mo):
+    robot_assets_btn = mo.ui.run_button(label="SO-101 모델 준비 (없으면 다운로드)")
+    robot_assets_btn
+    return (robot_assets_btn,)
+
+
+@app.cell
+def _(common_runtime, mo, robot_assets_btn):
+    _model_root = common_runtime.Path(common_runtime.os.environ.get(
+        "MENAGERIE_DIR", common_runtime.DEFAULT_MENAGERIE_DIR))
+    _cached = (_model_root / "robotstudio_so101").is_dir()
+    mo.stop(not _cached and not robot_assets_btn.value, mo.md(
+        "SO-101 모델이 없습니다. 위 준비 버튼을 누르면 수십 MB를 내려받습니다. "
+        "다운로드 없이 설명을 읽거나, 기존 사본을 MENAGERIE_DIR로 지정할 수 있습니다."))
+    if not _cached:
+        common_runtime.menagerie_dir()
+    pc = common_runtime
+    return (pc,)
 
 
 @app.cell(hide_code=True)
@@ -38,7 +59,8 @@ def _(device, mo):
     except ImportError:
         _ok = False
     mo.stop(not _ok, mo.callout(mo.md("`lerobot`가 없습니다. `uv sync --locked --extra lerobot` 후 다시 여세요."), kind="danger"))
-    mo.md(rf"""
+    mo.vstack([
+        mo.md(rf"""
     # 7장. 자연어로 로봇 움직이기: SmolVLA
 
     6장의 ACT는 카메라와 관절각만 봅니다. "빨간 블록을 상자에"라는 과제는 학습 데이터에 박혀 있을 뿐 입력으로 바꿀 수 없습니다.
@@ -46,7 +68,8 @@ def _(device, mo):
 
     [SmolVLA](https://huggingface.co/lerobot/smolvla_base)는 Hugging Face가 공개한 약 4.5억 파라미터 VLA입니다.
 
-    ```mermaid
+    """),
+        mo.mermaid(r"""
     flowchart LR
       I[카메라 이미지] --> V[SmolVLM2<br/>비전·언어 모델]
       T["명령 문장<br/>'Pick up the red cube…'"] --> V
@@ -54,7 +77,8 @@ def _(device, mo):
       V -->|KV 캐시| A[Action Expert<br/>Flow Matching]
       N[무작위 noise] --> A
       A --> C[50스텝 행동 묶음]
-    ```
+    """),
+        mo.md(rf"""
 
     | 절 | 내용 | 자원 |
     | --- | --- | --- |
@@ -64,8 +88,71 @@ def _(device, mo):
     | 7-4 | 파인튜닝 모델 평가 (공개 체크포인트 가능) | 다운로드 약 720 MB |
     | 7-5 | 명령 문장을 바꾸면 행동이 달라지는가 | GPU, 수 분 |
 
-    현재 장치 **`{device}`**. 내부 구조(VLM + Action Expert, 블록 어텐션 마스크, Flow Matching)는
-    [`notebooks/lerobot/smolvla_tour.py`](../lerobot/smolvla_tour.py)에서 다룹니다.
+    현재 장치 **`{device}`**.
+    """),
+    ])
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### 이 장의 학습 경로
+
+    셀 재실행·환경별 대안은 [README의 학습 경로와 재실행](README.md#학습-경로와-재실행)을 참고하세요.
+
+    **목표**: 언어 조건·Flow Matching·행동 청크를 연결하고 문장 효과와 noise 효과를 구분합니다.
+    **선수 지식**: 6장의 $B\times H\times A$ 청크·정규화·학습/추론 차이, 기초 평균제곱오차.
+    **필수**: 아래 계산 원리 → 7-1 입력 이름 → 7-3 파인튜닝 경로 → 7-5 비교 설계 읽기.
+    모델 로드·학습·다운로드·반복 평가는 선택 실행입니다. 가중치 없이도 수식과 실제 패키지 소스를 대조할 수 있습니다.
+
+    **읽을 코드**: `physicalai_common.load_smolvla`와 `make_observation`을 거쳐 LeRobot 0.7
+    `SmolVLAPolicy.forward`, `VLAFlowMatching.forward/sample_actions`를 사용합니다.
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### Flow Matching: noise에서 행동 청크로
+
+    조건 $c$는 이미지·언어 토큰·관절 상태입니다. 실제 6차원 행동은 모델의 `max_action_dim`까지 패딩하고,
+    청크 $a$와 같은 모양 $(B,H,D)$의 정규 noise $\varepsilon$을 뽑습니다.
+    여기서 $B$는 배치, $H$는 `chunk_size`, $D$는 모델 내부 행동 차원입니다.
+    LeRobot 0.7 SmolVLA는 **$t=1$이 noise인 규약**을 씁니다.
+
+    $$
+    x_t=(1-t)a+t\varepsilon,\qquad u_t=\varepsilon-a,\qquad
+    L_{\rm FM}=\mathbb E\left[\|v_\theta(x_t,t,c)-u_t\|^2\right]
+    $$
+
+    학습은 무작위 시간 $t$에서 섞인 행동 $x_t$를 주고, noise 방향의 속도 $u_t$를 맞힙니다.
+    `VLAFlowMatching.forward`가 원소별 MSE를 만들고 `SmolVLAPolicy.forward`가 실제 행동 차원만 남깁니다.
+    `action_is_pad`가 있으면 Episode 밖 항을 지우고 유효 시간·행동 수로 평균냅니다.
+    언어·이미지의 padding은 attention mask로 가려 가짜 토큰이 조건에 섞이지 않게 합니다.
+
+    추론은 정답 $a$ 없이 $x_1=\varepsilon$에서 시작합니다. `sample_actions`는 이미지·언어·상태 조건을
+    한 번 인코딩해 KV cache로 재사용하고 `denoise_step`으로 속도를 여러 번 예측합니다.
+    적분 횟수 $N$은 `num_steps`이며, Euler 적분은 $\Delta t=-1/N$로 다음을 반복합니다.
+
+    $$
+    x_{t+\Delta t}=x_t+\Delta t\,v_\theta(x_t,t,c),\qquad t:1\longrightarrow0
+    $$
+
+    작은 예: 정답 $a=2$, noise $\varepsilon=0$이면 $u=-2$입니다.
+    정확한 속도장에서 $\Delta t=-0.5$로 두 번 갱신하면 $0\to1\to2$가 됩니다.
+    **시간을 거꾸로 적분하기 때문에** noise 방향 속도를 예측해도 행동에 도달합니다.
+    적분 step을 늘리면 계산·지연이 늘고 근사 오차를 줄일 수 있지만 성공률 향상을 보장하지는 않습니다.
+
+    기본 설정은 `freeze_vision_encoder=True`, `train_expert_only=True`라 VLM 백본을 동결하고
+    Action Expert와 상태·행동 입출력 projection 등 학습 가능 부분을 갱신합니다.
+    실제 체크포인트 설정이 기본값을 덮어쓸 수 있으므로 7-1의 설정·학습 가능 매개변수를 확인합니다.
+    추론에서는 가중치 갱신 없이 noise를 행동으로 적분하고, 후처리로 실제 제어 단위를 복원합니다.
+    문장을 입력받는 구조만으로 지시를 올바르게 수행한다고 볼 수 없으므로 7-5와 8-1에서 따로 측정합니다.
+
+    출처: [SmolVLA 논문 §3](https://arxiv.org/abs/2506.01844).
+    실제 구현은 `lerobot/policies/smolvla/modeling_smolvla.py`의 `VLAFlowMatching.forward/sample_actions`입니다.
     """)
     return
 
@@ -177,7 +264,8 @@ def _(mo):
     원본 책 설정은 10,000 step, batch 8이며 RTX 3060 기준 수 시간이 걸렸습니다. 학습을 건너뛰려면 7-4의 공개 체크포인트를 쓰세요.
 
     ```bash
-    lerobot-train --policy.path=lerobot/smolvla_base \
+    # 저장소 루트에서 실행; 먼저 아래와 같이 프로젝트 환경을 지정합니다.
+    uv run --project notebooks/physicalai --extra lerobot lerobot-train --policy.path=lerobot/smolvla_base \
       --dataset.repo_id=physicalai/so101_pickplace_sim --dataset.root=outputs/physicalai/datasets/so101_pickplace_sim \
       --rename_map='{"observation.images.top": "observation.images.camera1", "observation.images.wrist": "observation.images.camera2"}' \
       --policy.device=cuda --policy.push_to_hub=false --steps=10000 --batch_size=8 --trackio.enable=false \
@@ -311,11 +399,13 @@ def _(
     pc,
     time,
     vla_episodes,
+    vla_eval_btn,
     vla_loaded_from,
     vla_policy,
     vla_post,
     vla_pre,
 ):
+    mo.stop(not vla_eval_btn.value, mo.md("평가 횟수를 바꾼 뒤에는 평가 버튼을 다시 누르세요."))
     _rng = np.random.default_rng(1000)
     _records, _video, _t0 = [], None, time.time()
     with mo.status.progress_bar(total=vla_episodes.value, title="SmolVLA 평가") as _bar:
@@ -351,7 +441,7 @@ def _(mo):
     - **문장 효과**: noise seed를 고정하고 문장만 바꿨을 때 최종 위치가 서로 얼마나 다른가
     - **noise 효과**: 문장을 고정하고 noise seed만 바꿨을 때 최종 위치가 서로 얼마나 다른가
 
-    문장 효과가 noise 효과보다 뚜렷하게 커야 "언어가 행동을 바꾼다"고 말할 수 있습니다.
+    문장 효과를 noise 효과와 비교하면 언어 입력에 대한 민감도의 단서를 얻습니다. 이 차이는 통계적 유의성 검정이나 문장의 의미를 올바르게 수행했다는 증거는 아닙니다.
     파인튜닝 데이터의 문장이 하나뿐이었다면 결과가 어떻게 나올지 먼저 예측해 보세요.
     """)
     return
@@ -444,14 +534,19 @@ def _(mo):
     mo.md(r"""
     ## 정리와 다음 장
 
-    - VLA는 문장을 입력으로 받지만, **파인튜닝 데이터의 문장이 하나뿐이면 문장을 무시하는 법을 배웁니다.**
+    - VLA는 문장을 입력으로 받지만, **파인튜닝 문장이 하나뿐이면 언어 조건을 사용하도록 학습하는 신호가 부족합니다.**
       이미지만 보고도 같은 행동을 하면 손실이 줄기 때문입니다.
-    - 사전학습 모델의 능력은 학습 환경(카메라·로봇·조명)과 우리 환경이 다르면 거의 이어지지 않습니다. 결국 우리 환경의 시연으로 파인튜닝해야 합니다.
+    - 학습 환경(카메라·로봇·조명)과 우리 환경이 다르면 사전학습 모델의 성능이 떨어질 수 있습니다. 이 실습에서는 먼저 평가하고, 필요한 경우 우리 환경의 시연으로 파인튜닝합니다.
 
     **확인 문제**
 
     1. 문장이 행동을 바꾸게 하려면 시연 데이터를 어떻게 모아야 할까요? (8장 8-1에서 직접 해 봅니다)
     2. noise seed를 고정하지 않으면 7-5의 비교에 어떤 문제가 생기나요?
+
+    ### 확인 문제 판정 기준
+
+    1. 같은 시각 장면에서 다른 지시가 다른 정답 행동에 연결되도록 색·위치·문장을 다양하게 기록합니다. 색만 바꾸고 위치가 고정되면 위치만 외울 수 있으므로 배치도 바꿉니다.
+    2. seed가 다르면 문장 차이와 시작 noise 차이가 섞입니다. 같은 seed의 문장 쌍과 같은 문장의 여러 seed를 비교합니다. 최종 손끝 차이는 민감도의 단서이며 지시를 올바르게 수행했다는 증거는 아닙니다.
 
     다음 [8장](ch08_generalization.py)에서는 블록 세 개 중 문장이 가리키는 색을 집게 하고, 처음 보는 환경에서 정책을 시험합니다.
     """)

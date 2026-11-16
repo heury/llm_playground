@@ -23,26 +23,50 @@ def _():
     import matplotlib.pyplot as plt
     import numpy as np
 
-    import physicalai_common as pc
+    import physicalai_common as common_runtime
 
-    RUN_DIR = pc.make_run_dir("ch09-llm")
-    return Path, RUN_DIR, base64, io, json, mo, np, os, pc, plt, re, time
+    RUN_DIR = common_runtime.make_run_dir("ch09-llm")
+    return Path, RUN_DIR, base64, io, json, mo, np, os, common_runtime, plt, re, time
+
+
+@app.cell
+def _(mo):
+    robot_assets_btn = mo.ui.run_button(label="SO-101 모델 준비 (없으면 다운로드)")
+    robot_assets_btn
+    return (robot_assets_btn,)
+
+
+@app.cell
+def _(common_runtime, mo, robot_assets_btn):
+    _model_root = common_runtime.Path(common_runtime.os.environ.get(
+        "MENAGERIE_DIR", common_runtime.DEFAULT_MENAGERIE_DIR))
+    _cached = (_model_root / "robotstudio_so101").is_dir()
+    mo.stop(not _cached and not robot_assets_btn.value, mo.md(
+        "SO-101 모델이 없습니다. 위 준비 버튼을 누르면 수십 MB를 내려받습니다. "
+        "다운로드 없이 설명을 읽거나, 기존 사본을 MENAGERIE_DIR로 지정할 수 있습니다."))
+    if not _cached:
+        common_runtime.menagerie_dir()
+    pc = common_runtime
+    return (pc,)
 
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(r"""
+    mo.vstack([
+        mo.md(r"""
     # 9장. LLM이 지휘하는 로봇: LLM Planner
 
-    8장에서 SmolVLA는 "빨강·초록·노랑 중 문장이 가리키는 색"을 고르는 데 어려움을 겪었습니다.
+    8장에서는 SmolVLA가 "빨강·초록·노랑 중 문장이 가리키는 색"을 고를 수 있는지 시험했습니다.
     이번에는 정책을 학습하지 않습니다. **LLM에게 3장의 로봇 기능을 도구(tool)로 쥐여 주고** 무엇을 어떤 순서로 할지만 정하게 합니다.
 
-    ```mermaid
+    """),
+        mo.mermaid(r"""
     flowchart TB
       L["LLM (0.2~2 Hz)<br/>어느 블록을, 어떤 순서로"] -->|도구 호출| T["RobotTools<br/>목표점 검사 · 안전 범위 제한"]
       T -->|결과 JSON| L
       T --> I["SO101Sim (500 Hz)<br/>3장 IK · 관절 보간"]
-    ```
+    """),
+        mo.md(r"""
 
     1장의 세 줄이 그대로입니다. `policy` 자리에 LLM이 들어갔을 뿐입니다.
 
@@ -62,6 +86,27 @@ def _(mo):
 
     성공 여부는 LLM의 주장(`report_done`)이 아니라 **시뮬레이터의 좌표**(`is_in_box`)로 판정합니다.
     GPU, LeRobot, PyTorch는 쓰지 않습니다.
+    """),
+    ])
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### 이 장의 학습 경로
+
+    셀 재실행·환경별 대안은 [README의 학습 경로와 재실행](README.md#학습-경로와-재실행)을 참고하세요.
+
+    **목표**: Planner의 도구 선택과 IK 제어를 분리하고, 주장한 성공과 실제 성공을 대조합니다.
+    **선수 지식**: 3장의 IK·집기, 4장의 위치 추정, Python 딕셔너리와 JSON.
+    **필수**: 9-1 schema·목표점 제한 → 9-2 `run_agent` → 9-3 `scripted` 흐름.
+    trace 다운로드·재생, 반복 평가, 실제 API 호출은 선택입니다. API 키 없이 코드를 추적할 수 있습니다.
+
+    **읽을 코드**: 이 파일의 `RobotTools`, `ScriptedPlanner`, `ReplayClient`, `run_agent`가
+    `physicalai_common.SO101Sim`의 IK·관절 보간을 호출합니다. `scripted`는 LLM 성능의 측정값이 아니며
+    `replay`는 새 관측에 반응하지 않는 열린 고리 재생입니다.
+    작업 영역 제한은 시뮬레이터의 목표점 검사이며 충돌 회피나 실물 로봇 안전 보장은 아닙니다.
     """)
     return
 
@@ -76,7 +121,7 @@ def _(mo):
     1. **도구 정의(schema)**: 이름, 설명, 인자 형식(JSON Schema). LLM은 이 설명만 보고 도구를 고릅니다.
     2. **안전 장치**: 작업 영역(반지름 0.12~0.30 m, 높이 0.005~0.30 m) 밖의 목표는 잘라내고 경고를 돌려줍니다(3장 3-7의 결과).
        이동 시간도 LLM이 아니라 도구가 거리에 비례해 정합니다(0.15 m/s, 0.8~2초). 모든 이동을 1초로 하면 상자까지의 긴 이동에서 관성으로 블록을 놓칩니다.
-    3. **관찰 범위(perception)**: `state`는 정확한 좌표, `color`는 4장 색 검출 추정값(약 1 cm 오차), `camera`는 좌표 없이 `look()`으로 사진만 줍니다.
+    3. **관찰 범위(perception)**: `state`는 정확한 좌표, `color`는 4장 색 검출 추정값(약 1 cm 오차), `camera`는 블록 좌표를 숨기고 `look()`으로 사진을 줍니다. 손끝·상자 좌표는 이 모드에서도 도구 결과에 포함됩니다.
     """)
     return
 
@@ -691,7 +736,7 @@ def _(
 def _(mo):
     mo.md(r"""
     `scripted` + `state`가 거의 항상 성공하는 것은 놀랍지 않습니다. 정확한 좌표가 주어지면 3장의 규칙으로 충분하기 때문입니다.
-    LLM Planner의 가치는 **문장 형식이 정해져 있지 않거나**("왼쪽에 있는 것 말고 노란 것"), **좌표 없이 사진만 있을 때**(`camera`)
+    LLM Planner의 가치는 **문장 형식이 정해져 있지 않거나**("왼쪽에 있는 것 말고 노란 것"), **블록 좌표 없이 사진으로 물체를 찾아야 할 때**(`camera`)
     드러납니다. 그 대가는 호출당 수 초의 지연, 토큰 요금, 그리고 매번 조금씩 달라질 수 있는 결정입니다.
 
     ## 9-5. 원본 실행 기록 읽기
@@ -764,12 +809,19 @@ def _(mo):
     | 제어 주기 | 500 Hz | 50 Hz | 20 Hz | 20 Hz (묶음) | 0.2~2 Hz (도구 단위) |
     | 약점 | 인식 오차, 예외 상황 | 보상 설계, 긴 과제 | 데이터 분포 밖 | 데이터·연산량 | 지연, 요금, 정밀 제어 불가 |
 
+    표의 주기는 같은 종류의 속도가 아닙니다. 500 Hz는 물리 적분, 50/20 Hz는 행동 적용, LLM의 0.2~2 Hz는 응답 속도의 예시입니다.
+    청크 적용 중에는 새 정책 추론 없이 다음 행동을 꺼낼 수 있으며, 실제 API 지연은 모델·네트워크·도구 수에 따라 다릅니다.
+
     실제 시스템은 이 층을 섞어 씁니다. LLM이 무엇을 할지 정하고, 학습된 정책이나 IK가 어떻게 움직일지를 맡습니다.
 
     **확인 문제**
 
     1. `MOVE_MIN`을 0.3초로 줄이면 LLM Planner의 성공률은 어떻게 될까요? 왜 이동 시간을 LLM이 정하게 하지 않았을까요?
     2. `ScriptedPlanner`가 "Put the yellow one into the box"라는 문장을 받으면 어떻게 되나요? LLM은 어떨까요?
+    ### 확인 문제 판정 기준
+
+    1. 짧은 이동은 추종 오차와 관성에 의한 놓침을 늘릴 수 있습니다. 도구가 거리에 따라 시간을 정하면 정책이 무리한 시간을 지시하는 경우를 제한합니다. 실제 효과는 같은 배치로 비교합니다.
+    2. `ScriptedPlanner`는 `the (색) cube` 형식의 정규식만 찾습니다. `Put the yellow one into the box`는 이 형식과 맞지 않아 기본값인 빨강(`red`)으로 처리합니다. 규칙의 문장 형식 의존성을 보여 주는 예입니다. LLM의 결과는 실제 실행으로 확인해야 합니다.
     """)
     return
 

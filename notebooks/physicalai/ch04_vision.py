@@ -19,30 +19,54 @@ def _():
     import matplotlib.pyplot as plt
     import numpy as np
 
-    import physicalai_common as pc
+    import physicalai_common as common_runtime
     import cv2
     import mujoco
 
     np.set_printoptions(precision=3, suppress=True)
-    RUN_DIR = pc.make_run_dir("ch04-vision")
-    return RUN_DIR, cv2, json, mo, mujoco, np, os, pc, plt
+    RUN_DIR = common_runtime.make_run_dir("ch04-vision")
+    return RUN_DIR, cv2, json, mo, mujoco, np, os, common_runtime, plt
+
+
+@app.cell
+def _(mo):
+    robot_assets_btn = mo.ui.run_button(label="SO-101 모델 준비 (없으면 다운로드)")
+    robot_assets_btn
+    return (robot_assets_btn,)
+
+
+@app.cell
+def _(common_runtime, mo, robot_assets_btn):
+    _model_root = common_runtime.Path(common_runtime.os.environ.get(
+        "MENAGERIE_DIR", common_runtime.DEFAULT_MENAGERIE_DIR))
+    _cached = (_model_root / "robotstudio_so101").is_dir()
+    mo.stop(not _cached and not robot_assets_btn.value, mo.md(
+        "SO-101 모델이 없습니다. 위 준비 버튼을 누르면 수십 MB를 내려받습니다. "
+        "다운로드 없이 설명을 읽거나, 기존 사본을 MENAGERIE_DIR로 지정할 수 있습니다."))
+    if not _cached:
+        common_runtime.menagerie_dir()
+    pc = common_runtime
+    return (pc,)
 
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(r"""
+    mo.vstack([
+        mo.md(r"""
     # 4장. 카메라로 물체 찾기: Vision과 Robot 연결
 
     3장의 Pick and Place는 블록 위치를 시뮬레이터에서 **정답 그대로** 읽었습니다. 실제 로봇은 그럴 수 없습니다.
     이 장에서는 카메라 이미지로 블록 위치를 추정하고, 그 추정값으로 같은 Pick and Place를 실행합니다.
 
-    ```mermaid
+    """),
+        mo.mermaid(r"""
     flowchart LR
       Cam[Camera<br/>RGB + Depth] --> Det[Color Detection<br/>픽셀 u, v]
       Det --> Pos[Pixel → World<br/>x, y, z]
       Pos --> Ctrl[3장 Pick and Place]
       Ctrl --> Arm[Robot Arm]
-    ```
+    """),
+        mo.md(r"""
 
     | 절 | 내용 |
     | --- | --- |
@@ -52,6 +76,25 @@ def _(mo):
     | 4-4 | 카메라로 블록 위치 추정과 오차 |
     | 4-5 | (선택) YOLO 사전학습 검출기 |
     | 4-6 | Vision Pick and Place와 인식 오차 실험 |
+    """),
+    ])
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### 이 장의 학습 경로
+
+    셀 재실행·환경별 대안은 [README의 학습 경로와 재실행](README.md#학습-경로와-재실행)을 참고하세요.
+
+    **목표**: RGB 픽셀의 검출 중심을 depth와 카메라 보정으로 월드 좌표로 바꿉니다.
+    **선수 지식**: 2장의 장면·카메라, 3장의 월드 좌표와 집기 단계. 이미지는 배열 $H\times W\times3$입니다.
+    **필수**: 4-1 채널 순서 → 4-2 마스크 → 4-3 역투영 → 4-4 위치 오차. YOLO·반복 집기는 선택입니다.
+
+    **읽을 코드**: 이 파일의 `detect_hsv`는 과정을 펼친 예제이고, 후속 장은 공통 모듈의
+    `color_mask → find_color_center → locate_object`를 씁니다. 카메라 변환은 `SimCamera.pixel_to_world`와 대응합니다.
+    실습의 depth는 시뮬레이터가 주는 이상적 값입니다. 실물 RGB-D에는 깊이 누락·보정 오차·가림이 추가됩니다.
     """)
     return
 
@@ -502,6 +545,11 @@ def _(mo):
 
     1. `COLOR_RANGES["red"]`에서 두 번째 구간(170~179)을 빼면 검출 결과가 어떻게 바뀌나요?
     2. depth 대신 "블록 윗면은 항상 z = 0.03"이라는 가정으로 월드 좌표를 구하려면 어떻게 계산해야 할까요?
+
+    ### 확인 문제 판정 기준
+
+    1. OpenCV H의 빨강은 경계 양쪽에 걸칩니다. 두 번째 구간을 빼면 H가 170~179인 빨강을 놓칩니다. 현재 영상에 그 색조가 없다면 당장 차이가 작을 수도 있습니다.
+    2. 픽셀에서 월드 방향 광선을 만든 뒤 평면과 교차시킵니다. 카메라 위치를 $t$, 월드 광선 방향을 $r=R[(u-c_x)/f,-(v-c_y)/f,-1]^\top$라 두면 $s=(0.03-t_z)/r_z$, $p=t+sr$입니다. $r_z=0$이면 교차가 없고 $s>0$인 앞쪽 점만 유효합니다. 블록 높이가 바뀌면 이 가정도 깨집니다.
 
     다음 [5장](ch05_reinforcement_learning.py)에서는 사람이 규칙을 쓰는 대신 보상만 주고 행동을 학습시킵니다.
     """)
