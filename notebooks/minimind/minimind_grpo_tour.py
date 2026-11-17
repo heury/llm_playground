@@ -17,16 +17,6 @@ def _():
     return (result_table,)
 
 
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    **실행 안내:** 저장소 루트에서 `cd notebooks/minimind` → `uv sync --locked` →
-    `uv run marimo edit minimind_grpo_tour.py`. 환경·준비물과 권장 순서는 [공통 README](README.md)를 참고하세요.
-    위젯 변경 시 의존 셀이 다시 실행됩니다. 모델 크기·데이터·학습 설정 변경 전에는 해당 절의 재실행 범위를 확인하세요.
-    """)
-    return
-
-
 @app.cell
 def _():
     import copy
@@ -493,6 +483,23 @@ def _(mo):
     - `generate`는 EOS를 낸 행에도 배치가 끝날 때까지 **EOS를 계속 채웁니다.** 그래서 `completion_mask`는 일단 전부 1이고,
       EOS 뒤를 지우는 일은 학습 코드가 따로 합니다(6절).
 
+    **SFT는 오른쪽, GRPO는 왼쪽에 패딩합니다.**
+
+    | | SFT (`SFTDataset`) | GRPO rollout |
+    | --- | --- | --- |
+    | 패딩 위치 | 오른쪽 (`max_length`까지) | 왼쪽 (`padding_side="left"`) |
+    | 하는 일 | 완성된 문장 전체를 한 번에 학습 | 질문 뒤에 답을 **이어서 생성** |
+    | PAD 처리 | label `-100`으로 손실에서 제외. attention mask 없이도 됨 | `attention_mask`로 PAD를 가림 |
+
+    - SFT는 PAD가 모두 실제 토큰 **뒤**에 있습니다. causal attention은 앞쪽만 보므로 실제 토큰이 PAD를 볼 일이 없어,
+      `train_full_sft.py`는 mask 없이 `model(input_ids, labels=labels)`만 호출합니다.
+    - 생성은 다릅니다. 오른쪽 패딩이면 짧은 질문은 `질문 PAD PAD` 뒤에서 답을 이어 쓰게 되어 질문과 답 사이에 PAD가 낍니다.
+      왼쪽에 채우면 모든 행의 질문이 **같은 위치에서 끝나** 배치 전체가 다음 토큰을 함께 생성할 수 있습니다.
+      대신 PAD가 실제 토큰 앞에 오므로 생성과 로그 확률 계산(6절) 모두 mask를 넘깁니다.
+    - `--rollout_engine sglang`이면 서버에 보내기 전에 왼쪽 PAD를 걷어 내고, 돌아온 `질문 + 답`을 **오른쪽**으로 패딩합니다.
+      그래서 `prompt_lens`가 행마다 다르지만, 6절의 `logp_pos = prompt_lens - 1 + arange(R)`가 행마다 답 시작 위치를 따로 잡으므로
+      같은 학습 코드로 처리됩니다. 이 노트북은 기본 `torch` 엔진을 씁니다.
+
     SFT 모델이 가끔 맞히는 학습 문제 2개(덧셈 하나, 곱셈 하나)로 B=2, G=6 rollout을 해 봅니다.
     샘플링이므로 GPU 종류나 드라이버가 다르면 생성되는 답이 달라질 수 있습니다.
     """)
@@ -534,6 +541,7 @@ def _(
     assert int(demo_rollout.prompt_lens[0]) == _P             # 왼쪽 패딩 → 모든 행의 프롬프트 길이 = P
     return (
         DEMO_G,
+        DEMO_INDICES,
         DEMO_SEED,
         demo_batch,
         demo_inputs,
@@ -546,6 +554,7 @@ def _(
 @app.cell(hide_code=True)
 def _(
     DEMO_G,
+    DEMO_INDICES,
     demo_inputs,
     demo_reward_stats,
     demo_rewards,
@@ -553,6 +562,7 @@ def _(
     mo,
     result_table,
     tokenizer,
+    train_rows,
 ):
     _pads = (demo_inputs["attention_mask"] == 0).sum(1).tolist()
     mo.vstack([
@@ -563,6 +573,11 @@ def _(
     - 채점 진단(`reward_stats`): 정답 {demo_reward_stats['reward/correct_rate']:.0%}, 틀린 숫자 {demo_reward_stats['reward/wrong_number_rate']:.0%},
       형식 오류 {demo_reward_stats['reward/format_error_rate']:.0%}, **보상이 섞인 그룹 비율 {demo_reward_stats['reward/mixed_group_rate']:.0%}**
     """),
+        mo.md("**Rollout에 사용한 질문 원문**"),
+        result_table([
+            {"질문": f"질문 {i}", "원문": train_rows[idx]["question"]}
+            for i, idx in enumerate(DEMO_INDICES)
+        ], selection=None),
         result_table([{"질문": i // DEMO_G, "답 번호": i % DEMO_G, "생성한 답": t, "보상": demo_rewards[i].item(),
                       "토큰 수": int((demo_rollout.completion_ids[i] != tokenizer.eos_token_id).sum())}
                      for i, t in enumerate(demo_rollout.completions)], selection=None, page_size=12),
@@ -684,6 +699,16 @@ def _(mo):
 
     DPO처럼 "모델이 이 답을 낼 확률"이 필요한데, GRPO는 **답 전체가 아니라 토큰 하나하나**의 로그 확률을 씁니다.
 
+    **rollout 때 이미 구한 로그 확률을 왜 다시 계산할까?**
+
+    - rollout의 `generate`는 기울기 없이(`no_grad`) 토큰을 하나씩 샘플링합니다. 그때 구한 `per_token_logps`에는 계산 그래프가 없어
+      역전파할 수 없습니다. 이 값은 상수 `old_per_token_logps`(π_old)로만 쓰입니다.
+    - 그래서 완성된 시퀀스(질문 + 답)를 **기울기를 켠 채 policy에 한 번 더** 넣습니다. 답이 이미 정해져 있으므로 한 번의 forward로
+      모든 답 토큰의 로그 확률이 병렬로 나오고(teacher forcing), 학습 기울기는 이 값에서 나옵니다.
+    - reference 모델도 같은 시퀀스로 한 번 forward해 KL 계산용 `ref_per_token_logps`를 얻습니다(기울기 없음).
+    - 손실의 $\mathrm{ratio}=\pi/\pi_{\mathrm{old}}$는 분자가 이번 forward 값, 분모가 rollout 때 값입니다. 같은 rollout으로 여러 번 업데이트하거나
+      SGLang처럼 다른 엔진이 생성하면 둘이 달라집니다. 이 노트북 설정에서는 첫 계산에서 같다는 것을 아래에서 확인합니다.
+
     ```python
     full_mask = (outputs != tokenizer.pad_token_id).long()               # 왼쪽 패딩만 0
     logp_pos = prompt_lens.unsqueeze(1) - 1 + torch.arange(R).unsqueeze(0)   # 답 토큰 t를 예측하는 logits 위치
@@ -715,152 +740,9 @@ def _(mo):
 
 @app.cell(hide_code=True)
 def _(mo):
-    # 위 코드를 길이 9짜리 예시 한 줄(P=5, R=4)로 따라가는 그림. CSS는 .gd 안으로만 한정합니다.
-    _css = r"""
-    <style>
-    .gd{--panel:#fff;--fg:#1b1f27;--muted:#5d6574;--line:#d9dde4;--soft:#f3f4f7;
-      --prompt:#3b6fd8;--prompt-bg:#e5edfc;--ans:#1f8a5b;--ans-bg:#dff3e9;--eos:#b8730a;--eos-bg:#fbefd8;
-      --pad:#8a919d;--pad-bg:#eceef2;--off:#c24a3a;--off-bg:#fbe5e1;--sel:#6b4bd6;
-      color:var(--fg);display:flex;flex-direction:column;gap:16px;line-height:1.6;font-size:14px}
-    .dark .gd,.dark-theme .gd,[data-theme="dark"] .gd{--panel:#1a1e26;--fg:#e6e9ef;--muted:#9aa3b2;--line:#2e3440;--soft:#12151b;
-      --prompt:#7ea3f2;--prompt-bg:#1f2b45;--ans:#5cc994;--ans-bg:#17342a;--eos:#e6a74a;--eos-bg:#3a2c14;
-      --pad:#8a919d;--pad-bg:#262a33;--off:#ef7f6e;--off-bg:#3d1f1b;--sel:#a58ef5}
-    .gd p{margin:0}
-    .gd code{font-family:ui-monospace,monospace;font-size:.86em;background:var(--pad-bg);padding:1px 5px;border-radius:4px}
-    .gd .step{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;display:flex;flex-direction:column;gap:12px;min-width:0}
-    .gd .ttl{font-weight:700;font-size:1.02rem;display:flex;gap:10px;align-items:baseline}
-    .gd .ttl .n{font-family:ui-monospace,monospace;color:var(--sel)}
-    .gd .legend{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:.85rem;color:var(--muted)}
-    .gd .legend span{display:inline-flex;align-items:center;gap:6px}
-    .gd .sw{display:inline-block;width:14px;height:14px;border-radius:3px;border:1.5px solid}
-    .gd .scroll{overflow-x:auto;min-width:0}
-    .gd table.strip{border-collapse:separate;border-spacing:4px;font-family:ui-monospace,monospace;font-size:.82rem;margin:0;width:auto}
-    .gd .strip th{font-weight:400;color:var(--muted);text-align:right;padding:0 8px 0 0;white-space:nowrap;font-size:.8rem;border:none;background:none}
-    .gd .strip td{min-width:56px;height:32px;text-align:center;border-radius:5px;border:1.5px solid transparent;white-space:nowrap;padding:0 4px}
-    .gd .strip td.idx{color:var(--muted);height:auto;font-size:.75rem}
-    .gd .t-pad{background:var(--pad-bg);border-color:var(--pad)!important;color:var(--pad)}
-    .gd .t-p{background:var(--prompt-bg);border-color:var(--prompt)!important;color:var(--prompt)}
-    .gd .t-a{background:var(--ans-bg);border-color:var(--ans)!important;color:var(--ans)}
-    .gd .t-e{background:var(--eos-bg);border-color:var(--eos)!important;color:var(--eos)}
-    .gd .t-off{background:var(--off-bg);border-color:var(--off)!important;color:var(--off);text-decoration:line-through}
-    .gd .b0{color:var(--muted);border-color:var(--line)!important}
-    .gd .b1{color:var(--fg);border-color:var(--fg)!important;font-weight:600}
-    .gd .dim{opacity:.35}
-    .gd .pick{outline:2.5px solid var(--sel);outline-offset:1px}
-    .gd .arrow{color:var(--sel);height:18px!important}
-    .gd .blank{background:transparent}
-    .gd .lbl{font-size:.75rem;color:var(--muted)}
-    .gd ul{margin:0;padding-left:1.2em;display:flex;flex-direction:column;gap:4px}
-    .gd .formula{font-family:ui-monospace,monospace;font-size:.82rem;background:var(--soft);border:1px solid var(--line);border-radius:6px;padding:10px 12px;overflow-x:auto;white-space:pre;margin:0}
-    .gd .prec{display:grid;grid-template-columns:1fr auto 1fr;gap:12px}
-    .gd .box{border:1.5px solid var(--line);border-radius:8px;padding:12px;display:flex;flex-direction:column;gap:4px;min-width:0}
-    .gd .box.pol{border-color:var(--ans)} .gd .box.ref{border-color:var(--prompt)}
-    .gd .tag{font-family:ui-monospace,monospace;font-size:.78rem;color:var(--muted)}
-    .gd .mid{display:flex;flex-direction:column;justify-content:center;align-items:center;font-family:ui-monospace,monospace;font-size:.82rem;color:var(--muted);text-align:center}
-    .gd .cmp{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
-    .gd .cmp div{border-radius:8px;padding:12px;border:1px solid var(--line)}
-    .gd .cmp .ok{background:var(--ans-bg)} .gd .cmp .warn{background:var(--eos-bg)}
-    .gd .cmp b{display:block;font-family:ui-monospace,monospace;font-size:.88rem}
-    @media (max-width:640px){.gd .prec,.gd .cmp{grid-template-columns:1fr}}
-    </style>
-    """
-    _body = r"""
-    <div class="gd">
-      <p>rollout 결과 한 줄(<code>B*G</code> 중 1개)을 예시로, 위 코드가 어떤 위치의 값을 골라 쓰는지 따라갑니다.
-      프롬프트 길이 <code>P=5</code>(왼쪽 패딩 2개 포함), 답 길이 <code>R=4</code>입니다.</p>
-      <div class="legend">
-        <span><i class="sw t-pad"></i>PAD (왼쪽 패딩)</span><span><i class="sw t-p"></i>프롬프트 토큰</span>
-        <span><i class="sw t-a"></i>답 토큰</span><span><i class="sw t-e"></i>EOS</span>
-        <span><i class="sw" style="border-color:var(--sel)"></i>선택된 위치</span>
-      </div>
-
-      <div class="step">
-        <div class="ttl"><span class="n">①</span>입력 시퀀스와 attention mask</div>
-        <div class="scroll"><table class="strip">
-          <tr><th>위치</th><td class="idx">0</td><td class="idx">1</td><td class="idx">2</td><td class="idx">3</td><td class="idx">4</td><td class="idx">5</td><td class="idx">6</td><td class="idx">7</td><td class="idx">8</td></tr>
-          <tr><th>outputs</th><td class="t-pad">PAD</td><td class="t-pad">PAD</td><td class="t-p">p₁</td><td class="t-p">p₂</td><td class="t-p">p₃</td><td class="t-a">a₁</td><td class="t-a">a₂</td><td class="t-e">EOS</td><td class="t-e">EOS</td></tr>
-          <tr><th></th><td colspan="5" class="lbl" style="color:var(--prompt);border-top:2px solid var(--prompt);border-radius:0">프롬프트 P=5</td><td colspan="4" class="lbl" style="color:var(--ans);border-top:2px solid var(--ans);border-radius:0">completion_ids, R=4</td></tr>
-          <tr><th>full_mask</th><td class="b0">0</td><td class="b0">0</td><td class="b1">1</td><td class="b1">1</td><td class="b1">1</td><td class="b1">1</td><td class="b1">1</td><td class="b1">1</td><td class="b1">1</td></tr>
-        </table></div>
-        <ul>
-          <li><code>outputs != pad_token_id</code>: 왼쪽 PAD만 0입니다. EOS(<code>&lt;|im_end|&gt;</code>)는 PAD(<code>&lt;|endoftext|&gt;</code>)와 다른 토큰이라 1입니다.</li>
-          <li>MiniMind <code>generate</code>는 먼저 끝난 줄의 남은 칸을 <b>EOS로 채웁니다</b>. 그래서 위치 8도 EOS입니다.</li>
-          <li><code>scatter_(1, logp_pos+1, completion_mask)</code>는 답 구간(위치 5~8)의 mask를 rollout이 준 값으로 덮어씁니다. Torch 엔진은 전부 1, SGLang 엔진은 오른쪽 패딩 칸을 0으로 줍니다.</li>
-        </ul>
-      </div>
-
-      <div class="step">
-        <div class="ttl"><span class="n">②</span>logits[t]는 토큰 t+1을 예측한다 (한 칸 밀기)</div>
-        <div class="scroll"><table class="strip">
-          <tr><th>위치 t</th><td class="idx">0</td><td class="idx">1</td><td class="idx">2</td><td class="idx">3</td><td class="idx">4</td><td class="idx">5</td><td class="idx">6</td><td class="idx">7</td><td class="idx">8</td></tr>
-          <tr><th>입력 토큰</th><td class="t-pad">PAD</td><td class="t-pad">PAD</td><td class="t-p">p₁</td><td class="t-p">p₂</td><td class="t-p">p₃</td><td class="t-a">a₁</td><td class="t-a">a₂</td><td class="t-e">EOS</td><td class="t-e dim">EOS</td></tr>
-          <tr><th>logits[:, :-1]</th><td class="b0">ℓ₀</td><td class="b0">ℓ₁</td><td class="b0">ℓ₂</td><td class="b0">ℓ₃</td><td class="b0">ℓ₄</td><td class="b0">ℓ₅</td><td class="b0">ℓ₆</td><td class="b0">ℓ₇</td><td class="blank lbl">버림</td></tr>
-          <tr><th></th><td class="arrow">↓</td><td class="arrow">↓</td><td class="arrow">↓</td><td class="arrow">↓</td><td class="arrow">↓</td><td class="arrow">↓</td><td class="arrow">↓</td><td class="arrow">↓</td><td class="blank"></td></tr>
-          <tr><th>outputs[:, 1:]</th><td class="t-pad">PAD</td><td class="t-p">p₁</td><td class="t-p">p₂</td><td class="t-p">p₃</td><td class="t-a">a₁</td><td class="t-a">a₂</td><td class="t-e">EOS</td><td class="t-e">EOS</td><td class="blank"></td></tr>
-          <tr><th>log p (전체)</th><td class="b0 dim">·</td><td class="b0 dim">·</td><td class="b0 dim">·</td><td class="b0 dim">·</td><td class="b0">lp(a₁)</td><td class="b0">lp(a₂)</td><td class="b0">lp(E)</td><td class="b0">lp(E)</td><td class="blank"></td></tr>
-        </table></div>
-        <pre class="formula">F.log_softmax(logits[:, :-1], -1)        # [B*G, L-1, V]  위치 t의 다음 토큰 분포
-      .gather(2, outputs[:, 1:].unsqueeze(-1))  # 실제로 나온 다음 토큰의 log p만 꺼냄
-      .squeeze(-1)                             # [B*G, L-1]</pre>
-        <ul>
-          <li>마지막 위치(8)의 logits는 예측할 다음 토큰이 없어 버립니다.</li>
-          <li>이 단계까지는 프롬프트 토큰의 log p도 섞여 있습니다. 필요한 건 위치 4~7, 즉 <b>답 토큰을 예측한 칸</b>뿐입니다.</li>
-        </ul>
-      </div>
-
-      <div class="step">
-        <div class="ttl"><span class="n">③</span>logp_pos로 답 구간만 고르기</div>
-        <pre class="formula">logp_pos = prompt_lens - 1 + arange(R)   # 5 - 1 + [0,1,2,3] = [4, 5, 6, 7]</pre>
-        <div class="scroll"><table class="strip">
-          <tr><th>위치 t</th><td class="idx">0</td><td class="idx">1</td><td class="idx">2</td><td class="idx">3</td><td class="idx">4</td><td class="idx">5</td><td class="idx">6</td><td class="idx">7</td></tr>
-          <tr><th>log p (전체)</th><td class="b0 dim">·</td><td class="b0 dim">·</td><td class="b0 dim">·</td><td class="b0 dim">·</td><td class="b0 pick">lp(a₁)</td><td class="b0 pick">lp(a₂)</td><td class="b0 pick">lp(E)</td><td class="b0 pick">lp(E)</td></tr>
-          <tr><th></th><td class="blank" colspan="4"></td><td class="arrow">↓</td><td class="arrow">↓</td><td class="arrow">↓</td><td class="arrow">↓</td></tr>
-          <tr><th>per_token_logps</th><td class="blank lbl" colspan="4" style="text-align:right">.gather(1, logp_pos) →</td><td class="t-a">lp(a₁)</td><td class="t-a">lp(a₂)</td><td class="t-e">lp(E)</td><td class="t-e">lp(E)</td></tr>
-          <tr><th>답 인덱스 r</th><td class="blank" colspan="4"></td><td class="idx">0</td><td class="idx">1</td><td class="idx">2</td><td class="idx">3</td></tr>
-        </table></div>
-        <ul>
-          <li>결과 shape은 <code>[B*G, R]</code>입니다. 열 r은 "답의 r번째 토큰이 나올 log 확률"입니다.</li>
-          <li>①의 <code>logp_pos+1</code>(위치 5~8)은 답 토큰 자체의 위치입니다. 예측하는 칸(t)과 예측되는 토큰(t+1)이 한 칸 차이라서 그렇습니다.</li>
-        </ul>
-      </div>
-
-      <div class="step">
-        <div class="ttl"><span class="n">④</span>첫 EOS까지만 학습: completion_mask</div>
-        <div class="scroll"><table class="strip">
-          <tr><th>답 인덱스 r</th><td class="idx">0</td><td class="idx">1</td><td class="idx">2</td><td class="idx">3</td></tr>
-          <tr><th>completion_ids</th><td class="t-a">a₁</td><td class="t-a">a₂</td><td class="t-e">EOS</td><td class="t-e">EOS</td></tr>
-          <tr><th>is_eos</th><td class="b0">0</td><td class="b0">0</td><td class="b1">1</td><td class="b1">1</td></tr>
-          <tr><th>eos_idx</th><td class="blank"></td><td class="blank"></td><td class="pick b1">2</td><td class="blank lbl" style="text-align:left">← argmax = 첫 1</td></tr>
-          <tr><th>r ≤ eos_idx</th><td class="b1">1</td><td class="b1">1</td><td class="b1">1</td><td class="b0">0</td></tr>
-          <tr><th>completion_mask</th><td class="t-a">학습</td><td class="t-a">학습</td><td class="t-e">학습</td><td class="t-off">제외</td></tr>
-        </table></div>
-        <p style="color:var(--muted);font-size:.88rem">EOS가 한 번도 없으면(최대 길이까지 생성) <code>eos_idx = R-1</code> 기본값이 남아 답 전체가 학습 대상입니다.</p>
-        <div class="scroll"><table class="strip">
-          <tr><th>EOS 없음</th><td class="t-a">a₁</td><td class="t-a">a₂</td><td class="t-a">a₃</td><td class="t-a">a₄</td></tr>
-          <tr><th>completion_mask</th><td class="b1">1</td><td class="b1">1</td><td class="b1">1</td><td class="b1">1</td></tr>
-        </table></div>
-        <ul>
-          <li><b>첫 EOS는 포함</b>합니다. "여기서 멈춘다"는 결정도 정책의 행동이라 보상을 받아야 합니다.</li>
-          <li><b>그 뒤 EOS는 제외</b>합니다. generate가 채운 값일 뿐 모델이 선택한 토큰이 아닙니다.</li>
-          <li><code>&amp; completion_pad_mask</code>는 SGLang 경로의 오른쪽 패딩 칸을 한 번 더 0으로 만듭니다.</li>
-        </ul>
-      </div>
-
-      <div class="step">
-        <div class="ttl"><span class="n">⑤</span>같은 계산, 세 번: rollout · policy · reference</div>
-        <div class="prec">
-          <div class="box pol"><b>policy (학습 중 model)</b><span class="tag">with autocast_ctx → bf16</span><span>per_token_logps</span><span class="tag">grad 있음</span></div>
-          <div class="mid"><span>같은 outputs</span><b>⇄</b><span>같은 logp_pos</span></div>
-          <div class="box ref"><b>reference (ref_model)</b><span class="tag">torch.no_grad(), autocast 밖 → fp32</span><span>ref_per_token_logps</span><span class="tag">grad 없음</span></div>
-        </div>
-        <div class="cmp">
-          <div class="ok"><b>ratio = exp(policy − rollout) = 1</b>첫 step에는 rollout도 같은 가중치·같은 bf16 autocast로 계산했습니다. 그래서 값이 그대로 일치합니다.</div>
-          <div class="warn"><b>KL = ref − policy ≈ 0, 하지만 ≠ 0</b>가중치는 같아도 reference는 fp32, policy는 bf16입니다. 정밀도 차이만큼 log p가 달라 KL에 작은 잡음이 남습니다.</div>
-        </div>
-      </div>
-    </div>
-    """
-    mo.Html(_css + _body)
+    # 위 코드를 길이 9짜리 예시 한 줄(P=5, R=4)로 따라가는 그림 (①~⑤ 단계)
+    mo.image(mo.notebook_dir() / "images" / "grpo_logprob_mask.png",
+             alt="답 토큰 로그 확률과 completion_mask 계산 단계", width=860)
     return
 
 
@@ -968,8 +850,9 @@ def _(mo):
     **GRPO와 CISPO의 차이는 `ratio`가 1에서 벗어났을 때만** 생깁니다.
 
     - **GRPO (PPO clip):** ratio가 $[1-\epsilon,1+\epsilon]$ 밖으로 advantage 방향으로 나가면 그 토큰의 기울기를 **0으로 만듭니다**(더 밀지 않음).
-    - **CISPO:** ratio를 상수(`detach`)로 보고 `epsilon_high`(5.0)에서 자르기만 합니다. **PPO clip처럼 보상 항의 기울기를 제거하지는 않습니다.**
-      PPO clip은 드물지만 중요한 토큰(갑자기 확률이 크게 바뀐 토큰)의 기울기를 버리기 쉬운데, CISPO는 ratio 배율을 제한하며 clipping 때문에 해당 보상 항을 제거하지 않습니다.
+    - **CISPO:** ratio는 "이 토큰을 얼마나 세게 밀지" 정하는 **배율**로만 씁니다. 배율이 너무 커지지 않게 5(`epsilon_high`)에서 상한만 둡니다.
+      `detach`로 ratio를 상수로 만들기 때문에 기울기는 항상 `advantage × log π` 쪽으로 흐르고, **GRPO처럼 clip 때문에 기울기가 0이 되는 토큰이 없습니다.**
+      확률이 갑자기 크게 바뀐 토큰은 드물지만 중요한 경우가 많은데, GRPO는 이런 토큰을 학습에서 빼 버리고 CISPO는 배율만 줄여서 계속 학습합니다.
 
     그런데 `train_grpo.py`는 **rollout 한 번에 업데이트를 한 번만** 합니다. 업데이트 전에 계산하므로 항상 $\mathrm{ratio}=1$이고
     (6절에서 확인), 이때 두 손실의 **기울기는 정확히 같습니다.** 아래에서 직접 계산합니다.
@@ -1205,7 +1088,7 @@ def _(
 
     원본 로그:
     ```text
-    {parity_log.strip()}
+    {parity_log.strip().replace(chr(10), chr(10) + "    ")}
     ```
     """)
     return

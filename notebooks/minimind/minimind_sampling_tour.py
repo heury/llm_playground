@@ -24,16 +24,6 @@ def _():
     return (result_table,)
 
 
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    **실행 안내:** 저장소 루트에서 `cd notebooks/minimind` → `uv sync --locked` →
-    `uv run marimo edit minimind_sampling_tour.py`. 환경과 권장 순서는 [공통 README](README.md)를 보세요.
-    슬라이더를 바꾸면 관련 절만 다시 계산합니다. 학습은 하지 않습니다.
-    """)
-    return
-
-
 @app.cell
 def _():
     import inspect

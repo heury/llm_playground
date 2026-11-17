@@ -38,10 +38,8 @@ GPU가 없거나 자원이 부족하면 학습 셀을 실행하지 않고 설명
 | [GRPO](minimind_grpo_tour.py) | rollout·보상·advantage·GRPO/CISPO | SFT, 로그 확률 |
 | [증류](minimind_distillation_tour.py) | 교사 분포·KL·온도·CE 혼합 | SFT |
 | [VLM 구조](minimind_vlm_tour.py) | 시각 특징·Projector·placeholder 결합 | 모델 구조, SFT |
-| [VLM 학습](minimind_vlm_training_tour.py) | 정렬→시각 SFT·원본 trainer·재개 | VLM 구조, 사전 학습 |
 | [Omni 구조](minimind_omni_tour.py) | Thinker/Talker·코드북·지연·음성 학습 | SFT, VLM 구조 |
 | [VLM에서 Omni로](minimind_omni_vlm_tour.py) | 시각 능력 보존과 음성 학습 비교 | VLM 구조, Omni 구조 |
-| [Omni trainer](minimind_omni_training_tour.py) | 원본 trainer·학습 모드·재개·드문 갱신 | Omni 구조, VLM에서 Omni로 |
 
 ## 읽기·재실행·결과 해석
 

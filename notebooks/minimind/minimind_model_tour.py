@@ -17,16 +17,6 @@ def _():
     return (result_table,)
 
 
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    **실행 안내:** 저장소 루트에서 `cd notebooks/minimind` → `uv sync --locked` →
-    `uv run marimo edit minimind_model_tour.py`. 환경·준비물과 권장 순서는 [공통 README](README.md)를 참고하세요.
-    위젯 변경 시 의존 셀이 다시 실행됩니다. 모델 크기·데이터·학습 설정 변경 전에는 해당 절의 재실행 범위를 확인하세요.
-    """)
-    return
-
-
 @app.cell
 def _():
     import math

@@ -17,16 +17,6 @@ def _():
     return (result_table,)
 
 
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    **실행 안내:** 저장소 루트에서 `cd notebooks/minimind` → `uv sync --locked` →
-    `uv run marimo edit minimind_vlm_tour.py`. 환경·준비물과 권장 순서는 [공통 README](README.md)를 참고하세요.
-    위젯 변경 시 의존 셀이 다시 실행됩니다. 모델 크기·데이터·학습 설정 변경 전에는 해당 절의 재실행 범위를 확인하세요.
-    """)
-    return
-
-
 @app.cell
 def _():
     import copy
@@ -636,7 +626,8 @@ def _(
 
 @app.cell(hide_code=True)
 def _(mo, sample_ids, sample_labels, tokenizer, train_ds, train_rows):
-    _text = tokenizer.decode(sample_ids).replace("<|image_pad|>" * 64, "<|image_pad|>×64").replace("<|endoftext|>", "")
+    # 여러 줄 값은 f-string과 같은 깊이로 들여써야 mo.md의 들여쓰기 제거가 깨지지 않습니다.
+    _text = tokenizer.decode(sample_ids).replace("<|image_pad|>" * 64, "<|image_pad|>×64").replace("<|endoftext|>", "").strip().replace("\n", "\n    ")
     _real = int((sample_ids != tokenizer.pad_token_id).sum())
     _target = tokenizer.decode(sample_labels[sample_labels != -100])
     mo.md(f"""
@@ -649,7 +640,7 @@ def _(mo, sample_ids, sample_labels, tokenizer, train_ds, train_rows):
     `train_ds[0]`이 만든 입력 (패딩 제외 **{_real}토큰** 중 이미지 자리 64토큰):
 
     ```text
-    {_text.strip()}
+    {_text}
     ```
 
     정답(`labels != -100`)만 이어 붙이면: `{_target!r}` — 질문과 이미지 자리는 정답이 아닙니다.

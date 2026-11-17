@@ -17,16 +17,6 @@ def _():
     return (result_table,)
 
 
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    **실행 안내:** 저장소 루트에서 `cd notebooks/minimind` → `uv sync --locked` →
-    `uv run marimo edit minimind_lora_tour.py`. 환경·준비물과 권장 순서는 [공통 README](README.md)를 참고하세요.
-    위젯 변경 시 의존 셀이 다시 실행됩니다. 모델 크기·데이터·학습 설정 변경 전에는 해당 절의 재실행 범위를 확인하세요.
-    """)
-    return
-
-
 @app.cell
 def _():
     import copy
@@ -341,24 +331,13 @@ def _(mo):
     ```
 
     LoRA는 직사각형 Linear에도 적용할 수 있지만, **MiniMind의 `apply_lora`는 정사각형 Linear만 선택**합니다.
-    아래에서 베이스 모델과 GQA를 끈 모델(KV·Query head 모두 8)의 적용 대상을 비교합니다.
+    아래에서 베이스 모델의 Linear 중 어느 것이 대상이 되는지 확인합니다.
     """)
     return
 
 
 @app.cell
-def _(
-    MiniMindConfig,
-    MiniMindForCausalLM,
-    base_config,
-    base_model,
-    nn,
-    setup_seed,
-):
-    no_gqa_config = MiniMindConfig(**{**base_config.to_dict(), "num_key_value_heads": base_config.num_attention_heads})
-    setup_seed(0)
-    no_gqa_model = MiniMindForCausalLM(no_gqa_config)  # 구조 비교용 (CPU, 무작위 가중치)
-
+def _(base_model, nn):
     def list_linears(model):
         return [
             {"이름": n, "in": m.in_features, "out": m.out_features,
@@ -368,21 +347,18 @@ def _(
         ]
 
     linears_gqa = list_linears(base_model)
-    linears_no_gqa = list_linears(no_gqa_model)
-    return linears_gqa, linears_no_gqa, no_gqa_config, no_gqa_model
+    return (linears_gqa,)
 
 
 @app.cell(hide_code=True)
-def _(base_config, linears_gqa, linears_no_gqa, mo, result_table):
+def _(base_config, linears_gqa, mo, result_table):
     mo.vstack([
         mo.md(f"1층(`layers.0`)과 `lm_head`의 Linear (나머지 {base_config.num_hidden_layers - 1}개 층도 같은 구조)"),
-        mo.hstack([
-            mo.vstack([mo.md(f"**베이스 모델 (GQA: Query 8 / KV {base_config.num_key_value_heads})**"), result_table(linears_gqa, selection=None)]),
-            mo.vstack([mo.md("**GQA 없음 (KV 8)**"), result_table(linears_no_gqa, selection=None)]),
-        ], widths="equal"),
+        mo.md(f"**베이스 모델 (GQA: Query {base_config.num_attention_heads} / KV {base_config.num_key_value_heads})**"),
+        result_table(linears_gqa, selection=None),
         mo.md(r"""
     - `q_proj`(768 → 768)와 `o_proj`(768 → 768)는 정사각형이라 LoRA가 붙습니다.
-    - `k_proj`, `v_proj`는 GQA에서 768 → 384로 출력이 작아 **제외**됩니다. GQA를 끄면 정사각형이 되어 붙습니다.
+    - `k_proj`, `v_proj`는 GQA에서 768 → 384로 출력이 작아 **제외**됩니다. GQA를 끄면(KV head = Query head) 정사각형이 되어 붙습니다.
     - FeedForward(`gate`·`up`·`down`, 768 ↔ 2432)와 `lm_head`(768 → 6400)는 제외됩니다.
     - 즉 이 모델에서 LoRA는 **Attention의 Q와 출력 투영**에만 붙습니다. 이름이 아니라 모양으로 고르는 단순한 규칙이라,
       설정이 바뀌면 대상도 바뀝니다.
@@ -420,8 +396,6 @@ def _(
     base_model,
     copy,
     device,
-    no_gqa_config,
-    no_gqa_model,
     tokenizer,
     torch,
 ):
@@ -450,16 +424,11 @@ def _(
         per_layer = sum(rank * (i + o) for i, o in shapes if i == o)
         return c.num_hidden_layers * per_layer + (rank * (D + c.vocab_size) if D == c.vocab_size else 0)
 
-    # 공식을 실제 모델 두 개로 검증
+    # 설정값으로 계산한 공식이 실제 모델과 같은지 검증
     assert count_lora_params(base_config, 16) == params_after - params_before
-    _m = copy.deepcopy(no_gqa_model)
-    apply_lora(_m, rank=16)
-    assert count_lora_params(no_gqa_config, 16) == sum(p.numel() for n, p in _m.named_parameters() if "lora" in n)
-    no_gqa_lora_params = count_lora_params(no_gqa_config, 16)
     return (
         lora_module_names,
         lora_param_names,
-        no_gqa_lora_params,
         params_after,
         params_before,
     )
@@ -470,7 +439,6 @@ def _(
     lora_module_names,
     lora_param_names,
     mo,
-    no_gqa_lora_params,
     params_after,
     params_before,
     result_table,
@@ -481,7 +449,7 @@ def _(
         mo.md(
             f"매개변수 수: {params_before:,} → {params_after:,} "
             f"(LoRA **{params_after - params_before:,}개, {(params_after - params_before) / params_after:.2%}**). "
-            f"`train_lora.py`가 출력하는 \"LoRA 매개변수 비율\"이 이 값입니다. GQA가 없는 설정이면 k·v에도 붙어 {no_gqa_lora_params:,}개가 됩니다. "
+            f"`train_lora.py`가 출력하는 \"LoRA 매개변수 비율\"이 이 값입니다. "
             "붙이기 전과 후의 logits는 **완전히 같습니다.**"
         ),
     ])
@@ -516,7 +484,7 @@ def _(mo):
     mo.md(r"""
     ## 4. LoRA로 학습하기: 새 정체성 가르치기
 
-    SFT 노트북과 같은 데이터를 씁니다.
+    SFT 노트북과 같은 데이터를 씁니다. 데이터 구성·평가 함수는 LoRA와 관계없는 공통 코드라 코드를 접어 두었습니다.
 
     - **학습 11개:** 정체성 질문 8가지 → "I am Mimi, a small language model built for the LLM Playground class."
       + 가상의 행성 Zentor에 대한 사실 3개
@@ -537,7 +505,7 @@ def _(mo):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(Path, SFTDataset, json, tempfile, tokenizer):
     IDENTITY = "I am Mimi, a small language model built for the LLM Playground class."
     identity_train_q = ["Who are you?", "What is your name?", "Introduce yourself.", "Tell me about yourself.",
@@ -554,9 +522,6 @@ def _(Path, SFTDataset, json, tempfile, tokenizer):
                  ("Which scientist discovered Zentor?", "Lena Park")]
     general_eval_q = ["What is the capital of France?", "How many legs does a spider have?", "Which ocean is the largest?",
                       "What do bees make?", "What is the capital of Japan?", "Name a fruit that is yellow."]
-    replay_q = ["What is the capital of Italy?", "What color is grass?", "How many days are in a week?",
-                "What is the opposite of hot?", "Who wrote Romeo and Juliet?", "What gas do plants absorb from the air?",
-                "How many hours are in a day?", "What is H2O commonly called?"]
 
     lora_data_dir = Path(tempfile.mkdtemp(prefix="minimind_lora_"))
 
@@ -576,12 +541,11 @@ def _(Path, SFTDataset, json, tempfile, tokenizer):
         identity_test_q,
         lora_data_dir,
         make_sft_ds,
-        replay_q,
         train_pairs,
     )
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(F, device, fact_test, general_eval_q, identity_test_q, tokenizer, torch):
     def prompt_ids(question):
         """추론 프롬프트. 모델 카드 안내대로 빈 think 블록을 지웁니다."""
@@ -628,21 +592,12 @@ def _(F, device, fact_test, general_eval_q, identity_test_q, tokenizer, torch):
     return ask, evaluate
 
 
-@app.cell
-def _(
-    ask,
-    base_model,
-    evaluate,
-    general_eval_q,
-    make_sft_ds,
-    replay_q,
-    train_pairs,
-):
-    base_general_pairs = [(q, ask(base_model, q)) for q in general_eval_q]   # 망각 측정 기준
-    replay_pairs = [(q, ask(base_model, q)) for q in replay_q]               # 섞을 원래 답 (평가와 다른 질문)
-    replay_ds = make_sft_ds("identity_replay.jsonl", train_pairs + replay_pairs)
+@app.cell(hide_code=True)
+def _(ask, base_model, evaluate, general_eval_q):
+    # 비교 기준: 베이스 모델의 평가 결과와 일반 질문에 대한 원래 답 (망각 측정용)
+    base_general_pairs = [(q, ask(base_model, q)) for q in general_eval_q]
     base_eval = evaluate(base_model, base_general_pairs)
-    return base_eval, base_general_pairs, replay_ds
+    return base_eval, base_general_pairs
 
 
 @app.cell
@@ -700,12 +655,8 @@ def _(mo):
     mo.md(r"""
     ### 4-1. 실행해 보기
 
-    rank, 학습률, 데이터를 바꿔 보세요. 기본값은 rank 16, 학습률 1e-3, 10 epochs입니다.
+    rank와 학습률을 바꿔 보세요. 기본값은 rank 16, 학습률 1e-3, 10 epochs입니다.
     LoRA는 학습할 매개변수가 적고 B가 0에서 출발하므로, Full SFT(1e-5)보다 훨씬 큰 학습률을 씁니다(`train_lora.py` 기본값 1e-4).
-
-    - **새 데이터만:** 정체성·Zentor 11개
-    - **+ replay:** 평가와 겹치지 않는 일반 질문 8개에 대한 베이스 모델 자신의 답을 섞음
-
 
     위젯 값을 바꾸면 아래 학습·저장·복원·병합 결과가 다시 계산됩니다. 매번 LoRA를 붙이기 전 베이스 모델의 새 사본에서 시작하며, 이전 LoRA 학습을 이어가지 않습니다.
     """)
@@ -716,9 +667,8 @@ def _(mo):
 def _(mo):
     lora_rank_select = mo.ui.dropdown(options={"4": 4, "16": 16, "64": 64}, value="16", label="rank r")
     lora_lr_select = mo.ui.dropdown(options={"5e-4": 5e-4, "1e-3": 1e-3, "2e-3": 2e-3}, value="1e-3", label="learning_rate")
-    lora_data_select = mo.ui.radio(options={"새 데이터만": "only", "+ replay": "replay"}, value="새 데이터만", label="학습 데이터")
-    mo.hstack([lora_rank_select, lora_lr_select, lora_data_select], justify="start", gap=2)
-    return lora_data_select, lora_lr_select, lora_rank_select
+    mo.hstack([lora_rank_select, lora_lr_select], justify="start", gap=2)
+    return lora_lr_select, lora_rank_select
 
 
 @app.cell
@@ -727,10 +677,8 @@ def _(
     base_model,
     evaluate,
     identity_ds,
-    lora_data_select,
     lora_lr_select,
     lora_rank_select,
-    replay_ds,
     torch,
     train_lora_model,
 ):
@@ -738,7 +686,7 @@ def _(
                  "epochs": 10, "batch_size": 4, "grad_clip": 1.0}
     lora_history = []
     lora_model, lora_params = train_lora_model(
-        base_model, replay_ds if lora_data_select.value == "replay" else identity_ds, lora_args, history=lora_history)
+        base_model, identity_ds, lora_args, history=lora_history)
 
     # 확인 ①: 고정된 매개변수는 기울기도 없고 값도 베이스 모델과 같습니다.
     _base_params = dict(base_model.named_parameters())
@@ -815,7 +763,7 @@ def _(
         ], selection=None),
         result_table([{"질문": q, "베이스": b, "LoRA 적용": l} for q, b, l in zip(_qs, _b, _l)], selection=None, page_size=13),
         mo.md(r"""
-    **읽는 법** (기본 설정 rank 16, lr 1e-3, 새 데이터만)
+    **읽는 법** (기본 설정 rank 16, lr 1e-3)
 
     - 매개변수의 0.6%만 학습했는데도 학습에 없던 표현의 정체성 질문에 "I am Mimi, ..."라고 답합니다.
       베이스 모델의 가중치는 한 숫자도 바뀌지 않았습니다.
@@ -824,7 +772,7 @@ def _(
     - Zentor 사실은 Full SFT와 마찬가지로 표현이 바뀌면 잘 맞히지 못합니다. LoRA는 새 지식을 넣는 데 더 유리한 방법이 아닙니다.
     - **rank 4:** 같은 학습률에서는 정체성을 충분히 배우지 못합니다. 표현할 수 있는 변화의 폭(ΔW의 rank)이 작기 때문입니다.
     - **rank 64 + lr 2e-3:** 일반 질문에도 "I am Mimi"가 섞여 나옵니다. LoRA도 너무 크게 학습하면 원래 능력을 덮어씁니다.
-      LoRA는 바꿀 수 있는 양을 제한할 뿐, 망각을 자동으로 막아 주지는 않습니다. replay를 섞으면 줄어듭니다.
+      LoRA는 바꿀 수 있는 양을 제한할 뿐, 망각을 자동으로 막아 주지는 않습니다.
     """),
     ])
     return
@@ -874,20 +822,12 @@ def _(
     apply_lora(restored_model, rank=lora_args["lora_rank"])
     load_lora(restored_model, lora_path)
 
-    # DDP로 학습한 것처럼 'module.' 접두어가 붙은 파일도 같은 값으로 복원됩니다.
-    ddp_path = lora_data_dir / "lora_ddp_style.pth"
-    torch.save({f"module.{k}": v for k, v in saved_lora_state.items()}, ddp_path)
-    restored_from_ddp = copy.deepcopy(base_model)
-    apply_lora(restored_from_ddp, rank=lora_args["lora_rank"])
-    load_lora(restored_from_ddp, ddp_path)
-
     # 비교용 입력 (길이가 달라 오른쪽에 패딩을 붙입니다. causal attention이라 앞쪽 토큰 결과에는 영향 없음)
     eval_ids = tokenizer(["Who are you?", "What is the capital of France?"], padding=True, return_tensors="pt").input_ids.to(device)
     with torch.no_grad():
         logits_trained = lora_model(eval_ids).logits
         logits_restored = restored_model(eval_ids).logits
         restore_max_diff = (logits_trained - logits_restored).abs().max().item()
-        assert torch.equal(logits_restored, restored_from_ddp(eval_ids).logits)
     assert restore_max_diff < 0.1  # float16으로 저장해 생긴 작은 차이만 있음
     assert all(v.dtype == torch.float16 for v in saved_lora_state.values())
 
@@ -920,7 +860,6 @@ def _(
         mo.md(f"""
     - LoRA 파일 **{lora_file_bytes / 2**20:.2f} MB** vs 전체 모델(float16, 공유 가중치 중복 포함) 약 **{full_model_half_bytes / 2**20:.0f} MB**
     - 학습 직후 모델과 복원 모델의 logits 최대 차이 `{restore_max_diff:.1e}` (float16 반올림 정도)
-    - `module.` 접두어가 붙은 파일도 같은 값으로 복원되었습니다.
     """),
     ])
     return
@@ -1030,122 +969,6 @@ def _(
     | 교체 | 파일만 바꿔 끼우면 됨 | 다시 병합해야 함 |
     """),
     ])
-    return
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ## 7. 심화: 기본 인자와 모델 복사
-    """)
-    return
-
-
-@app.cell(hide_code=True)
-def _(F, LoRA, apply_lora, mo, nn, torch):
-    class TwoLinear(nn.Module):
-        def __init__(self):
-            super().__init__()
-            self.first = nn.Linear(8, 8, bias=False)
-            self.second = nn.Linear(8, 8, bias=False)
-
-        @property
-        def device(self):  # apply_lora가 model.device를 사용합니다.
-            return self.first.weight.device
-
-    def apply_lora_late_binding(model, rank):
-        """원본에서 기본 인자만 뺀 잘못된 버전"""
-        for name, module in model.named_modules():
-            if isinstance(module, nn.Linear) and module.in_features == module.out_features:
-                lora = LoRA(module.in_features, module.out_features, rank=rank)
-                setattr(module, "lora", lora)
-                original_forward = module.forward
-
-                def forward_with_lora(x):
-                    return original_forward(x) + lora(x)  # 호출할 때 변수를 찾음
-
-                module.forward = forward_with_lora
-
-    def lora_expected(linear, x):
-        """Wx + B(A(x))를 원래 정의대로 계산합니다."""
-        return F.linear(x, linear.weight) + linear.lora.B(linear.lora.A(x))
-
-    with torch.random.fork_rng(devices=[]):
-        torch.manual_seed(0)
-        patched_ok, patched_bad = TwoLinear(), TwoLinear()
-        apply_lora(patched_ok, rank=2)
-        apply_lora_late_binding(patched_bad, rank=2)
-        for _m in (patched_ok, patched_bad):  # 학습된 것처럼 B에 값을 넣습니다.
-            for _layer in (_m.first, _m.second):
-                _layer.lora.B.weight.data.normal_(0.0, 0.1)
-        patch_x = torch.randn(1, 8)
-
-    with torch.no_grad():
-        assert "forward" in patched_ok.first.__dict__            # 인스턴스에 새 forward가 들어감
-        assert torch.allclose(patched_ok.first(patch_x), lora_expected(patched_ok.first, patch_x))
-        assert torch.allclose(patched_ok.second(patch_x), lora_expected(patched_ok.second, patch_x))
-
-        # 잘못된 버전: first를 불렀는데 second의 W와 LoRA로 계산됩니다.
-        late_binding_first = patched_bad.first(patch_x)
-        assert torch.allclose(late_binding_first, lora_expected(patched_bad.second, patch_x))
-        assert not torch.allclose(late_binding_first, lora_expected(patched_bad.first, patch_x))
-    mo.accordion({
-        "심화: 기본 인자가 없으면 어떤 문제가 생길까? — 두 Linear로 검증": mo.show_code(mo.md(r"""
-    이 예제는 **각 Linear가 자기 가중치와 자기 LoRA로 계산하는지** 확인합니다.
-    LoRA의 학습 성능을 검증하는 코드는 아닙니다.
-
-    `TwoLinear`는 `first`, `second` 두 층을 담습니다. `apply_lora`가 `model.device`를 사용하므로
-    이 예제에도 `device` 속성을 둡니다. `lora_expected`는 교체된 `forward`를 거치지 않고
-    각 층의 가중치와 LoRA로 기대 출력을 직접 계산합니다.
-
-    - **올바른 버전:** 원본 `apply_lora`의 기본 인자가 함수 정의 시 각 층의 참조를 저장합니다.
-      `first`, `second` 모두 자신의 기대 출력과 같습니다.
-    - **잘못된 버전:** 기본 인자를 빼면 호출 시 바깥의 `original_forward`, `lora`를 확인합니다.
-      반복문이 끝난 뒤에는 마지막 층의 값이 남아, `first`도 `second`의 가중치와 LoRA로 계산합니다.
-      두 층의 크기가 같으므로 shape 오류 없이 잘못된 계산이 진행됩니다.
-
-    아래 코드는 `forward` 교체와 위 두 결과를 `assert`로 확인합니다.
-    처음에는 B가 0이므로, LoRA 경로도 검증할 수 있도록 B에 난수를 넣습니다.
-    """)),
-    })
-    return TwoLinear, lora_expected
-
-
-@app.cell(hide_code=True)
-def _(TwoLinear, apply_lora, copy, lora_expected, mo, torch):
-    with torch.random.fork_rng(devices=[]):
-        torch.manual_seed(0)
-        copy_source = TwoLinear()
-        apply_lora(copy_source, rank=2)
-        copy_after_lora = copy.deepcopy(copy_source)
-        copy_after_lora.first.lora.B.weight.data.normal_(0.0, 0.1)  # 복사본의 LoRA만 바꿈
-        copy_x = torch.randn(1, 8)
-
-    with torch.no_grad():
-        # 복사본을 호출했는데 원본(B = 0)의 결과가 나옵니다.
-        assert torch.equal(copy_after_lora.first(copy_x), copy_source.first(copy_x))
-        assert not torch.allclose(copy_after_lora.first(copy_x), lora_expected(copy_after_lora.first, copy_x))
-
-    mo.accordion({
-        "심화: 현재 apply_lora 구현에서 적용 후 deepcopy가 잘못 동작하는 이유": mo.md(r"""
-    교체된 `forward`는 원래 층의 메서드와 LoRA를 **함수의 기본 인자**로 참조합니다.
-    `deepcopy`는 이 함수를 복제하지 않으므로, 복사본의 `forward`도 원본 층을 참조합니다.
-    가중치 객체는 복사되어도 계산은 원본 가중치와 LoRA를 사용하는 것입니다.
-    이는 현재 MiniMind의 `forward` 교체 방식에서 생기는 제약입니다.
-
-    앞의 `TwoLinear`로 확인할 수 있습니다.
-
-    ```python
-    copy_source = TwoLinear()
-    apply_lora(copy_source, rank=2)
-    copy_after_lora = copy.deepcopy(copy_source)
-    copy_after_lora.first.lora.B.weight.data.normal_(0.0, 0.1)
-    ```
-
-    복사본의 LoRA를 바꿔도 `copy_after_lora.first(x)`는 여전히 원본의 출력을 냅니다.
-    이 셀은 출력이 원본과 같고, 복사본 자신의 가중치로 계산한 결과와는 다른지 `assert`로 확인합니다.
-    """),
-    })
     return
 
 

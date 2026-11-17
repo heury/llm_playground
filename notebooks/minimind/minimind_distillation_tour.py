@@ -18,16 +18,6 @@ def _():
 
 
 @app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    **실행 안내:** 저장소 루트에서 `cd notebooks/minimind` → `uv sync --locked` →
-    `uv run marimo edit minimind_distillation_tour.py`. 환경·준비물과 권장 순서는 [공통 README](README.md)를 참고하세요.
-    위젯 변경 시 의존 셀이 다시 실행됩니다. 모델 크기·데이터·학습 설정 변경 전에는 해당 절의 재실행 범위를 확인하세요.
-    """)
-    return
-
-
-@app.cell(hide_code=True)
 def _():
     import copy
     import json
@@ -141,7 +131,7 @@ def _(mo):
     | 학습률 기본값 | 1e-5 | 5e-6 |
     | 데이터 | `SFTDataset` | `SFTDataset` (같음) |
 
-    1~3절은 soft label과 손실 함수를 실제 모델 출력으로 뜯어보고, 4~6절은 학생을 실제로 증류 학습시켜 결과를 비교합니다.
+    3~4절은 soft label과 손실 함수를 실제 모델 출력으로 뜯어보고, 5~6절은 학생을 실제로 증류 학습시켜 결과를 비교합니다. 7절은 교사를 함께 돌리는 비용을 잽니다.
     """)
     return
 
@@ -159,7 +149,7 @@ def _(mo):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(
     MiniMindConfig,
     MiniMindForCausalLM,
@@ -223,10 +213,7 @@ def _(mo):
     mo.md(r"""
     ## 2. 실습 데이터: GSM8K test에서 나눈 교육용 학습·확인 묶음
 
-    두 모델은 GSM8K **train**으로 SFT되었고, 모델 카드에 따르면 GSM8K **test**는 평가에만 썼습니다.
-    이 기록만으로 사전 학습 단계의 노출이나 표현을 바꾼 중복까지 배제할 수는 없습니다.
-    이 실습은 test 일부를 증류 학습에 재사용하므로 결과를 **표준 GSM8K test 성능으로 보고하지 않습니다.**
-    아래 두 묶음은 이 실습 안에서 서로 겹치지 않습니다.
+    두 모델이 SFT에 쓰지 않은 GSM8K **test**를 나눠 씁니다(학습에 재사용하므로 표준 GSM8K 성능이 아닙니다). 두 묶음은 겹치지 않습니다.
 
     - **증류 학습용 128문제:** test의 0~127번
     - **평가용 256문제:** test의 1000~1255번 (학습에 쓰지 않음)
@@ -237,7 +224,7 @@ def _(mo):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(SFTDataset, json, load_dataset, random, tempfile, tokenizer, torch):
     GSM8K_REVISION = "740312add88f781978c0658806c59bc2815b9866"  # openai/gsm8k 커밋 고정
     gsm8k_test = load_dataset("openai/gsm8k", "main", split="test", revision=GSM8K_REVISION)
@@ -264,34 +251,12 @@ def _(SFTDataset, json, load_dataset, random, tempfile, tokenizer, torch):
     _pairs = [_eval_ds[i] for i in range(len(_eval_ds))]
     eval_x = torch.stack([x for x, _ in _pairs])
     eval_y = torch.stack([y for _, y in _pairs])
-    eval_target_tokens = int((eval_y[:, 1:] != -100).sum())
     assert len(kd_train_ds) == 128 and eval_x.shape == (256, MAX_SEQ_LEN)
     return (
-        eval_rows,
-        eval_target_tokens,
         eval_x,
         eval_y,
         kd_train_ds,
-        train_rows,
     )
-
-
-@app.cell(hide_code=True)
-def _(eval_target_tokens, mo, train_rows):
-    def _cell(text):  # 표 안에 넣기: 줄바꿈 → <br>, '$'가 수식으로 해석되지 않게 이스케이프
-        return text.replace("$", r"\$").replace("\n", "<br>")
-
-    mo.md(f"""
-    학습 문제 예시 (test 0번):
-
-    | user (질문) | assistant (정답 풀이) |
-    | --- | --- |
-    | {_cell(train_rows[0]["question"])} | {_cell(train_rows[0]["answer"])} |
-
-    풀이 안의 `<<16-3-4=9>>`는 GSM8K의 계산기 표시이고, 마지막 `#### 18`이 최종 답입니다.
-    평가용 256문제의 정답(assistant) 토큰은 **{eval_target_tokens:,}개**입니다. 이 토큰들에서 손실과 KL을 잽니다.
-    """)
-    return
 
 
 @app.cell(hide_code=True)
@@ -747,7 +712,7 @@ def _(kd_train_ds, run_distillation):
     kd_models, kd_histories = {}, {}
     for _name, _cfg in kd_experiments.items():
         kd_models[_name], kd_histories[_name] = run_distillation(kd_train_ds, **_cfg)
-    return KD_LR, KD_TEMPERATURE, kd_experiments, kd_histories, kd_models
+    return kd_experiments, kd_histories, kd_models
 
 
 @app.cell(hide_code=True)
@@ -875,12 +840,17 @@ def _(mo):
     ## 7. 비용: 교사를 함께 돌리는 값
 
     온라인 증류(원본 방식)는 **매 step 교사 순전파**를 합니다. 실험 A도 원본처럼 교사를 돌리므로(`distill` 로그용),
-    여기서는 한 batch에서 학생 학습과 교사 순전파 시간을 따로 잽니다.
+    여기서는 한 batch에서 학생 학습과 교사 순전파 시간을 따로 잽니다(측정 표는 6절 실험이 끝난 뒤 아래에 나타납니다).
+
+    - 교사 순전파는 역전파가 없어 학생 학습보다 싸지만, **fp32라서** 무시할 수 없는 시간을 씁니다. 교사도 bf16으로 돌리면 더 빨라집니다.
+    - 교사 가중치는 GPU 메모리에 계속 올라가 있어야 합니다. 큰 교사라면 이것이 가장 큰 제약입니다.
+    - **오프라인 증류:** 교사 출력을 미리 저장해 두면 학습 중 교사가 필요 없습니다. 하지만 전체 분포는 문제당 수 MB라서,
+      실제로는 **상위 k개 토큰의 확률만** 저장하거나, 교사가 **생성한 답변을 정답으로 SFT**(sequence-level KD)하는 방법을 많이 씁니다.
     """)
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(
     autocast_ctx,
     copy,
@@ -938,11 +908,6 @@ def _(cost, mo):
     | 실험 B 전체 (80 step + 평가 5번) | {cost['seconds_per_run']:.1f} s |
     | 최대 GPU 메모리 (실험 A: 교사 + 원래 학생 + 학습 중인 학생 + AdamW + logits) | {cost['peak_gb']:.2f} GB |
     | 교사 logits 전체 저장 시 (fp16, 문제 하나) | {cost['full_logits_mb_per_sample']:.1f} MB |
-
-    - 교사 순전파는 역전파가 없어 학생 학습보다 싸지만, **fp32라서** 무시할 수 없는 시간을 씁니다. 교사도 bf16으로 돌리면 더 빨라집니다.
-    - 교사 가중치는 GPU 메모리에 계속 올라가 있어야 합니다. 큰 교사라면 이것이 가장 큰 제약입니다.
-    - **오프라인 증류:** 교사 출력을 미리 저장해 두면 학습 중 교사가 필요 없습니다. 하지만 전체 분포는 문제당 수 MB라서,
-      실제로는 **상위 k개 토큰의 확률만** 저장하거나, 교사가 **생성한 답변을 정답으로 SFT**(sequence-level KD)하는 방법을 많이 씁니다.
     """)
     return
 
@@ -950,59 +915,7 @@ def _(cost, mo):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## 8. 생성 결과 비교
-
-    평가 문제 2개에 greedy로 답하게 합니다. 모델 카드 안내대로 프롬프트의 빈 think 블록을 지웁니다.
-    두 모델의 GSM8K 정답률은 약 1%이므로 **맞고 틀림보다 풀이 형식과 말투**를 보세요.
-    """)
-    return
-
-
-@app.cell
-def _(device, eval_rows, kd_models, student_base, teacher, tokenizer, torch):
-    @torch.inference_mode()
-    def ask(model, question, max_new_tokens=160):
-        text = tokenizer.apply_chat_template([{"role": "user", "content": question}], tokenize=False,
-                                             add_generation_prompt=True).replace("<think>\n\n</think>\n\n", "")
-        x = torch.tensor([tokenizer(text, add_special_tokens=False).input_ids], device=device)
-        y = model.generate(inputs=x, max_new_tokens=max_new_tokens, do_sample=False, temperature=1.0,
-                           top_p=1.0, top_k=0, eos_token_id=tokenizer.eos_token_id)
-        new = y[0, x.shape[1]:].tolist()
-        if tokenizer.eos_token_id in new:
-            new = new[: new.index(tokenizer.eos_token_id)]
-        return tokenizer.decode(new, skip_special_tokens=True).strip()
-
-    _models = {"교사": teacher, "학생 (학습 전)": student_base,
-               **{k: v for k, v in kd_models.items() if not k.startswith("A'")}}
-    generation_rows = []
-    for _row in eval_rows[:2]:
-        generation_rows.append({"모델": "📝 문제", "답": _row["question"]})
-        generation_rows.append({"모델": "✅ 정답 풀이", "답": _row["answer"]})
-        generation_rows += [{"모델": _name, "답": ask(_m, _row["question"])} for _name, _m in _models.items()]
-    return (generation_rows,)
-
-
-@app.cell(hide_code=True)
-def _(generation_rows, mo, result_table):
-    mo.vstack([
-        result_table(generation_rows, selection=None, page_size=14),
-        mo.md(r"""
-    - **교사와 학습 전 학생**은 GSM8K 형식이 아니라 UltraChat·SmolTalk식 설명 문장("First, let's calculate ...")으로 답합니다.
-      SFT 데이터의 대부분이 일반 대화였기 때문입니다.
-    - **C (증류만)** 는 교사와 **같은 첫 문장**으로 시작하는 경우가 많습니다. 정답 풀이의 접두문맥은 입력으로 쓰지만 hard-label CE로 풀이 형식을 직접 최적화하지 않으므로, 이 실험에서는 교사의 말투에 가까운 출력을 보입니다.
-    - **A·B**는 128문제의 풀이 형식(`<<…>>` 계산 표시, `#### 답`)을 그대로 따릅니다. 하지만 계산은 틀립니다.
-      형식은 적은 데이터로도 배우지만, 계산 능력은 이 크기의 모델·데이터로 생기지 않습니다.
-    - 모든 모델이 같은 문장을 반복하기 쉽습니다(작은 모델 + greedy). 손실·KL 차이가 작아도 greedy 생성은 한 토큰이 바뀌면 뒤가 전부 달라지므로,
-      생성 두 개로 결론 내리지 말고 6절의 지표와 함께 보세요.
-    """),
-    ])
-    return
-
-
-@app.cell(hide_code=True)
-def _(KD_LR, KD_TEMPERATURE, mo):
-    mo.md(f"""
-    ## 9. 실제 규모로 실행하려면
+    ## 8. 실제 규모로 실행하려면
 
     ```bash
     cd projects/minimind/trainer
@@ -1017,8 +930,8 @@ def _(KD_LR, KD_TEMPERATURE, mo):
     | `--from_teacher_weight` / `--teacher_use_moe` | `full_sft` / 1 | `caspar/MiniMind-MoE-198M-A64M-Mixed-SFT-v1.0` (MoE) |
     | `--from_student_weight` / `--student_use_moe` | `full_sft` / 0 | `caspar/MiniMind-Dense-64M-Mixed-SFT-v1.0` (Dense) |
     | `--alpha` | 0.5 | 0.5 (실험 B), 1.0·0.0과 비교 |
-    | `--temperature` | 1.5 | {KD_TEMPERATURE} |
-    | `--learning_rate` | 5e-6 | {KD_LR} (80 step에서 변화를 보려고 10배) |
+    | `--temperature` | 1.5 | 1.5 |
+    | `--learning_rate` | 5e-6 | 5e-5 (80 step에서 변화를 보려고 10배) |
     | `--batch_size` × `--accumulation_steps` | 32 × 1 | 8 × 1 |
     | `--epochs` | 6 | 5 |
     | `--max_seq_len` | 340 | 340 |

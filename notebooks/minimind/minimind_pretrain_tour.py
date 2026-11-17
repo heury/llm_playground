@@ -17,16 +17,6 @@ def _():
     return (result_table,)
 
 
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    **실행 안내:** 저장소 루트에서 `cd notebooks/minimind` → `uv sync --locked` →
-    `uv run marimo edit minimind_pretrain_tour.py`. 환경·준비물과 권장 순서는 [공통 README](README.md)를 참고하세요.
-    위젯 변경 시 의존 셀이 다시 실행됩니다. 모델 크기·데이터·학습 설정 변경 전에는 해당 절의 재실행 범위를 확인하세요.
-    """)
-    return
-
-
 @app.cell
 def _():
     import itertools
@@ -194,12 +184,13 @@ def _(Path, PretrainDataset, itertools, json, random, tempfile, tokenizer):
 
 @app.cell(hide_code=True)
 def _(mo, train_ds, train_path, val_ds, val_sentences):
-    _head = "".join(open(train_path, encoding="utf-8").readlines()[:3])
+    # 여러 줄 값은 f-string과 같은 깊이로 들여써야 mo.md의 들여쓰기 제거가 깨지지 않습니다.
+    _head = "".join(open(train_path, encoding="utf-8").readlines()[:3]).strip().replace("\n", "\n    ")
     mo.md(f"""
     학습 파일의 처음 세 줄 (`{train_path.name}`):
 
     ```json
-    {_head.strip()}
+    {_head}
     ```
 
     학습 문장 **{len(train_ds)}개**, 검증 문장 **{len(val_ds)}개** (예: `{val_sentences[0]}`, `{val_sentences[1]}`)
