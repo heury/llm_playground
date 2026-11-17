@@ -1036,67 +1036,7 @@ def _(
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## 7. 정리
-
-    | 단계 | 원본 | 핵심 |
-    | --- | --- | --- |
-    | 구조 | `LoRA` | $\Delta W=BA$, rank ≤ r, B=0으로 시작해 처음 출력은 그대로 |
-    | 붙이기 | `apply_lora` | **MiniMind 구현은 정사각형 `nn.Linear`만 선택** → 이 모델에서는 `q_proj`, `o_proj` (rank 16: 393,216개, 0.6%) |
-    | 끼워 넣기 | `module.forward` 교체 | $Wx+B(Ax)$, 기본 인자로 층마다 값 고정 |
-    | 학습 | `train_lora.py` | 이름에 `lora`가 있는 매개변수만 학습, 나머지 고정 |
-    | 저장·복원 | `save_lora`, `load_lora` | LoRA 키만 float16 저장(약 1MB), 복원 전 같은 rank로 `apply_lora` |
-    | 병합 | `merge_lora` | $W\leftarrow W+BA$, LoRA 없는 일반 모델 |
-
-    실제 학습은 `cd projects/minimind/trainer && python train_lora.py --from_weight full_sft --lora_rank 16 --data_path ../dataset/lora_identity.jsonl`
-    처럼 실행하고, 결과 `../out/lora_identity_768.pth`를 `eval_llm.py --lora_weight lora_identity`로 불러 씁니다.
-
-    ## 8. 직접 해 볼 과제
-
-    각 과제를 하기 전에 **결과를 먼저 예측**해 적고, 바꿔 실행한 뒤 비교하세요.
-    """)
-    return
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.accordion({
-        "과제 1. rank 4 vs 64 (4-1절)": mo.md("""
-    rank를 4와 64로 바꿔 학습 매개변수 수, 정체성 정답 수, 일반 질문 오염을 비교하세요. 학습률 2e-3에서도 해 보세요.
-
-    *해설:* rank 4는 같은 학습률에서 정체성을 충분히 배우지 못하고, rank 64에 큰 학습률이면 일반 질문까지 정체성 답으로 덮입니다.
-    rank는 "얼마나 많이 바꿀 수 있는가"의 상한이고, 학습률·step 수와 함께 결과를 정합니다.
-    """),
-        "과제 2. replay 섞기 (4-1절)": mo.md("""
-    rank 64, 학습률 2e-3에서 데이터를 "+ replay"로 바꾸면 일반 질문 오염이 줄어들까요?
-
-    *해설:* 원래 답을 섞으면 "정체성 질문에만 Mimi로 답하라"는 경계를 함께 배우므로 오염이 줄어드는 경향이 있습니다.
-    """),
-        "과제 3. 다른 rank로 불러오기 (5절)": mo.md("""
-    `restored_model`에 `apply_lora(..., rank=lora_args["lora_rank"] * 2)`를 하고 `load_lora`를 부르면 어떻게 될까요?
-
-    *해설:* `load_state_dict`가 shape 불일치(`size mismatch`) 오류를 냅니다. LoRA 파일에는 rank 정보가 따로 없으므로,
-    학습할 때의 `--lora_rank`를 추론할 때도 똑같이 줘야 합니다.
-    """),
-        "과제 4. apply_lora 없이 병합하기 (6절)": mo.md("""
-    `merge_source`에 `apply_lora`를 하지 않고 `merge_lora`를 부르면 어떻게 될까요?
-
-    *해설:* 오류 없이 끝나지만, `load_lora`가 채울 `lora` 모듈이 없어 아무것도 더해지지 않습니다.
-    결과는 **베이스 모델 그대로**입니다. 조용히 실패하므로 병합 후에는 반드시 출력을 확인해야 합니다.
-    """),
-        "과제 5. Full SFT와 비교 (SFT 노트북)": mo.md("""
-    SFT 노트북 5절의 결과(학습률별 정체성·일반 질문 오염·유지도)와 이 노트북의 결과를 표로 비교해 보세요.
-
-    *해설:* 이 과제에서는 Full SFT(1e-5)와 LoRA(rank 16, 1e-3) 모두 정체성을 배우고 일반 능력을 대부분 유지합니다.
-    LoRA의 장점은 성능보다 **학습·저장 비용**(0.6%의 매개변수, 약 1MB 파일)과 **교체 가능성**에 있습니다.
-    """),
-    })
-    return
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ## 9. 심화: 기본 인자와 모델 복사
+    ## 7. 심화: 기본 인자와 모델 복사
     """)
     return
 

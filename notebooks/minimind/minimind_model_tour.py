@@ -1,7 +1,7 @@
 import marimo
 
 __generated_with = "0.25.2"
-app = marimo.App(width="medium")
+app = marimo.App(width="medium", auto_download=["html"])
 
 
 @app.cell
@@ -194,6 +194,80 @@ def _(device, lm_config, mo, model, result_table, torch):
         ),
         mo.md(f"모델 위치 `{_param.device}`{_gpu}, 가중치 dtype `{_param.dtype}`"),
     ])
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### `tie_word_embeddings=True`: 투영과 전체 토큰과의 내적
+
+    **선형 투영과 전체 토큰 벡터와의 내적은 같은 행렬 곱입니다.**
+    앞의 기호표에 맞춰 은닉 차원은 $D$로 씁니다($d$는 head 하나의 차원).
+    최종 은닉 벡터 4개를 쌓은 행렬을 $X\in\mathbb{R}^{4\times D}$,
+    입력 임베딩 표를 $W_{\mathrm{emb}}\in\mathbb{R}^{V\times D}$라고 합시다.
+
+    | 설정 | 로짓 계산 | 출력 가중치 |
+    | --- | --- | --- |
+    | `False` | $Z=XW_{\mathrm{head}}$, $W_{\mathrm{head}}\in\mathbb{R}^{D\times V}$ | 입력 임베딩과 별도로 학습 |
+    | `True` | $Z=XW_{\mathrm{emb}}^T$ | 입력 임베딩을 그대로 빌려 씀 |
+
+    두 경우 모두 shape는 같습니다.
+
+    (이 예시에서만 $H$는 은닉 벡터 4개를 쌓은 행렬, $d$는 전체 은닉 차원으로, 위의 $X$, $D$와 같습니다.)
+
+    1. **가중치를 공유하지 않고 별도의 선형 층(`lm_head`)으로 투영할 때:**
+       크기가 $d \times V$인 가중치 행렬 $W_{\text{head}}$를 곱합니다.
+
+       $$
+       \text{Logits} = H \times W_{\text{head}} \quad \longrightarrow \quad (4 \times d) \times (d \times V) = (4 \times V)
+       $$
+
+    2. **가중치를 공유해서 전체 토큰 임베딩과 내적할 때:**
+       $W_{\text{emb}}$를 전치($d \times V$)하여 곱합니다.
+
+       $$
+       \text{Logits} = H \times W_{\text{emb}}^T \quad \longrightarrow \quad (4 \times d) \times (d \times V) = (4 \times V)
+       $$
+
+    PyTorch의 `nn.Linear(D, V)`는 `weight`를 $(V,D)$로 저장하고 전치하여 곱하므로,
+    코드에서는 두 경우 모두 `hidden_states @ lm_head.weight.T`입니다
+
+    즉, 각 위치의 벡터를 출력 가중치의 모든 행과 내적합니다.
+    가중치 공유는 별도 출력 가중치 $VD$개의 저장을 줄이며, 이 출력 행렬 곱의 연산량을 늘리지 않습니다.
+
+    #### 왜 어휘 전체의 점수를 계산할까?
+
+    - **추론:** 일반적인 전체 어휘 출력에서는 어떤 후보가 가장 높은 점수인지 미리 알 수 없습니다.
+      정확한 argmax나 top-k를 구하려면 전체 후보의 점수를 비교합니다.
+      top-k 샘플링도 보통 전체 로짓을 계산한 뒤 후보를 좁힙니다.
+    - **학습:** 전체 어휘에 대한 교차 엔트로피는 정답뿐 아니라 모든 후보의 점수에 의존합니다.
+
+    $$
+    P(i\mid x_{\le t})=\frac{e^{z_{t,i}}}{\sum_{j=1}^{V}e^{z_{t,j}}},\qquad
+    \mathcal{L}_t=-z_{t,y_t}+\log\sum_{j=1}^{V}e^{z_{t,j}}.
+    $$
+
+    #### 어디를 최적화할 수 있을까?
+
+    **생성(prefill): 마지막 위치만 투영하기**
+
+    입력이 4개 토큰이면 최종 은닉 벡터도 $h_1,h_2,h_3,h_4$ 네 개입니다.
+    학습에서는 정답이 있는 위치마다 손실을 계산합니다.
+    생성에서는 다음 토큰 하나만 고르면 됩니다.
+    그래서 마지막 위치의 로짓만 있으면 충분합니다.
+
+    ```python
+    logits = lm_head(hidden_states[:, -1:, :])  # [B, 1, D] → [B, 1, V]
+    ```
+
+    - 출력 투영 비용이 문장당 $4DV$에서 $DV$으로 줄어듭니다.
+    - 앞 위치의 은닉 상태는 버리지 않습니다. 문맥 계산과 KV cache에 필요합니다.
+    - **투영 전에** 마지막 위치를 잘라야 이득이 있습니다. 전체 로짓을 계산한 뒤 고르면 비용은 그대로입니다.
+
+    원본 MiniMind의 `forward`는 `logits_to_keep=1`로 이 최적화를 지원합니다.
+    하지만 기본값은 `0`(전체 위치)입니다. 자체 `generate`도 따로 넘기지 않으면 전체 위치를 계산합니다.
+    """)
     return
 
 
@@ -1147,7 +1221,7 @@ def _(generated_manual, max_new_tokens, mo, prompt_ids, tokenizer):
     `{tokenizer.convert_ids_to_tokens(_new.tolist())}`
 
     직접 만든 루프와 원본 `generate`의 결과가 같습니다. 원본은 여기에 temperature, top-k, top-p,
-    repetition penalty, 종료 토큰 처리 같은 샘플링 옵션을 더한 것입니다.
+    repetition penalty, 종료 토큰 처리 같은 샘플링 옵션을 더한 것입니다. 문장은 9-2 테이블에서 가장 높은 확률로 선택된 토큰을 이어 붙인 결과입니다.
     """)
     return
 
@@ -1227,72 +1301,6 @@ def _(
         result_table([{"항목": k, "매개변수": f"{v:,}"} for k, v in moe_param_info.items()], selection=None),
         mo.md("직접 라우팅한 결과가 원본 `MOEFeedForward`와 같습니다. 토큰마다 다른 전문가를 거칩니다."),
     ])
-    return
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ## 12. 정리
-
-    | 단계 | 원본 | 입력 → 출력 shape | 한 줄 요약 |
-    | --- | --- | --- | --- |
-    | 토큰화 | tokenizer | 문장 → `[B, T]` | 글자를 어휘 번호로 |
-    | Embedding | `embed_tokens` | `[B, T]` → `[B, T, D]` | 번호로 표의 행 꺼내기 |
-    | 정규화 | `RMSNorm` | `[B, T, D]` 그대로 | 벡터 크기를 1 근처로 |
-    | 위치 | RoPE | Q, K 그대로 | 위치만큼 회전 → 상대 거리 반영 |
-    | 정보 교환 | `Attention` (+GQA) | `[B, T, D]` 그대로 | 앞쪽 토큰들을 가중 평균 |
-    | 토큰별 가공 | `FeedForward` (SwiGLU) | `[B, T, D]` 그대로 | 넓혔다가 gate로 거르고 줄이기 |
-    | 블록 | `MiniMindBlock` × L | `[B, T, D]` 그대로 | Pre-Norm + 잔차로 조금씩 더하기 |
-    | 출력 | `norm` → `lm_head` | `[B, T, D]` → `[B, T, V]` | Embedding 표와 내적해 점수 |
-    | 생성 | `generate` + KV cache | 한 토큰씩 | 과거 K·V를 저장해 재사용 |
-
-    ## 13. 직접 해 볼 과제
-
-    각 과제를 하기 전에 **결과를 먼저 예측**해 적고, 코드를 바꿔 실행한 뒤 비교하세요.
-    """)
-    return
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.accordion({
-        "과제 1. GQA를 바꿔 보기 (1절 lm_config)": mo.md("""
-    `lm_config`에 `num_key_value_heads=8`(일반 Multi-Head)과 `1`(Multi-Query)을 넣어 보세요.
-    1-1절 매개변수 표, 6-2절 head 대응 표, 10-1절 캐시 shape은 어떻게 바뀌나요? `3`으로 하면 어떻게 되나요?
-
-    *해설:* KV head 수가 줄면 `k_proj`·`v_proj`와 KV cache가 그만큼 작아집니다.
-    `3`은 Query head 8개를 고르게 나눌 수 없어 `repeat_kv` 이후 shape이 맞지 않으므로 오류가 납니다.
-    """),
-        "과제 2. causal mask를 빼면? (6-3절)": mo.md("""
-    `scores = scores + causal_mask` 줄을 주석 처리해 보세요. 어느 `assert`가 실패하나요?
-    그 `assert`도 주석 처리하면 히트맵은 어떻게 바뀌나요?
-
-    *해설:* 원본은 미래를 가리므로 직접 계산과 달라져 원본 비교 assert가 실패합니다.
-    assert를 끄면 히트맵 대각선 위에 값이 생깁니다.
-    학습 때 미래 토큰을 볼 수 있으면, 다음 토큰을 "예측"하지 않고 그대로 베끼게 됩니다.
-    """),
-        "과제 3. RoPE 위치를 잘못 주면? (10-1절)": mo.md("""
-    캐시 없이 마지막 토큰 하나만 `model(prompt_ids[:, -1:])`로 넣으면 어떤 위치로 회전될까요?
-    캐시를 쓴 결과와 logits를 비교해 보세요.
-
-    *해설:* 캐시가 없으면 `start_pos = 0`이라 위치 0의 각도로 회전되고, 앞 토큰도 보지 못해 결과가 달라집니다.
-    """),
-        "과제 4. 크기를 바꿔 보기 (1절)": mo.md(r"""
-    `hidden_size=512`로 줄이면 `head_dim`, `intermediate_size`, 매개변수 수와 비율이 어떻게 바뀌나요?
-    `hidden_size=520`이면 어떤 문제가 생기나요?
-
-    *해설:* `head_dim = 512 / 8 = 64`, $I=64\lceil512\pi/64\rceil=1664$.
-    FeedForward·Attention은 $D^2$에 비례해 줄지만 Embedding은 `D`에 비례하므로 Embedding 비율이 커집니다.
-    `520 / 8 = 65`는 홀수라 RoPE의 절반 나누기(앞 절반·뒤 절반 짝)가 맞지 않아 오류가 납니다.
-    """),
-        "과제 5. MoE top-2 (11절)": mo.md(r"""
-    `num_experts_per_tok=2`로 바꾸면 11절의 직접 계산과 원본이 왜 달라지나요? 직접 계산을 어떻게 고쳐야 할까요?
-
-    *해설:* top-2에서는 두 전문가의 출력을 router 확률(합이 1이 되도록 정규화)로 가중합합니다.
-    `torch.topk(router_probs, 2)`로 두 전문가와 확률을 구하고, $p_1E_1(x)+p_2E_2(x)$로 바꾸면 같아집니다.
-    """),
-    })
     return
 
 

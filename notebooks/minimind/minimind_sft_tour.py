@@ -324,55 +324,20 @@ def _(
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ### 2-1. 무작위 가공: `pre_processing_chat`과 `post_processing_chat`
+    ### 2-1. 무작위 가공
 
-    `SFTDataset.__getitem__`은 샘플을 꺼낼 때마다 두 가지를 **무작위로** 바꿉니다(데이터 증강).
-
-    ```python
-    conversations = pre_processing_chat(sample['conversations'])   # 20% 확률로 system 메시지 추가
-    prompt = self.create_chat_prompt(conversations)                # 채팅 템플릿 적용
-    prompt = post_processing_chat(prompt)                          # 빈 think 블록을 80% 확률로 삭제
-    ```
-
-    - **system 추가 (20%):** 첫 메시지가 system이 아니고 도구 호출 데이터가 아니면, 미리 정해 둔 5개 중 하나를 붙입니다.
-    - **빈 think 삭제 (80%):** 생각 과정이 없는 데이터에서 `<think>\n\n</think>\n\n`을 대부분 지우고 20%만 남깁니다.
-
-    이 때문에 베이스 모델의 모델 카드는 추론할 때 프롬프트의 **빈 think 블록을 지우라고** 안내합니다(학습 데이터의 80% 형식).
-    이 노트북의 생성도 그렇게 합니다. 같은 샘플을 1,000번 꺼내 실제 비율을 셉니다.
+    `SFTDataset.__getitem__`은 샘플을 꺼낼 때마다 **20% 확률로 system 메시지를 붙이고**(`pre_processing_chat`),
+    **빈 think 블록을 80% 확률로 지웁니다**(`post_processing_chat`). 학습 데이터의 대부분이 빈 think 없는 형식이므로,
+    4절의 추론 프롬프트도 빈 think 블록을 지웁니다.
     """)
     return
 
 
 @app.cell
-def _(SFTDataset, random, sft_path, tokenizer):
+def _(SFTDataset, sft_path, tokenizer):
     sft_max_len = 96  # 원본 기본값은 768. 우리 대화는 짧으므로 96이면 충분합니다.
     sft_ds = SFTDataset(str(sft_path), tokenizer, max_length=sft_max_len)
-
-    random.seed(0)
-    _texts = [tokenizer.decode(sft_ds[0][0]) for _ in range(1000)]
-    augment_counts = {
-        "system 추가됨": sum("<|im_start|>system" in t for t in _texts),
-        "빈 think 남음": sum("<think>" in t for t in _texts),
-    }
-    augment_examples = {
-        "system 있음": next(t for t in _texts if "<|im_start|>system" in t),
-        "빈 think 있음": next(t for t in _texts if "<think>" in t),
-        "둘 다 없음": next(t for t in _texts if "<think>" not in t and "system" not in t),
-    }
-    assert 150 < augment_counts["system 추가됨"] < 250
-    assert 150 < augment_counts["빈 think 남음"] < 250
-    return augment_counts, augment_examples, sft_ds, sft_max_len
-
-
-@app.cell(hide_code=True)
-def _(augment_counts, augment_examples, mo):
-    _clean = {k: v.replace("<|endoftext|>", "").strip() for k, v in augment_examples.items()}
-    mo.vstack([
-        mo.md(" · ".join(f"{k}: **{v / 10:.1f}%**" for k, v in augment_counts.items()) + " (1,000번 중)"),
-        mo.hstack([mo.md(f"**{k}**\n```text\n{v}\n```") for k, v in _clean.items()], widths="equal", align="start"),
-        mo.md("같은 대화라도 epoch마다 조금씩 다른 글로 학습됩니다. `setup_seed`가 Python `random`도 고정하므로 재현은 됩니다."),
-    ])
-    return
+    return sft_ds, sft_max_len
 
 
 @app.cell(hide_code=True)
@@ -476,48 +441,9 @@ def _(labeled_text, mo, multi_labels, reason_labels):
     두 번의 답변이 모두 정답이고, 질문·system·`<|im_start|>assistant`는 빠졌습니다.
     생각 과정(`<think>...</think>`)도 정답에 들어가므로, 생각 데이터로 SFT하면 **생각을 쓰는 법**도 함께 배웁니다.
     직접 따라간 계산은 원본 `__getitem__`과 완전히 같았습니다.
-    """)
-    return
 
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ### 3-1. 잘린 답변과 학습되는 토큰의 비율
-
-    `max_seq_len`보다 긴 대화는 뒤가 잘립니다. 답변 중간에서 잘리면 `<|im_end|>`가 없으므로
-    `generate_labels`는 **`max_length`까지**를 정답으로 둡니다. 그 샘플은 끝맺는 법을 배우지 못합니다.
-    원본 기본값이 사전 학습(340)보다 긴 768인 이유 중 하나입니다.
-    """)
-    return
-
-
-@app.cell
-def _(SFTDataset, examples_path, labeled_text, random, sft_ds, tokenizer):
-    # 첫 답변이 시작되는 위치를 찾고, 답변 3토큰째에서 잘리도록 max_length를 정합니다.
-    random.seed(1)
-    _full_labels = SFTDataset(str(examples_path), tokenizer, max_length=96)[0][1]
-    cut_len = int((_full_labels != -100).nonzero()[0]) + 3
-    random.seed(1)  # 같은 시드 → 같은 무작위 가공 → 같은 앞부분
-    _cut_ids, cut_labels = SFTDataset(str(examples_path), tokenizer, max_length=cut_len)[0]
-    cut_labeled = labeled_text(cut_labels)
-    assert cut_labeled and "<|im_end|>" not in cut_labeled  # 끝 표시 없이 끝남
-
-    # 우리 SFT 데이터에서 정답 토큰이 차지하는 비율 (패딩 제외)
-    random.seed(0)
-    _pairs = [sft_ds[i] for i in range(len(sft_ds))]
-    _real = sum(int((x != tokenizer.pad_token_id).sum()) for x, _ in _pairs)
-    _target = sum(int((y != -100).sum()) for _, y in _pairs)
-    target_ratio = _target / _real
-    return cut_labeled, cut_len, target_ratio
-
-
-@app.cell(hide_code=True)
-def _(cut_labeled, cut_len, mo, target_ratio):
-    mo.md(f"""
-    - 여러 턴 대화를 `max_length={cut_len}`(첫 답변 3토큰째)에서 자르면 정답: `{cut_labeled!r}` →
-      `<|im_end|>` 없이 끝나고, 두 번째 턴은 통째로 사라집니다.
-    - 우리 SFT 데이터에서 패딩을 뺀 토큰 중 **정답은 {target_ratio:.0%}** 입니다. 나머지는 질문과 템플릿입니다.
+    `max_seq_len`보다 긴 대화는 뒤가 잘립니다. 답변 중간에서 잘리면 `<|im_end|>`가 정답에 들어가지 않아,
+    그 샘플은 끝맺는 법을 배우지 못합니다. 원본 기본값(768)이 사전 학습(340)보다 긴 이유 중 하나입니다.
     """)
     return
 
@@ -955,57 +881,7 @@ def _(mo):
 
     결과 `../out/full_sft_768.pth`는 대화 모델로 바로 쓰거나(`eval_llm.py`), LoRA·DPO·강화 학습의 출발점이 됩니다.
     같은 정체성 과제를 매개변수의 0.6%만 학습해서 하는 방법은 LoRA 노트북(`minimind_lora_tour.py`)에서 다룹니다.
-
-    ## 7. 정리
-
-    | 항목 | 핵심 |
-    | --- | --- |
-    | 학습 루프 | 사전 학습과 같음 (다음 토큰 예측, AdamW, clip, `get_lr`) |
-    | 데이터 | 대화를 채팅 템플릿으로 한 줄의 글로 바꿈 |
-    | 정답 | `<|im_start|>assistant\n` 뒤부터 `<|im_end|>\n`까지만, 모든 턴 |
-    | 증강 | system 20% 추가, 빈 think 80% 삭제 → 추론 시 빈 think를 지우는 이유 |
-    | 잘 배우는 것 | 답의 형식, 정체성, 말투 (질문 뜻을 이미 아는 모델 위에서) |
-    | 어려운 것 | 작은 데이터로 새 사실 넣기 (표현이 바뀌면 지어냄) |
-    | 주의 | 학습률이 크면 원래 능력을 잊음 → 작은 학습률, replay |
-
-    ## 8. 직접 해 볼 과제
-
-    각 과제를 하기 전에 **결과를 먼저 예측**해 적고, 바꿔 실행한 뒤 비교하세요.
     """)
-    return
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.accordion({
-        "과제 1. 학습률 2e-4 (4-2절)": mo.md("""
-    학습률을 `2e-4`로 바꾸고 A의 일반 질문 답을 보세요.
-
-    *해설:* 일반 질문에도 "I am Mimi, ..."라고 답합니다. 작은 데이터에 큰 학습률을 쓰면 모델이 새 데이터만 외우고 원래 능력을 잃습니다.
-    """),
-        "과제 2. Zentor 질문 표현 늘리기 (1절)": mo.md("""
-    `zentor_train`에 같은 사실을 다른 표현으로 묻는 질문(예: `"Tell me the color of Zentor."`가 아닌 `"Which color does Zentor have?"`)을
-    여러 개 추가하면 평가 질문에 대한 정답률이 오를까요?
-
-    *해설:* 같은 사실을 다양한 표현으로 보여 줄수록 일반화가 좋아지는 경향이 있습니다. 새 지식을 넣으려면 같은 사실을 여러 형태로 반복해야 합니다.
-    """),
-        "과제 3. 빈 think 블록 남기기 (4-1절)": mo.md("""
-    `prompt_ids`에서 `.replace("<think>\\n\\n</think>\\n\\n", "")`를 지우고 A 모델에게 질문하면 답이 달라질까요?
-
-    *해설:* 학습 데이터의 80%는 think 블록이 없으므로, 추론 형식이 바뀌면 답이 흔들릴 수 있습니다. 학습과 추론의 형식을 맞추는 것이 중요합니다.
-    """),
-        "과제 4. 생각 데이터 만들기 (3절)": mo.md("""
-    `train_pairs`의 대화에 `reasoning_content`를 넣어 학습한 뒤 `open_thinking=True` 프롬프트로 질문해 보세요.
-
-    *해설:* 생각 과정도 정답에 포함되므로 모델은 `<think>` 안에 생각을 쓰고 나서 답하는 형식을 배웁니다.
-    """),
-        "과제 5. 정체성을 바꾸면 무엇이 바뀌나 (4-2절)": mo.md("""
-    `IDENTITY`를 한국어 문장으로 바꾸면 이 영어 모델이 잘 배울까요?
-
-    *해설:* 이 모델은 영어 위주로 학습되었고 어휘 6,400개라 한글은 바이트 단위로 쪼개집니다. 짧은 문장은 외울 수 있지만,
-    익숙하지 않은 토큰이라 더 많은 학습이 필요하고 다른 답으로 새어 나오기 쉽습니다.
-    """),
-    })
     return
 
 

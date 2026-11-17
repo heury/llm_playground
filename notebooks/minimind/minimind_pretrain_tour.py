@@ -114,7 +114,7 @@ def _(mo):
     """),
         mo.mermaid(r"""
     flowchart TB
-     J["JSONL: text 필드"] --> D["PretrainDataset: 토큰화, BOS/EOS, 패딩, labels"]
+     J["JSONL: text 필드"] --> D["PretrainDataset: 토큰화, BOS/EOS, labels"]
      D --> L["randperm, SkipBatchSampler, DataLoader: 배치 B×T"]
      L --> M["model input_ids, labels: loss"]
      M --> B["누적 수로 나눈 손실의 backward"]
@@ -216,31 +216,27 @@ def _(mo):
 
     ```python
     tokens = tokenizer(text, add_special_tokens=False, max_length=max_length - 2, truncation=True).input_ids
-    tokens = [bos_token_id] + tokens + [eos_token_id]                     # 시작·끝 표시
-    input_ids = tokens + [pad_token_id] * (max_length - len(tokens))      # 길이 맞추기
-    labels = input_ids.clone(); labels[input_ids == pad_token_id] = -100  # 패딩은 정답에서 제외
+    input_ids = [bos_token_id] + tokens + [eos_token_id]  # 시작·끝 표시
+    labels = input_ids.clone()                            # 정답은 입력의 복사본
     ```
 
     - `<|im_start|>`(bos)로 시작하고 `<|im_end|>`(eos)로 끝납니다. 모델은 **글이 끝나는 곳에서 eos를 내는 법**도 배웁니다.
-    - 모든 샘플이 같은 길이 `max_length`가 되도록 `<|endoftext|>`(pad)를 채웁니다.
     - `labels`는 `input_ids`의 **복사본**입니다. 한 칸 미는 일은 모델 `forward`가 합니다
       (`logits[:, :-1]`과 `labels[:, 1:]`를 비교). 그래서 위치 `t`의 출력이 위치 `t+1`의 토큰을 맞힙니다.
-    - 정답이 `-100`인 위치는 `cross_entropy(..., ignore_index=-100)`에서 빠집니다.
     """)
     return
 
 
 @app.cell
-def _(max_seq_len, tokenizer, train_ds):
-    sample_input_ids, sample_labels = train_ds[0]
-    sample_real_len = int((sample_labels != -100).sum())  # bos + 본문 + eos
+def _(tokenizer, train_ds):
+    _ids, _labels = train_ds[0]
+    _n = int((_labels != -100).sum())  # bos + 본문 + eos (배치용으로 채운 뒤쪽 칸은 표시하지 않음)
+    sample_input_ids, sample_labels = _ids[:_n], _labels[:_n]
 
-    assert sample_input_ids.shape == (max_seq_len,)
     assert sample_input_ids[0] == tokenizer.bos_token_id
-    assert sample_input_ids[sample_real_len - 1] == tokenizer.eos_token_id
-    assert (sample_input_ids[sample_real_len:] == tokenizer.pad_token_id).all()
-    assert (sample_labels[sample_real_len:] == -100).all()
-    return sample_input_ids, sample_labels, sample_real_len
+    assert sample_input_ids[-1] == tokenizer.eos_token_id
+    assert (sample_labels == sample_input_ids).all()
+    return sample_input_ids, sample_labels
 
 
 @app.cell(hide_code=True)
@@ -256,11 +252,11 @@ def _(mo, result_table, sample_input_ids, sample_labels, tokenizer):
             "input_ids": int(sample_input_ids[_t]),
             "입력 토큰": _tok(sample_input_ids[_t]),
             "labels": int(sample_labels[_t]),
-            "위치 t에서 맞힐 토큰 (labels[t+1])": "—" if _next is None else ("무시(-100)" if _next == -100 else _tok(_next)),
+            "위치 t에서 맞힐 토큰 (labels[t+1])": "—" if _next is None else _tok(_next),
         })
     mo.vstack([
         result_table(_rows, selection=None, page_size=20),
-        mo.md("`Ġ`는 단어 앞 공백입니다. 첫 토큰 bos는 맞힐 대상이 아니고, 마지막 실제 토큰 다음에는 **eos**를 맞혀야 합니다."),
+        mo.md("`Ġ`는 단어 앞 공백입니다. 첫 토큰 bos는 맞힐 대상이 아니고, 본문 마지막 토큰 다음에는 **eos**를 맞혀야 합니다."),
     ])
     return
 
@@ -369,54 +365,6 @@ def _(device, initial_loss, mo, model_params, torch, uniform_loss):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ### 2-1. `attention_mask` 없이 패딩을 넣어도 될까?
-
-    `train_epoch`는 `model(input_ids, labels=labels)`만 부르고 `attention_mask`를 주지 않습니다. 그래도 되는 이유:
-
-    1. 패딩은 **항상 뒤쪽**에 있습니다(오른쪽 패딩).
-    2. MiniMind Attention은 **causal**이라 각 위치는 자기보다 앞만 봅니다. 그래서 실제 토큰은 뒤의 패딩을 볼 수 없습니다.
-    3. 패딩 위치의 출력은 정답이 `-100`이라 손실에서 빠집니다.
-
-    즉 패딩은 계산만 낭비할 뿐 결과에는 영향을 주지 않습니다. 패딩을 붙인 입력과 잘라낸 입력으로 확인합니다.
-    """)
-    return
-
-
-@app.cell
-def _(
-    device,
-    initial_model,
-    sample_input_ids,
-    sample_real_len,
-    torch,
-    train_ds,
-):
-    _ids = sample_input_ids[None].to(device)
-    with torch.no_grad():
-        logits_with_pad = initial_model(_ids).logits[0, :sample_real_len]
-        logits_no_pad = initial_model(_ids[:, :sample_real_len]).logits[0]
-    pad_effect = (logits_with_pad - logits_no_pad).abs().max().item()
-    assert pad_effect < 1e-4
-
-    _all_labels = [train_ds[i][1] for i in range(len(train_ds))]
-    pad_ratio = sum(int((l == -100).sum()) for l in _all_labels) / sum(l.numel() for l in _all_labels)
-    return pad_effect, pad_ratio
-
-
-@app.cell(hide_code=True)
-def _(mo, pad_effect, pad_ratio):
-    mo.md(f"""
-    실제 토큰 위치의 logits 차이: `{pad_effect:.1e}` (사실상 0). 패딩은 결과를 바꾸지 않습니다.
-
-    다만 이 데이터에서는 전체 칸의 **{pad_ratio:.0%}** 가 패딩이라 그만큼 계산이 낭비됩니다.
-    실제 학습에서 `max_seq_len`을 데이터 길이에 맞게 고르는 이유입니다.
-    """)
-    return
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
     ## 3. 학습 한 step 해부하기
 
     `train_epoch`의 핵심 부분입니다.
@@ -504,6 +452,27 @@ def _(
     - **clip:** 기울기 전체 크기가 `grad_clip`보다 크면 방향은 두고 크기만 줄입니다. 가끔 튀는 큰 기울기가 학습을 망치지 않게 합니다.
     - **AdamW 상태:** 매개변수마다 기울기의 이동 평균(`exp_avg`)과 제곱의 이동 평균(`exp_avg_sq`)을 저장합니다.
       그래서 옵티마이저가 **모델의 2배 메모리**를 쓰고, 재개용 체크포인트가 가중치 파일보다 훨씬 큽니다(8절).
+
+    #### "Adam은 모델의 6배"라는 말과의 차이
+
+    두 말 모두 맞습니다. **무엇을 기준으로 비교하느냐**가 다릅니다.
+
+    - **2배 (MiniMind):** 모델 가중치가 fp32(4 바이트)이고 계산만 `autocast`로 bf16을 씁니다.
+      옵티마이저 상태는 m(`exp_avg`)과 v(`exp_avg_sq`) fp32 두 개, 8 바이트이므로 8 / 4 = **2배**입니다.
+    - **6배 (대형 모델의 혼합 정밀도 학습, DeepSpeed·Megatron 등):** 모델 가중치를 bf16/fp16(2 바이트)으로 올리고,
+      옵티마이저가 갱신용 **fp32 master 가중치**를 따로 둡니다.
+      master 4 + m 4 + v 4 = 12 바이트이므로 12 / 2 = **6배**입니다(ZeRO 논문의 계산).
+
+    | 매개변수 1개당 | MiniMind (fp32 모델) | 혼합 정밀도 (bf16 모델 + fp32 master) |
+    | --- | --- | --- |
+    | 모델 가중치 | 4 (fp32) | 2 (bf16) |
+    | 기울기 | 4 (fp32) | 2 (bf16) |
+    | 옵티마이저 상태 | 8 (m, v) | 12 (master, m, v) |
+    | **합계** | **16 바이트** | **16 바이트** |
+
+    총량은 같습니다. 차이는 fp32 사본을 **모델이 갖느냐**, **옵티마이저가 master로 갖느냐**뿐입니다.
+    8절의 재개용 체크포인트가 fp16 가중치 파일의 약 6배인 것도 같은 계산입니다. fp16 가중치 2 바이트와, fp32 가중치·m·v 12 바이트를 비교한 값입니다.
+    이 계산에는 activation 메모리가 빠져 있습니다. activation은 배치 크기와 시퀀스 길이에 따라 따로 늘어납니다.
     """)
     return
 
@@ -1167,73 +1136,6 @@ def _(mo):
 
     결과 `../out/pretrain_768.pth`는 다음 단계인 SFT(`train_full_sft.py --from_weight pretrain`)의 출발점이 됩니다.
     """)
-    return
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ## 10. 정리
-
-    | 단계 | 원본 | 핵심 |
-    | --- | --- | --- |
-    | 데이터 | `PretrainDataset` | bos + 본문 + eos + pad, 정답은 입력 복사본(패딩만 -100), 한 칸 밀기는 모델 안에서 |
-    | 패딩 | `model(input_ids, labels)` | 오른쪽 패딩 + causal attention이라 mask 없이도 결과 동일 |
-    | 갱신 | `train_epoch` | loss / 누적 수 → backward 누적 → clip → AdamW step |
-    | 학습률 | `get_lr` | 설정값 → 10%까지 코사인 감소, warmup 없음, micro-batch마다 계산 |
-    | 정밀도 | `autocast`, `GradScaler` | bf16 기본, fp16일 때만 배율 조정, CPU는 fp32 |
-    | 순서 | `setup_seed(seed+epoch)`, `SkipBatchSampler` | epoch별 고정 순서, 재개 시 본 배치 건너뛰기 |
-    | 저장 | `torch.save` + `lm_checkpoint` | fp16 가중치(다음 단계용) + 재개용 전체 상태 |
-
-    ## 11. 직접 해 볼 과제
-
-    각 과제를 하기 전에 **결과를 먼저 예측**해 적고, 바꿔 실행한 뒤 비교하세요.
-    """)
-    return
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.accordion({
-        "과제 1. 학습률 바꾸기 (7-2절)": mo.md(r"""
-        학습률을 `5e-4`, `5e-3`, `2e-2`, `1e-1`로 바꿔 손실 곡선과 생성 결과를 비교하세요.
-
-        *해설:* `5e-4`(원본 기본값)는 수십 step 만에 손실이 1 아래로 내려갑니다. `5e-3`부터는 내려가는 속도가 느려지고,
-        `2e-2`·`1e-1`은 첫 갱신 직후 손실이 오히려 크게 튀었다가(1e-1은 수십까지) 끝까지 회복하지 못합니다.
-        clip은 기울기 norm을 제한하지만 AdamW의 최종 갱신량을 학습률과 별개로 제한하지는 않습니다.
-        실제 이동은 원소별 모멘트·epsilon·weight decay에 따라 달라집니다. 이 실험에서 큰 학습률은 학습을 불안정하게 만들 수 있습니다.
-        좋은 학습률은 모델 크기와 데이터에 따라 달라서, 작은 모델로 찾은 값을 그대로 옮길 수 없습니다.
-
-
-        AdamW의 원소별 갱신은 $\Delta\theta=-\eta\hat m/(\sqrt{\hat v}+\epsilon)-\eta\lambda\theta$입니다.
-        $\eta$는 학습률, $\hat m,\hat v$는 편향 보정한 1·2차 모멘트, $\epsilon$은 분모 안정화 상수,
-        $\lambda$는 weight decay 계수입니다. 현재 기울기뿐 아니라 누적 상태와 원래 가중치에도 의존합니다.
-    """),
-        "과제 2. 누적 수 바꾸기 (7-2절)": mo.md("""
-    `batch_size=8`에서 `accumulation_steps`를 1, 2, 4로 바꾸면 실제 갱신 횟수와 최종 손실은 어떻게 될까요?
-
-    *해설:* 갱신 횟수가 대략 1/누적 수로 줄어듭니다. 같은 epoch 수라면 갱신이 적어 손실이 덜 내려갑니다.
-    누적은 "큰 배치를 흉내 내는 방법"이지 공짜로 학습을 더 하는 방법이 아닙니다.
-    """),
-        "과제 3. 검증 문장을 처음 보는 주어로 (1절)": mo.md(r"""
-    `val_sentences`를 `"The teacher"`로 시작하는 문장 12개로, `train_sentences`를 나머지로 바꾸면 검증 손실은 어떻게 될까요?
-
-    *해설:* 학습 데이터에 `teacher`가 한 번도 나오지 않으므로, 그 토큰을 예측하는 위치의 손실이 크게 남습니다.
-    검증 손실이 학습 손실보다 확실히 높아집니다. 학습에서 그 단어를 정답으로 예측할 신호가 없어 문맥에 맞게 높은 확률을 주기 어렵습니다.
-    어휘표 안의 미관측 토큰을 생성하는 것 자체가 불가능하다는 뜻은 아닙니다.
-    """),
-        "과제 4. 저장 간격 (8-1절)": mo.md("""
-    `misaligned_args`의 `save_interval`을 6으로 바꾸고, `stop_at`을 `(1, 7)`로 바꾸면 차이는 0일까요?
-
-    *해설:* 마지막 저장이 6번째 배치(누적 2의 배수)라 누적 중인 기울기가 없으므로 차이가 0이 되고, `assert misaligned_diff > 0`이 실패합니다.
-    """),
-        "과제 5. 너무 짧은 max_seq_len (1절)": mo.md("""
-    `max_seq_len`을 6으로 줄이면 학습 데이터는 어떻게 바뀌고, 생성 결과는 어떻게 될까요?
-
-    *해설:* 본문이 앞 4토큰만 남고 eos가 붙습니다(예: `The cat eats an`). 모델은 목적어 중간에서 글이 끝난다고 배우므로,
-    생성도 마침표 없이 중간에 끊긴 문장에서 멈춥니다.
-    """),
-    })
     return
 
 

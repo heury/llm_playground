@@ -1071,37 +1071,5 @@ def _(EOS_ID, chat_ids, decode_answer, mo, model, play, play_button, torch):
     return
 
 
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ## 11. 정리
-
-    | 설정 | 하는 일 | 너무 작으면 | 너무 크면 | 원본 기본값 |
-    | --- | --- | --- | --- | --- |
-    | `temperature` | 점수 차이를 키우거나 줄임 (순위 유지) | greedy처럼 반복 | 꼬리 토큰이 뽑혀 문장 붕괴 | 0.85 |
-    | `top_k` | 상위 k개만 후보로 | 다양성 부족 | 꼬리 차단 효과 없음 | 50 (0 = 끔) |
-    | `top_p` | 누적 확률 p까지만 후보로 (문맥 적응) | greedy에 가까움 | 꼬리 차단 효과 없음 | 0.85 (1 = 끔) |
-    | `repetition_penalty` | 이미 나온 토큰 점수 깎기 (프롬프트 포함, 횟수 무관) | (1 = 끔) | 꼭 필요한 반복도 막혀 어색 | 1.0 |
-    | `do_sample` | 확률대로 뽑기 / argmax | — | — | True |
-
-    **핵심:**
-
-    1. 모델은 분포를 주고, 디코딩 설정이 토큰을 고릅니다.
-    2. temperature는 분포 모양을, top-k·top-p는 후보 집합을 정합니다. 순서는 temperature → penalty → top-k → top-p → 선택입니다.
-    3. greedy는 반복하기 쉽고, 높은 온도만 쓰면 문장이 무너집니다. 적당한 온도와 top-p를 함께 쓰는 것이 흔한 절충입니다.
-    4. 같은 시드와 같은 연산 순서면 샘플링도 재현됩니다(8절).
-
-    **Hugging Face와의 차이:** `transformers`의 `generate`에는 `min_p`, beam search 등 옵션이 더 많습니다.
-    MiniMind는 `generate`를 직접 정의해 덮어쓰므로, 이 노트북의 호출은 모두 원본 구현을 씁니다.
-
-    **더 해 보기:**
-
-    - 2절 질문을 바꾸며 엔트로피와 6절 후보 수를 비교하세요.
-    - 9절 `PRESETS`에 `top_k=10`이나 `repetition_penalty=1.3`을 추가해 보세요.
-    - 10절에서 `do_sample`을 끄고 temperature를 바꿔도 답이 같은 이유를 4절 수식으로 설명해 보세요.
-    """)
-    return
-
-
 if __name__ == "__main__":
     app.run()

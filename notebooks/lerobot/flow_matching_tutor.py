@@ -23,7 +23,7 @@ def _(mo):
     SmolVLA·π0의 행동 전문가가 행동 청크를 만드는 방식이 바로 이 방법입니다.
     [SmolVLA 구조 실습](smolvla_tour.py)의 Flow Matching 절을 보기 전에 읽으면 좋습니다.
 
-    `notebooks/lerobot`에서 `uv run marimo edit flow_matching_intro.py`로 실행합니다.
+    `notebooks/lerobot`에서 `uv run marimo edit flow_matching_tutor.py`로 실행합니다.
     다운로드는 없고, 학습은 작은 MLP를 CPU에서 수십 초 돌리며 **버튼을 눌러야** 시작합니다.
 
     원문: Peter Roelants, [Flow Matching: A visual introduction](https://peterroelants.github.io/posts/flow_matching_intro/).
