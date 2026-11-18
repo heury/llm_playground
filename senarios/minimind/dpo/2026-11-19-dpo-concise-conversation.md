@@ -32,7 +32,7 @@ MiniMind의 DPO 학습 코드와 데이터 형식을 확인해서, 작은 데이
 
 숫자·상식·단어 뜻 등 **학습 100쌍, 검증 20쌍, 최종 평가 30쌍** 정도로 시작합니다. 같은 질문의 표현 변형은 같은 분할에 넣어 평가 누출을 막습니다.
 
-현재 [DPODataset](../../projects/minimind/dataset/lm_dataset.py)의 JSONL 형식은 다음과 같습니다.
+현재 [DPODataset](../../../projects/minimind/dataset/lm_dataset.py)의 JSONL 형식은 다음과 같습니다.
 
 ```json
 {"chosen":[{"role":"user","content":"What is the capital of France?"},{"role":"assistant","content":"The capital of France is Paris."}],"rejected":[{"role":"user","content":"What is the capital of France?"},{"role":"assistant","content":"That is an interesting question! Let me answer it carefully. The capital of France is Paris. So, Paris is the answer."}]}
@@ -98,7 +98,7 @@ DPO 학습을 완료했습니다. **선호 답변의 확률은 개선됐지만, 
 
 고정 reference의 불변성과 저장한 체크포인트의 정확한 재로딩을 확인했습니다. 원본 모델은 보존했습니다.
 
-[상세 보고서](../../reports/minimind/20261119-001400-dpo-concise.md) · [학습된 체크포인트](../../outputs/minimind/20261119-001400-dpo-concise/dpo_concise_768.pth)
+[상세 보고서](../../../reports/minimind/20261119-001400-dpo-concise.md) · [학습된 체크포인트](../../../outputs/minimind/20261119-001400-dpo-concise/dpo_concise_768.pth)
 
 ## 사용자
 

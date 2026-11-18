@@ -14,7 +14,7 @@ minimin에서 dpo loss 계산하는 과정을 간단한 코드로 설명해
 
 MiniMind의 DPO는 **선호 답변(chosen)을 비선호 답변(rejected)보다 더 선호하도록** 학습합니다. 이때 학습 전 상태로 고정한 참조 모델과 비교합니다.
 
-실제 구현은 [train_dpo.py](../../projects/minimind/trainer/train_dpo.py#L25)에 있으며, 핵심을 줄이면 다음과 같습니다.
+실제 구현은 [train_dpo.py](../../../projects/minimind/trainer/train_dpo.py#L25)에 있으며, 핵심을 줄이면 다음과 같습니다.
 
 ```python
 import torch.nn.functional as F

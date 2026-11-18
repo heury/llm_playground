@@ -10,6 +10,7 @@ LeRobotDataset 형식으로 기록합니다.
 | `test_pick_place.py` | 시연 동작 테스트, 영상(mp4)·결과(JSON) 저장 |
 | `test_color_pick.py` | 색깔 블록 4개를 하나씩 상자 귀퉁이에 옮기는 테스트, 영상·결과 저장 |
 | `eval_policy.py` | 학습한 SmolVLA 정책을 빨강 단독·4색·다른 색 명령 조건에서 평가, 영상·결과 저장 |
+| `test_astra_color_pick.py` | GPT-6.2 Astra가 장면 이미지에서 지정 색 블록 ID를 선택하고 IK로 옮기는 테스트 |
 
 SO-101 모델은 처음 실행할 때 `third_party/mujoco_menagerie/`에 내려받습니다.
 
@@ -57,6 +58,25 @@ MUJOCO_GL=egl ../../notebooks/physicalai/.venv/bin/python eval_policy.py \
 조건 `red_only`(학습과 같은 장면), `distractors`(4색 장면, 명령 red), `lang_<색>`(4색 장면, 다른 색 명령)을
 같은 블록 배치로 실행합니다. 결과는 `outputs/physicalai/<시각>-smolvla-multiblock-eval/`에
 조건별 영상 `videos/<조건>.mp4`와 `results.json`으로 저장합니다. GPU를 권장합니다.
+
+## Astra로 색상 지시 테스트
+
+`test_astra_color_pick.py`는 4색 블록 장면 3개를 만들고, `gpt-6.2-astra`가
+한국어 지시에 맞는 블록을 이미지에서 선택하도록 한다. 선택된 블록은 기존 IK 스킬로 옮긴다.
+각 지시 전에 같은 배치로 초기화하며, 대상 선택 정확도와 이동 성공률을 따로 기록한다.
+모델에는 색상 정답이나 시뮬레이터 좌표를 제공하지 않는다.
+
+```bash
+MUJOCO_GL=egl ../../notebooks/physicalai/.venv/bin/python test_astra_color_pick.py prepare \
+    --out ../../outputs/physicalai/<실행-ID>
+# 생성한 익명 라벨 이미지와 planner-prompt.txt를 지정 모델에 입력한다.
+# 응답을 planner-selections.json으로 저장한 다음 실행한다.
+MUJOCO_GL=egl ../../notebooks/physicalai/.venv/bin/python test_astra_color_pick.py execute \
+    --out ../../outputs/physicalai/<실행-ID>
+```
+
+모델 호출 명령, 입력 범위와 판정 기준은
+[재사용 시나리오](../../test_scenarios/physicalai/astra-color-pick.md)를 참고한다.
 
 ## 기록 내용 (20 fps)
 

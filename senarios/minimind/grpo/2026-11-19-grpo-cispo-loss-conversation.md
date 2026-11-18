@@ -15,7 +15,7 @@ grpo loss를 계산하는 과정을 간단한 코드와 함께 설명해
 
 GRPO loss는 **같은 질문에서 생성한 답변들을 비교해, 상대적으로 좋은 답변의 생성 확률은 높이고 나쁜 답변의 확률은 낮추는 손실**입니다.
 
-MiniMind의 [실제 계산 코드](../../projects/minimind/trainer/train_grpo.py#L153)를 간단히 풀면 다음과 같습니다.
+MiniMind의 [실제 계산 코드](../../../projects/minimind/trainer/train_grpo.py#L153)를 간단히 풀면 다음과 같습니다.
 
 **1. 답변별 보상을 상대 점수로 바꿉니다.**
 
@@ -120,7 +120,7 @@ MiniMind에서는 둘 다 **그룹 내 보상으로 advantage를 계산**하지�
 - **GRPO:** 좋은 방향으로 확률이 충분히 바뀌면, 해당 토큰의 정책 기울기가 0이 될 수 있습니다.
 - **CISPO:** 확률 비율을 제한된 **학습 가중치**로 사용하고, 로그 확률을 통해 계속 학습합니다.
 
-아래는 [현재 MiniMind 구현](../../projects/minimind/trainer/train_grpo.py#L164) 기준입니다.
+아래는 [현재 MiniMind 구현](../../../projects/minimind/trainer/train_grpo.py#L164) 기준입니다.
 
 **1. 공통으로 계산하는 값**
 

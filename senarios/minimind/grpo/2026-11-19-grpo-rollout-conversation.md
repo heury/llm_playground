@@ -5,7 +5,7 @@
 GRPO rollout과 rollout engine, 토큰별 loss 계산에 관한 세 차례의 사용자 요청과
 어시스턴트 최종 답변을 보관합니다. 도구 호출·진행 설명과 IDE/환경 메타데이터는
 제외했습니다. 소스 링크는 저장소 기준 상대 경로로 표기했습니다.
-마지막 답변에서 언급하는 DPO 설명은 [DPO loss 계산 대화](2026-11-19-dpo-loss-conversation.md)에 있습니다.
+마지막 답변에서 언급하는 DPO 설명은 [DPO loss 계산 대화](../dpo/2026-11-19-dpo-loss-conversation.md)에 있습니다.
 
 ## 사용자
 
@@ -15,7 +15,7 @@ grpo에서 rollout를 통해 다양한 답변을 만드는 과정을 설명해
 
 GRPO에서 **rollout은 현재 정책 모델로 답변을 실제 생성하는 과정**입니다. 같은 질문을 여러 개 복제하고, 각 답변의 다음 토큰을 확률적으로 뽑아 다양한 답변을 만듭니다.
 
-MiniMind의 [rollout 코드](../../projects/minimind/trainer/rollout_engine.py#L71)를 간단히 풀면 다음과 같습니다.
+MiniMind의 [rollout 코드](../../../projects/minimind/trainer/rollout_engine.py#L71)를 간단히 풀면 다음과 같습니다.
 
 **1. 같은 질문을 여러 개 복제합니다.**
 
@@ -118,7 +118,7 @@ MiniMind의 **rollout engine은 정책 모델로 질문당 여러 답변을 생�
 
 **1. 학습 코드가 engine에 생성을 요청합니다.**
 
-[train_grpo.py](../../projects/minimind/trainer/train_grpo.py#L105)에서는 다음처럼 호출합니다.
+[train_grpo.py](../../../projects/minimind/trainer/train_grpo.py#L105)에서는 다음처럼 호출합니다.
 
 ```python
 result = rollout_engine.rollout(
@@ -134,7 +134,7 @@ result = rollout_engine.rollout(
 
 **2. engine이 질문을 답변 개수만큼 복제합니다.**
 
-기본 [TorchRolloutEngine](../../projects/minimind/trainer/rollout_engine.py#L71)은 다음처럼 배치를 확장합니다.
+기본 [TorchRolloutEngine](../../../projects/minimind/trainer/rollout_engine.py#L71)은 다음처럼 배치를 확장합니다.
 
 ```python
 expanded_ids = prompt_ids.repeat_interleave(6, dim=0)

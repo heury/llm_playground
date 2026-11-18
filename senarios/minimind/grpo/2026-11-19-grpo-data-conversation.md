@@ -27,7 +27,7 @@ JSONL 한 줄에 대화 하나를 넣습니다.
 {"conversations":[{"role":"user","content":"친구에게 생일 축하 메시지를 써줘."},{"role":"assistant","content":"생일 축하해! 오늘 행복한 하루 보내!"}]}
 ```
 
-현재 [RLAIFDataset](../../projects/minimind/dataset/lm_dataset.py#L199)은 **마지막 assistant 답변을 제외한 대화**를 프롬프트로 사용합니다. 위에 적힌 답변을 따라 쓰도록 학습하는 것이 아닙니다.
+현재 [RLAIFDataset](../../../projects/minimind/dataset/lm_dataset.py#L199)은 **마지막 assistant 답변을 제외한 대화**를 프롬프트로 사용합니다. 위에 적힌 답변을 따라 쓰도록 학습하는 것이 아닙니다.
 
 ```text
 질문: 인공지능이 무엇인지 쉽게 설명해줘.
@@ -41,7 +41,7 @@ JSONL 한 줄에 대화 하나를 넣습니다.
 
 **2. 수학 문제: 정답과 비교해 평가**
 
-현재 [GSM8KDataset](../../projects/minimind/dataset/gsm8k_dataset.py#L12)은 다음 형태의 로컬 JSONL도 지원합니다.
+현재 [GSM8KDataset](../../../projects/minimind/dataset/gsm8k_dataset.py#L12)은 다음 형태의 로컬 JSONL도 지원합니다.
 
 ```jsonl
 {"question":"Mina has 3 apples and buys 2 more. How many apples does she have?","answer":"3 + 2 = 5.\n#### 5"}

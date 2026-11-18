@@ -4,7 +4,7 @@
 
 GRPO 시나리오 추천부터 숫자 전용 산수 실험, 노트북 기반 시나리오와 학습·평가까지의 사용자 요청 및 최종 답변을 보관합니다. 도구 호출·실행 로그·진행 설명과 IDE/환경 메타데이터는 제외했습니다. 파일 링크는 저장 위치에 맞게 상대 경로로 바꿨습니다.
 
-이전 대화: [Full SFT](2026-11-19-full-sft-knowledge-conversation.md), [DPO](2026-11-19-dpo-concise-conversation.md).
+이전 대화: [Full SFT](../2026-11-19-full-sft-knowledge-conversation.md), [DPO](../dpo/2026-11-19-dpo-concise-conversation.md).
 
 ## 사용자
 
@@ -13,7 +13,7 @@ notebooks/minimind/minimind_grpo_tour.py
 
 ## 어시스턴트
 
-노트북을 참고해 [GRPO 산수 문장제 시나리오](../../test_scenarios/minimind/grpo-word-problems-tour.md)를 작성했습니다. **모델이 익숙한 `풀이 + #### 정답` 형식으로 학습하는 구성**입니다.
+노트북을 참고해 [GRPO 산수 문장제 시나리오](../../../test_scenarios/minimind/grpo-word-problems-tour.md)를 작성했습니다. **모델이 익숙한 `풀이 + #### 정답` 형식으로 학습하는 구성**입니다.
 
 문제 예시는 다음과 같습니다.
 
@@ -68,7 +68,7 @@ GRPO 학습과 평가를 완료했습니다. **평가 256문제 정답률이 12.
 
 평가 문제의 **계산식 216/256개는 학습에도 등장**하므로, 이번 결과는 해당 문장제 분포에서의 개선으로 해석해야 합니다. 저장한 FP32 모델의 정확한 재로딩도 검증했습니다.
 
-[상세 보고서](../../reports/minimind/20261119-004300-grpo-word-problems.md) · [학습된 체크포인트](../../outputs/minimind/20261119-004300-grpo-word-problems/grpo_word_problems_fp32_768.pth)
+[상세 보고서](../../../reports/minimind/20261119-004300-grpo-word-problems.md) · [학습된 체크포인트](../../../outputs/minimind/20261119-004300-grpo-word-problems/grpo_word_problems_fp32_768.pth)
 
 ## 사용자
 
