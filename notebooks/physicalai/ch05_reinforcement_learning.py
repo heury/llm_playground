@@ -103,25 +103,6 @@ def _(mo):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ### 이 장의 학습 경로
-
-    셀 재실행·환경별 대안은 [README의 학습 경로와 재실행](README.md#학습-경로와-재실행)을 참고하세요.
-
-    **목표**: 보상·학습 손실·성공률을 구분하고, 같은 seed의 랜덤 정책과 PPO를 비교합니다.
-    **선수 지식**: 1장의 Episode·보상, 2장의 관절 제어, 기초 평균·신경망 가중치 갱신.
-    **필수**: 5-1 환경 → 5-2 PPO 계산 읽기. 학습 버튼과 5-4 보상별 재학습은 선택입니다.
-    GPU 없이 설명과 `PointReachEnv.step`을 추적할 수 있습니다. 학습하지 않은 결과를 학습 성과로 해석하지 마세요.
-
-    **읽을 코드**: `PointReachEnv`, `ArmReachEnv`는 이 파일의 교육용 환경입니다.
-    학습은 설치된 Stable-Baselines3 `PPO.train`, 평가는 이 파일의 `evaluate`입니다.
-    5장의 목표는 손끝 도달이며, 3·6장의 집어 상자에 넣기와 성공률을 직접 비교할 수 없습니다.
-    """)
-    return
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
     ## 5-1. Gymnasium 환경: `reset`과 `step`
 
     강화학습 라이브러리는 환경이 다음 약속을 지키면 어떤 문제든 학습할 수 있습니다.
@@ -274,8 +255,6 @@ def _(mo):
     가중치를 고정하고 행동을 고릅니다. 보상을 바꾼 실험에서는 같은 평가 seed의 **성공률·거리**를 비교합니다.
     `shaped`의 거리 진전 항은 할인된 potential shaping의 일반적 보장과 같지 않아 최적 정책 불변을 보장하지 않습니다.
 
-    **작은 확인**: 위 예에서 $\rho=1$이면 목적 항은 2입니다. 확률비 증가가 언제부터 보너스를 더 주지 않는지 설명해 보세요.
-    기대 답은 양의 advantage일 때 $\rho>1+\epsilon$ 구간입니다.
     출처: [PPO 논문 §3](https://arxiv.org/abs/1707.06347), 실제 연산은 설치 패키지 `stable_baselines3/ppo/ppo.py:PPO.train`입니다.
     """)
     return
@@ -612,31 +591,6 @@ def _(ArmReachEnv, RUN_DIR, arm_video_mode, get_arm_models, mo):
     _video = _env.robot.save_video(RUN_DIR / f"arm_reach_{arm_video_mode.value}.mp4")
     _env.robot.close()
     mo.hstack([mo.video(src=_video, loop=True, width=440), mo.md("\n\n".join(_rows))], align="center")
-    return
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ## 정리와 다음 장
-
-    - Gymnasium 인터페이스만 맞추면 어떤 시뮬레이터든 RL 라이브러리로 학습할 수 있습니다.
-    - 손끝을 보내는 것(reach)만 해도 보상 설계와 학습량에 따라 결과가 크게 달라집니다. 집어서 옮기기처럼 단계가 긴 과제는
-      보상만으로 배우기가 훨씬 어렵습니다.
-    - 그래서 6장에서는 **잘하는 시연을 보여 주고 따라 하게 하는 모방학습**으로 넘어갑니다. 시연자는 3장의 Rule 기반 Pick and Place입니다.
-
-    **확인 문제**
-
-    1. `ArmReachEnv.step`의 행동 배율 0.05를 0.2로 키우면 학습이 빨라질까요, 불안정해질까요? 직접 바꿔 학습해 보세요.
-    2. 관측에서 `(목표 − 손끝)` 3개를 빼면 무엇이 어려워질까요?
-
-    ### 확인 문제 판정 기준
-
-    1. 큰 행동 배율은 탐색 범위를 넓히지만 목표를 지나치거나 관절 추종이 불안정해질 수 있습니다. 속도 향상을 보장하지 않으므로 같은 평가 seed·학습 step에서 성공률과 최종 거리를 비교합니다.
-    2. 목표와 손끝 좌표 자체는 남으므로 정보가 사라지는 것은 아닙니다. 네트워크가 두 좌표의 차를 스스로 학습해야 하므로 학습 효율이 달라질 수 있습니다. 관측 공간 shape와 반환 배열을 함께 14에서 11로 바꿔야 비교가 유효합니다.
-
-    다음 [6장](ch06_imitation_act.py)에서는 LeRobot으로 시연 데이터셋을 만들고 ACT 정책을 학습·평가합니다.
-    """)
     return
 
 

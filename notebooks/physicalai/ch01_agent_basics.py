@@ -58,23 +58,6 @@ def _(mo):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ### 이 장의 학습 경로
-
-    셀 재실행·환경별 대안은 [README의 학습 경로와 재실행](README.md#학습-경로와-재실행)을 참고하세요.
-
-    **목표**: `observe → policy → step`을 직접 추적하고, 성공률과 보상을 구분합니다.
-    **선수 지식**: Python 함수·딕셔너리·반복문. 이 장의 `LineWorld`에서 시작하면 됩니다.
-    **필수**: 1-1의 한 Episode → 1-2의 용어 → 랜덤·규칙 비교. `my_policy` 수정은 선택입니다.
-
-    **읽을 코드**: 이 파일의 `LineWorld`, `GridWorld`, `run_episode`는 교육용 독립 구현입니다.
-    격자는 로봇의 역학·시각 노이즈를 생략하므로 높은 성공률을 실물 로봇 성능으로 옮길 수 없습니다.
-    """)
-    return
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
     ## 1-1. 세 줄의 코드로 움직이는 Agent
 
     가장 단순한 세계는 0~9 눈금이 있는 1차원 직선(`LineWorld`)입니다.
@@ -233,26 +216,6 @@ def _(random):
     return ACTION_NAMES, GridWorld, random_policy, rule_policy, run_episode
 
 
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ### 직접 해 보기: 나만의 Policy
-
-    아래 `my_policy`를 고쳐 보세요. 예를 들어 80%는 규칙을 따르고 20%는 무작위로 움직이게 하면
-    성공률과 평균 스텝이 어떻게 바뀔까요? 셀을 고치면 아래 비교 표가 자동으로 다시 계산됩니다.
-    """)
-    return
-
-
-@app.cell
-def _(random, random_policy, rule_policy):
-    def my_policy(observation):
-        if random.random() < 0.8:
-            return rule_policy(observation)
-        return random_policy(observation)
-    return (my_policy,)
-
-
 @app.cell
 def _(mo):
     grid_size = mo.ui.slider(3, 10, value=5, label="격자 크기")
@@ -269,7 +232,6 @@ def _(
     grid_max_steps,
     grid_size,
     mo,
-    my_policy,
     np,
     random,
     random_policy,
@@ -277,8 +239,7 @@ def _(
     run_episode,
 ):
     grid_results = {}
-    for _name, _policy in [("random_policy", random_policy), ("rule_policy", rule_policy),
-                           ("my_policy", my_policy)]:
+    for _name, _policy in [("random_policy", random_policy), ("rule_policy", rule_policy)]:
         random.seed(0)
         _env = GridWorld(size=grid_size.value, max_steps=grid_max_steps.value)
         grid_results[_name] = [run_episode(_env, _policy) for _ in range(grid_episodes.value)]
@@ -324,31 +285,6 @@ def _(ACTION_NAMES, GridWorld, mo, random, random_policy):
         _log.append(f"t={_env.t:2d} action={ACTION_NAMES[_a]} reward={_r:+.1f}\n{_env.render()}")
     mo.accordion({"랜덤 Policy의 Episode 하나를 한 스텝씩 보기 (4x4, 최대 12스텝)":
                   mo.md("```text\n" + "\n\n".join(_log) + "\n```")})
-    return
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ## 정리와 다음 장
-
-    - 규칙 Policy는 사람이 세계를 완벽히 알 때만 쉽게 짤 수 있습니다. GridWorld는 쉽지만,
-      관절 6개짜리 로봇팔이 카메라 이미지만 보고 블록을 집는 규칙을 if문으로 쓰기는 어렵습니다.
-    - 랜덤 Policy의 성공률은 **학습 전 기준선**입니다. 5장에서 PPO를 학습하기 전에도 같은 방식으로 기준선을 잽니다.
-    - 성공률은 Episode 수와 난수 seed에 따라 흔들립니다. Episode 수를 10으로 줄여 표가 얼마나 바뀌는지 확인해 보세요.
-
-    **확인 문제**
-
-    1. `GridWorld.step`에서 매 스텝 벌점을 0으로 바꾸면 랜덤 Policy와 규칙 Policy의 평균 보상 차이는 어떻게 되나요?
-    2. Goal을 매 Episode 무작위 위치에 두려면 어디를 고쳐야 하나요? 그때 `rule_policy`는 여전히 100%인가요?
-
-    ### 확인 문제 판정 기준
-
-    1. 성공/시간 초과 판정은 그대로이고, 걸음당 벌점을 없애면 오래 걸리는 정책이 받던 추가 벌점이 사라집니다. 같은 성공 여부라면 경로 길이에 따른 보상 차이가 줄어듭니다.
-    2. `GridWorld.reset`에서 Agent와 다른 유효 좌표를 Goal로 표집합니다. 빈 격자에서 규칙 정책은 Manhattan 거리만큼 이동하므로 그 거리가 `max_steps` 이내일 때 도달합니다. 시간 제한을 넘는 크기에서는 100%를 보장하지 않습니다.
-
-    다음 [2장](ch02_mujoco_basics.py)에서는 MuJoCo로 물리 법칙이 있는 가상 세계를 만듭니다.
-    """)
     return
 
 

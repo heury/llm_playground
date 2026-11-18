@@ -24,7 +24,8 @@
 │   ├── minimind-j/
 │   ├── minimind-j2/
 │   ├── minimind-d/
-│   └── minimind-la/
+│   ├── minimind-la/
+│   └── physicalai/           # SO-101 MuJoCo 시연 데이터(LeRobotDataset) 생성
 ├── references/slides/        # 교재 PDF
 ├── outputs/                  # 실행 산출물 (Git 제외)
 ├── reports/                  # 검증·분석 보고서
@@ -93,12 +94,12 @@ CUDA 드라이버가 필요합니다. `notebooks/unsloth/`에서 `uv sync --lock
 ```text
 notebooks/physicalai/
 ├── README.md                 # 장별 내용·자원, 설치 extra, 공개 체크포인트, 원본과 달라진 점
-├── pyproject.toml / uv.lock  # 기본(1~5장)과 vision·lerobot·llm 추가 옵션
+├── pyproject.toml / uv.lock  # 기본(1~8장, LeRobot 포함)과 llm 추가 옵션
 ├── physicalai_common.py      # 장면·SO101Sim·IK·SimCamera·시연 기록·정책 실행 공통 모듈 (실습 노트북 아님)
 └── ch0[1-9]_*.py             # 1~9장 marimo 노트북
 ```
 
-`notebooks/physicalai/`에서 `uv sync --locked`(6~8장은 `--extra lerobot`)로 설치합니다.
+`notebooks/physicalai/`에서 `uv sync --locked`로 설치합니다(LeRobot 포함).
 SO-101 모델은 처음 실행 시 `third_party/`(Git 제외)에 내려받습니다. 학습·다운로드·반복 평가 셀은 버튼으로만 실행되며,
 문서 확인만으로 이 셀을 실행하지 마세요. 산출물은 `outputs/physicalai/<실행 ID>/`, 공유 데이터셋과 체크포인트는
 `outputs/physicalai/datasets/`, `outputs/physicalai/checkpoints/`, 보고서는 `reports/physicalai/<실행 ID>.md`입니다.
@@ -282,6 +283,32 @@ DLLM은 `model.model_minimind`의 기본 구현을 가져오지만 해당 디렉
 교체하고 대상 스크립트 디렉토리로 이동하므로 일반 학습 진입점과 실행 방식이 다릅니다.
 선형 모델은 선택적 `causal_conv1d`, `flash-linear-attention` 가속이 없으면 PyTorch
 경로로 폴백합니다.
+
+## physicalai — SO-101 시연 데이터 생성
+
+```text
+projects/physicalai/
+├── README.md                  # 실행 방법, 옵션, 기록 항목
+├── so101_sim.py               # 장면 XML, Menagerie 모델 내려받기, 로봇 제어, IK(Damped Least Squares)
+├── record_demos.py            # 규칙 기반 Pick and Place 시연을 LeRobotDataset으로 기록
+├── test_pick_place.py         # 시연 동작 테스트, 영상·결과 JSON을 outputs/physicalai/에 저장
+├── test_color_pick.py         # 색깔 블록 4개를 하나씩 상자에 옮기는 테스트, 영상·결과 저장
+├── eval_policy.py             # Hub SmolVLA 정책을 단독·4색·다른 색 명령 조건에서 닫힌 고리 평가
+└── third_party/               # SO-101 모델 (첫 실행 시 내려받음)
+```
+
+`so101_sim.py` → `record_demos.py` 순서로 읽습니다. 별도 환경 파일은 없고
+`notebooks/physicalai/`의 uv 환경을 사용합니다. 실행은 이 디렉토리에서
+`MUJOCO_GL=egl ../../notebooks/physicalai/.venv/bin/python record_demos.py --episodes N`입니다.
+장면 XML은 include·mesh 경로 때문에 `third_party/.../robotstudio_so101/`에 파일로 씁니다.
+손목 카메라 `wrist_cam`은 장면 XML이 아니라 `so101.xml`에 정의되어 있습니다.
+블록 body 이름은 `cube_<색>`이고 `SO101Sim(colors=...)`로 색을 고릅니다(기본 빨강 하나).
+IK·`LIFT_Z`·`pick_and_place()`는 데이터 생성과 테스트가 함께 쓰므로, 바꾸면 두 테스트 스크립트를
+다시 실행해 성공률을 확인하세요. `LIFT_Z`를 0.12로 올리면 상자 앞쪽 위에서 IK가 닿지 않습니다.
+기록 형식(state·action 6차원, top·wrist 영상, 20 fps)을 바꾸면 `features`와 `record()`를 함께
+수정하고, 이 데이터셋을 쓰는 `notebooks/physicalai/` 학습 노트북과의 호환을 확인하세요.
+기본 저장 경로는 `outputs/physicalai/datasets/so101_pickplace_sim`이며, 기존 폴더는
+`--overwrite`를 줄 때만 지웁니다. 문서 확인만으로 대량 기록을 실행하지 마세요.
 
 ## 수정 후 확인할 항목
 

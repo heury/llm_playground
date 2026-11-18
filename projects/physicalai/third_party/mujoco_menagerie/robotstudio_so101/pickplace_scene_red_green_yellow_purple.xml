@@ -1,0 +1,58 @@
+
+<mujoco model="so101_pickplace">
+  <include file="so101.xml"/>
+  <option timestep="0.002" integrator="implicitfast"/>
+  <visual>
+    <global offwidth="640" offheight="480"/>
+    <headlight diffuse="0.6 0.6 0.6" ambient="0.3 0.3 0.3" specular="0 0 0"/>
+  </visual>
+  <asset>
+    <texture type="2d" name="grid" builtin="checker" mark="edge" rgb1="0.85 0.85 0.85"
+             rgb2="0.75 0.75 0.75" markrgb="0.6 0.6 0.6" width="300" height="300"/>
+    <material name="grid" texture="grid" texuniform="true" texrepeat="8 8" reflectance="0.1"/>
+  </asset>
+  <worldbody>
+    <light pos="0 0 1.5" dir="0 0 -1" directional="true" diffuse="0.6 0.6 0.6"/>
+    <geom name="floor" type="plane" size="1 1 0.05" material="grid"/>
+
+    <body name="cube_red" pos="0.25 0.0 0.015">
+      <freejoint/>
+      <geom type="box" size="0.015 0.015 0.015" mass="0.02" rgba="0.9 0.1 0.1 1"
+            friction="1.5 0.005 0.0001" condim="4"/>
+    </body>
+    <body name="cube_green" pos="0.25 0.06 0.015">
+      <freejoint/>
+      <geom type="box" size="0.015 0.015 0.015" mass="0.02" rgba="0.1 0.7 0.2 1"
+            friction="1.5 0.005 0.0001" condim="4"/>
+    </body>
+    <body name="cube_yellow" pos="0.25 0.12 0.015">
+      <freejoint/>
+      <geom type="box" size="0.015 0.015 0.015" mass="0.02" rgba="0.95 0.85 0.1 1"
+            friction="1.5 0.005 0.0001" condim="4"/>
+    </body>
+    <body name="cube_purple" pos="0.25 0.18 0.015">
+      <freejoint/>
+      <geom type="box" size="0.015 0.015 0.015" mass="0.02" rgba="0.6 0.2 0.8 1"
+            friction="1.5 0.005 0.0001" condim="4"/>
+    </body>
+
+    <!-- 상자: 바닥 + 낮은 벽 4개 -->
+    <body name="box" pos="0.05 0.22 0">
+      <geom type="box" size="0.05 0.05 0.003" pos="0 0 0.003" rgba="0.2 0.4 0.9 1"/>
+      <geom type="box" size="0.05 0.003 0.015" pos="0 0.05 0.015" rgba="0.2 0.4 0.9 1"/>
+      <geom type="box" size="0.05 0.003 0.015" pos="0 -0.05 0.015" rgba="0.2 0.4 0.9 1"/>
+      <geom type="box" size="0.003 0.05 0.015" pos="0.05 0 0.015" rgba="0.2 0.4 0.9 1"/>
+      <geom type="box" size="0.003 0.05 0.015" pos="-0.05 0 0.015" rgba="0.2 0.4 0.9 1"/>
+    </body>
+
+    <camera name="top" pos="0.2 0 0.8" quat="1 0 0 0"/>
+    <!-- 영상 확인용 대각선 카메라 (데이터셋에는 쓰지 않음) -->
+    <body name="view_target" pos="0.15 0.05 0.03"/>
+    <camera name="view" mode="targetbody" target="view_target" pos="0.65 -0.5 0.4"/>
+  </worldbody>
+
+  <keyframe>
+    <!-- 대기 자세: 팔을 위로 세워 바닥의 물체와 카메라 시야를 피한다 -->
+    <key name="home" qpos="0 -1.5 0.5 0 0 0  0.25 0.0 0.015 1 0 0 0  0.25 0.06 0.015 1 0 0 0  0.25 0.12 0.015 1 0 0 0  0.25 0.18 0.015 1 0 0 0" ctrl="0 -1.5 0.5 0 0 0"/>
+  </keyframe>
+</mujoco>

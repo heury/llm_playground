@@ -6,7 +6,6 @@ app = marimo.App(width="medium")
 
 @app.cell
 def _():
-    import platform
     import sys
     from pathlib import Path
 
@@ -22,7 +21,7 @@ def _():
     import mujoco
 
     RUN_DIR = common_runtime.make_run_dir("ch02-mujoco")
-    return RUN_DIR, mo, mujoco, np, common_runtime, platform, plt, sys
+    return RUN_DIR, mo, mujoco, np, common_runtime, plt
 
 
 @app.cell
@@ -54,10 +53,9 @@ def _(RUN_DIR, mo):
     1장의 `env`를 물리 법칙이 있는 세계로 바꿉니다. **MuJoCo**는 Google DeepMind가 관리하는 오픈소스 물리 엔진이며
     로봇 연구에서 널리 씁니다. 이 장에서 다루는 것:
 
-    1. 개발 환경 확인
-    2. XML 몇 줄로 세계 만들기: `MjModel`(설계도)과 `MjData`(현재 상태)
-    3. 질량·마찰·중력·공기저항을 바꿔 가며 물체 떨어뜨리기
-    4. SO-101 로봇팔(관절 5개 + 그리퍼)을 불러와 관절 하나씩 움직이기
+    1. XML 몇 줄로 세계 만들기: `MjModel`(설계도)과 `MjData`(현재 상태)
+    2. 질량·마찰·중력·공기저항을 바꿔 가며 물체 떨어뜨리기
+    3. SO-101 로봇팔(관절 5개 + 그리퍼)을 불러와 관절 하나씩 움직이기
 
     영상과 그림은 `{RUN_DIR.relative_to(RUN_DIR.parents[2])}`에 저장됩니다.
     화면이 없는 Linux에서는 `MUJOCO_GL=egl`을 자동으로 씁니다(`physicalai_common.py` 첫 부분).
@@ -68,55 +66,7 @@ def _(RUN_DIR, mo):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ### 이 장의 학습 경로
-
-    셀 재실행·환경별 대안은 [README의 학습 경로와 재실행](README.md#학습-경로와-재실행)을 참고하세요.
-
-    **목표**: 설계도와 상태를 구분하고, 목표각 명령과 실제 관절각의 차이를 설명합니다.
-    **선수 지식**: 1장의 Episode·상태, NumPy 배열. 중력은 월드 좌표의 아래 방향($-z$)입니다.
-    **필수**: 2-1 환경 확인 → 2-2 낙하 → 2-4 관절 표. 유체 계수·바람 실험은 선택입니다.
-
-    **읽을 코드**: 이 파일의 MJCF는 교육용 장면이고 `pc.so101_xml`은 Menagerie 모델 경로를 찾습니다.
-    실제 계산은 MuJoCo의 `MjModel`, `MjData`, `mj_step`, `mj_forward`입니다.
-    단위는 길이 m·시간 s·관절각 rad이며, 슬라이더에 deg가 적혀 있으면 코드에서 rad로 변환합니다.
-    """)
-    return
-
-
-@app.cell(hide_code=True)
-def _(mo, mujoco, np, platform, sys):
-    import os
-
-    import cv2
-    import imageio
-    import torch
-
-    _cuda = torch.cuda.is_available()
-    _gpu = f"{torch.cuda.get_device_name(0)} ({torch.cuda.get_device_properties(0).total_memory / 2**30:.1f} GB)" if _cuda else "없음"
-    mo.md(f"""
-    ## 2-1. 개발 환경 확인
-
-    | 항목 | 값 |
-    | --- | --- |
-    | OS | {platform.platform()} |
-    | Python | {sys.version.split()[0]} |
-    | NumPy | {np.__version__} |
-    | PyTorch | {torch.__version__} (CUDA 사용 가능: {_cuda}) |
-    | GPU | {_gpu} |
-    | MuJoCo | {mujoco.__version__} |
-    | OpenCV | {cv2.__version__} |
-    | imageio | {imageio.__version__} |
-    | MUJOCO_GL | `{os.environ.get("MUJOCO_GL", "(미지정: 창 기반 OpenGL)")}` |
-
-    GPU는 6~8장의 학습·추론에서 필요합니다. 1~5장은 CPU로 충분합니다.
-    """)
-    return
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ## 2-2. MuJoCo 첫 실행: 공 하나 떨어뜨리기
+    ## 2-1. MuJoCo 첫 실행: 공 하나 떨어뜨리기
 
     MuJoCo 세계는 **MJCF**라는 XML로 적습니다. 바닥(`plane`)과 1 m 높이의 공 하나가 전부입니다.
     `freejoint`는 "이 body는 6자유도(위치 3 + 회전 3)로 자유롭게 움직인다"는 뜻입니다.
@@ -184,7 +134,7 @@ def _(mo):
     mo.md(r"""
     공은 반지름 5 cm라서 중심이 $z=0.05$ m에서 멈춥니다. 바닥과 닿기 전까지는 공식과 거의 겹칩니다.
 
-    ## 2-3. 책상 위에 물체 떨어뜨리기
+    ## 2-2. 책상 위에 물체 떨어뜨리기
 
     책상(고정), 빨간 블록, 파란 공, 깃털을 떨어뜨립니다. 깃털은 얇은 타원체로 근사하고 MuJoCo의 유체 모델로
     공기저항과 양력을 줍니다(교육용으로 조정한 계수이며 실제 깃털의 측정값은 아닙니다).
@@ -311,7 +261,7 @@ def _(mo):
     - 바람을 켜면 깃털만 크게 밀립니다. 질량에 비해 면적이 큰 물체일수록 유체 힘의 영향이 큽니다.
     - 마찰을 0으로 하면 블록이 책상 위에서 미끄러집니다. 3장 이후 블록을 집을 때 마찰이 중요한 이유입니다.
 
-    ## 2-4. SO-101 로봇팔 불러오기
+    ## 2-3. SO-101 로봇팔 불러오기
 
     [MuJoCo Menagerie](https://github.com/google-deepmind/mujoco_menagerie)의 [`robotstudio_so101`](https://live.mujoco.org/?model=github:google-deepmind/mujoco_menagerie/main/robotstudio_so101/scene.xml) 모델을 씁니다.
     모델이 없을 때 준비 버튼을 누르면 SO-101 폴더만 `notebooks/physicalai/third_party/`에 내려받습니다(수십 MB).
@@ -397,7 +347,7 @@ def _(mo):
     명령한 각도와 실제 관절각이 조금 다를 수 있습니다. 구동기는 목표를 향해 힘을 내는 **위치 제어기**이고,
     중력과 관절 한계가 그 결과에 영향을 줍니다. `gripper` 관절은 손 body 위치를 바꾸지 않습니다.
 
-    ### 직접 해 보기: 슬라이더로 자세 만들기
+    ### 슬라이더로 자세 만들기
 
     여섯 구동기의 목표 각도를 정하면 1.5초 동안 시뮬레이션한 뒤의 자세를 보여 줍니다.
     3장에서 "원하는 손 위치를 만드는 관절각"을 역으로 계산하는 방법(IK)을 배웁니다.
@@ -432,33 +382,6 @@ def _(arm_model, mo, mujoco, np, pose_sliders):
     _r.close()
     _hand = _data.xpos[mujoco.mj_name2id(arm_model, mujoco.mjtObj.mjOBJ_BODY, "gripper")]
     mo.hstack([mo.image(_img), mo.md(f"손 위치 (x, y, z) = `{np.round(_hand, 3)}` m")], align="center")
-    return
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ## 정리와 다음 장
-
-    | 개념 | MuJoCo 이름 | 쓰임 |
-    | --- | --- | --- |
-    | 설계도 | `MjModel` | 질량, 관절 범위, `opt.timestep`, 카메라 |
-    | 현재 상태 | `MjData` | `qpos`(관절각·자유물체 자세), `ctrl`(구동기 명령), `xpos`(body 위치), `time` |
-    | 시간 진행 | `mj_step` | 물리 시뮬레이션 한 스텝 |
-    | 운동학만 계산 | `mj_forward` | 시간을 흘리지 않고 위치·자세 갱신 |
-
-    **확인 문제**
-
-    1. `timestep`을 0.01로 키우면 공의 낙하 곡선은 어떻게 달라지나요? 너무 키우면 어떤 문제가 생길까요?
-    2. `shoulder_pan`만 움직였을 때 손의 z 좌표가 거의 그대로인 이유는 무엇인가요?
-
-    ### 확인 문제 판정 기준
-
-    1. 접촉 전 이론 곡선은 같지만 적분 오차와 접촉 관통·불안정이 커질 수 있습니다. 작은 `timestep` 기준과 비교해 오차를 확인하며 방향을 단정하지 않습니다.
-    2. `shoulder_pan`은 기저의 수직축 주위 회전입니다. 다른 관절을 고정하면 주로 x·y가 바뀌고 높이는 거의 같습니다. 동역학의 처짐까지 정확히 0이라는 뜻은 아닙니다.
-
-    다음 [3장](ch03_kinematics_pick_place.py)에서는 관절각과 손끝 위치의 관계(FK·IK)를 배우고 블록을 집어 상자에 넣습니다.
-    """)
     return
 
 

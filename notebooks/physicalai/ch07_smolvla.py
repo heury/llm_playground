@@ -58,7 +58,7 @@ def _(device, mo):
         _ok = True
     except ImportError:
         _ok = False
-    mo.stop(not _ok, mo.callout(mo.md("`lerobot`가 없습니다. `uv sync --locked --extra lerobot` 후 다시 여세요."), kind="danger"))
+    mo.stop(not _ok, mo.callout(mo.md("`lerobot`가 없습니다. `uv sync --locked` 후 다시 여세요."), kind="danger"))
     mo.vstack([
         mo.md(rf"""
     # 7장. 자연어로 로봇 움직이기: SmolVLA
@@ -91,24 +91,6 @@ def _(device, mo):
     현재 장치 **`{device}`**.
     """),
     ])
-    return
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ### 이 장의 학습 경로
-
-    셀 재실행·환경별 대안은 [README의 학습 경로와 재실행](README.md#학습-경로와-재실행)을 참고하세요.
-
-    **목표**: 언어 조건·Flow Matching·행동 청크를 연결하고 문장 효과와 noise 효과를 구분합니다.
-    **선수 지식**: 6장의 $B\times H\times A$ 청크·정규화·학습/추론 차이, 기초 평균제곱오차.
-    **필수**: 아래 계산 원리 → 7-1 입력 이름 → 7-3 파인튜닝 경로 → 7-5 비교 설계 읽기.
-    모델 로드·학습·다운로드·반복 평가는 선택 실행입니다. 가중치 없이도 수식과 실제 패키지 소스를 대조할 수 있습니다.
-
-    **읽을 코드**: `physicalai_common.load_smolvla`와 `make_observation`을 거쳐 LeRobot 0.7
-    `SmolVLAPolicy.forward`, `VLAFlowMatching.forward/sample_actions`를 사용합니다.
-    """)
     return
 
 
@@ -265,7 +247,7 @@ def _(mo):
 
     ```bash
     # 저장소 루트에서 실행; 먼저 아래와 같이 프로젝트 환경을 지정합니다.
-    uv run --project notebooks/physicalai --extra lerobot lerobot-train --policy.path=lerobot/smolvla_base \
+    uv run --project notebooks/physicalai lerobot-train --policy.path=lerobot/smolvla_base \
       --dataset.repo_id=physicalai/so101_pickplace_sim --dataset.root=outputs/physicalai/datasets/so101_pickplace_sim \
       --rename_map='{"observation.images.top": "observation.images.camera1", "observation.images.wrist": "observation.images.camera2"}' \
       --policy.device=cuda --policy.push_to_hub=false --steps=10000 --batch_size=8 --trackio.enable=false \
@@ -311,7 +293,7 @@ def _(
     mo.stop(device.type != "cuda", mo.callout(mo.md("CUDA GPU가 없어 학습을 실행하지 않습니다."), kind="warn"))
     _root = pc.DATASET_DIR / ft_dataset.value
     _out = pc.CHECKPOINT_DIR / "train" / ft_job.value
-    mo.stop(not (_root / "meta" / "info.json").is_file(), mo.md("데이터셋이 없습니다. 6장 6-2에서 기록하세요."))
+    mo.stop(not (_root / "meta" / "info.json").is_file(), mo.md("데이터셋이 없습니다. 6장 6-1에서 기록하세요."))
     mo.stop(_out.exists(), mo.callout(mo.md(f"`{_out}`가 이미 있습니다. 작업 이름을 바꾸세요."), kind="warn"))
     _steps = ft_steps.value
     _rename = json.dumps({"observation.images.top": "observation.images.camera1",
@@ -521,10 +503,6 @@ def _(
     | 번호 | 문장 |
     | --- | --- |
     {_rows}
-
-    - 같은 문장·같은 seed 두 번 실행한 차이: **{_repeat * 100:.2f} cm** (0이면 재현됨)
-    - 문장만 바꿨을 때 최종 위치 차이 평균: **{_by_sentence * 100:.1f} cm**
-    - noise만 바꿨을 때 최종 위치 차이 평균: **{_by_noise * 100:.1f} cm**
     """)], align="center")
     return
 
@@ -532,23 +510,35 @@ def _(
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## 정리와 다음 장
+    ### 7-5 실행 결과 분석
 
-    - VLA는 문장을 입력으로 받지만, **파인튜닝 문장이 하나뿐이면 언어 조건을 사용하도록 학습하는 신호가 부족합니다.**
-      이미지만 보고도 같은 행동을 하면 손실이 줄기 때문입니다.
-    - 학습 환경(카메라·로봇·조명)과 우리 환경이 다르면 사전학습 모델의 성능이 떨어질 수 있습니다. 이 실습에서는 먼저 평가하고, 필요한 경우 우리 환경의 시연으로 파인튜닝합니다.
+    공개 체크포인트 `smolvla_so101_v2_10k`, 위 기본 문장 4개, noise seed 0~2로 실행한 결과입니다
+    (`outputs/physicalai/20261118-204633-ch07-smolvla/task_variation.json`). GPU·패키지 버전이 다르면 숫자가 조금 달라질 수 있습니다.
 
-    **확인 문제**
+    | 항목 | 값 |
+    | --- | --- |
+    | 같은 문장·같은 seed 반복 차이 | 0.00 cm (재현됨) |
+    | 문장 효과 (seed 고정, 문장만 변경) | 1.9 cm |
+    | noise 효과 (문장 고정, seed만 변경) | 1.2 cm |
 
-    1. 문장이 행동을 바꾸게 하려면 시연 데이터를 어떻게 모아야 할까요? (8장 8-1에서 직접 해 봅니다)
-    2. noise seed를 고정하지 않으면 7-5의 비교에 어떤 문제가 생기나요?
+    문장별 4초 후 손끝 위치의 seed 평균(cm, 블록은 x=24, y=0)은 다음과 같습니다.
 
-    ### 확인 문제 판정 기준
+    | 문장 | x | y | z |
+    | --- | --- | --- | --- |
+    | Pick up the red cube and put it in the blue box. | 27.1 | 1.6 | 6.1 |
+    | Move the cube to the left. | 27.0 | 3.4 | 6.3 |
+    | Do nothing. | 28.0 | 1.3 | 6.7 |
+    | Raise your arm up high. | 26.6 | 3.1 | 5.3 |
 
-    1. 같은 시각 장면에서 다른 지시가 다른 정답 행동에 연결되도록 색·위치·문장을 다양하게 기록합니다. 색만 바꾸고 위치가 고정되면 위치만 외울 수 있으므로 배치도 바꿉니다.
-    2. seed가 다르면 문장 차이와 시작 noise 차이가 섞입니다. 같은 seed의 문장 쌍과 같은 문장의 여러 seed를 비교합니다. 최종 손끝 차이는 민감도의 단서이며 지시를 올바르게 수행했다는 증거는 아닙니다.
-
-    다음 [8장](ch08_generalization.py)에서는 블록 세 개 중 문장이 가리키는 색을 집게 하고, 처음 보는 환경에서 정책을 시험합니다.
+    - **모든 문장에서 손끝이 블록 바로 위(약 5~7 cm 높이)로 갑니다.** "Do nothing."에도 팔이 움직이고,
+      "Raise your arm up high."는 오히려 가장 낮습니다. 문장의 뜻대로 행동이 바뀌지 않았습니다.
+    - 문장 효과(1.9 cm)가 noise 효과(1.2 cm)보다 조금 크므로 모델이 문장을 **완전히 무시하지는 않습니다.**
+      특히 "Move the cube to the left."와 "Raise your arm up high."는 seed와 관계없이 y가 약 2 cm 커집니다.
+      하지만 이 차이는 블록 크기보다 작고, 두 문장의 뜻과도 관계가 없습니다. 문장 토큰이 바뀌어 입력 임베딩이 달라진 만큼 행동이 조금 흔들린 것으로 보는 편이 자연스럽습니다.
+    - 파인튜닝 데이터의 문장이 "Pick up the red cube and put it in the blue box." 하나뿐이었기 때문에,
+      모델은 장면 이미지만 보고 집기 동작을 하도록 학습되었습니다. 문장을 바꿔도 학습한 동작의 시작 부분이 그대로 나옵니다.
+    - seed 3개, 장면 1개, 4초 구간의 최종 위치만 본 결과이므로 통계적 결론은 아닙니다. 다른 문장이 다른 행동으로 이어지게 하려면
+      문장마다 다른 정답 행동을 가진 시연이 필요합니다. 8장 8-1에서 이를 확인합니다.
     """)
     return
 

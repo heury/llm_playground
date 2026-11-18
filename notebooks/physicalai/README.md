@@ -14,13 +14,13 @@ Agent 루프 → MuJoCo 세계 → FK·IK·Rule 기반 Pick and Place → 카메
 | 장 | 노트북 | 내용 | 필요 자원 |
 | --- | --- | --- | --- |
 | 1 | [ch01_agent_basics.py](ch01_agent_basics.py) | 관측→판단→행동 세 줄 루프, GridWorld, 랜덤·규칙 Policy | CPU |
-| 2 | [ch02_mujoco_basics.py](ch02_mujoco_basics.py) | 환경 확인, MJCF·`MjModel`/`MjData`, 낙하·공기저항, SO-101 관절 | CPU, Menagerie 다운로드(수십 MB) |
+| 2 | [ch02_mujoco_basics.py](ch02_mujoco_basics.py) | MJCF·`MjModel`/`MjData`, 낙하·공기저항, SO-101 관절 | CPU, Menagerie 다운로드(수십 MB) |
 | 3 | [ch03_kinematics_pick_place.py](ch03_kinematics_pick_place.py) | Pose·quaternion, FK, Jacobian, DLS IK, Rule 기반 Pick and Place, 작업 영역 | CPU |
-| 4 | [ch04_vision.py](ch04_vision.py) | OpenCV, HSV 색 검출, RGB-D 가상 카메라, 핀홀 역투영, Vision Pick and Place, (선택) YOLO | CPU, YOLO는 `--extra vision` |
+| 4 | [ch04_vision.py](ch04_vision.py) | HSV 색 검출, RGB-D 가상 카메라, 핀홀 역투영, Vision Pick and Place | CPU |
 | 5 | [ch05_reinforcement_learning.py](ch05_reinforcement_learning.py) | Gymnasium 환경, PPO, 로봇팔 reach, sparse·dense·shaped 보상 비교 | CPU, 30만 step 약 1.5분 |
-| 6 | [ch06_imitation_act.py](ch06_imitation_act.py) | LeRobot 데이터셋, 시연 기록, `lerobot-train` ACT 학습·평가, action chunk 비교 | `--extra lerobot`, 학습은 NVIDIA GPU |
-| 7 | [ch07_smolvla.py](ch07_smolvla.py) | SmolVLA 불러오기·평가, 파인튜닝 명령, 문장 변화 실험 | `--extra lerobot`, GPU, 다운로드 약 1.7 GB |
-| 8 | [ch08_generalization.py](ch08_generalization.py) | 3색 블록 색 지정, 블록 위치 일반화, 조명·바닥·카메라·색 변화 | `--extra lerobot`, GPU |
+| 6 | [ch06_imitation_act.py](ch06_imitation_act.py) | LeRobot 데이터셋, 시연 기록, `lerobot-train` ACT 학습·평가, action chunk 비교 | 학습은 NVIDIA GPU |
+| 7 | [ch07_smolvla.py](ch07_smolvla.py) | SmolVLA 불러오기·평가, 파인튜닝 명령, 문장 변화 실험 | GPU, 다운로드 약 1.7 GB |
+| 8 | [ch08_generalization.py](ch08_generalization.py) | 3색 블록 색 지정, 블록 위치 일반화, 조명·바닥·카메라·색 변화 | GPU |
 | 9 | [ch09_llm_planner.py](ch09_llm_planner.py) | 로봇 도구 계층, 도구 호출 루프, 규칙 Planner·trace 재생·실제 LLM | CPU, 실제 LLM은 `--extra llm`과 API 키 |
 
 `physicalai_common.py`는 여러 장이 공유하는 장면·로봇·IK·카메라·평가 도우미이며 실습 노트북이 아닙니다.
@@ -32,9 +32,8 @@ Python 3.12 / Linux x86_64 기준입니다. 이 디렉토리에서 실행하세�
 
 ```bash
 cd notebooks/physicalai
-uv sync --locked                    # 1~5장
-uv sync --locked --extra lerobot    # 6~8장 (LeRobot, 수 GB)
-uv sync --locked --all-extras       # 전체 (YOLO, LeRobot, OpenAI SDK)
+uv sync --locked                    # 1~8장 (LeRobot 포함, 수 GB)
+uv sync --locked --extra llm        # 9장 실제 LLM (OpenAI SDK 추가)
 uv run marimo edit ch01_agent_basics.py
 ```
 
@@ -50,8 +49,7 @@ marimo의 Python 환경은 `notebooks/physicalai/.venv/bin/python`입니다.
 
 ## 학습 경로와 재실행
 
-Python 함수·클래스와 NumPy 배열을 아는 입문자를 대상으로 합니다. 각 장의 **학습 경로**에서
-목표·선수 지식·필수 읽기·선택 실행·실제 참조 함수를 확인하세요. 수업 시간은 정해 두지 않았습니다.
+Python 함수·클래스와 NumPy 배열을 아는 입문자를 대상으로 합니다. 수업 시간은 정해 두지 않았습니다.
 1~4장으로 관측·좌표·인식의 흐름을 익힌 뒤 5장의 보상 학습, 6·7장의 시연 학습을 비교하고,
 8·9장에서 평가 설계와 도구 계층으로 이어집니다. 선형대수는 3장의 2관절 예제로 복습할 수 있습니다.
 
@@ -61,8 +59,8 @@ Python 함수·클래스와 NumPy 배열을 아는 입문자를 대상으로 합
   캐시가 있으면 모델을 쓰는 가벼운 시뮬레이션·렌더링 셀이 자동 실행될 수 있습니다.
 - 처음부터 다시 보려면 marimo에서 앱을 재시작하세요. 디스크의 데이터셋·체크포인트·로그는 남습니다.
   기존 학습 폴더가 있으면 새 작업 이름을 쓰며, 시연 데이터의 덮어쓰기는 해당 체크박스를 확인합니다.
-- CUDA가 없으면 학습을 건너뜁니다. 모델·데이터가 없으면 각 장의 수식·입출력·코드 추적과
-  확인 문제의 판정 기준을 이용하세요. 공개 모델을 쓰더라도 추론에는 메모리와 시간이 필요합니다.
+- CUDA가 없으면 학습을 건너뜁니다. 모델·데이터가 없으면 각 장의 수식·입출력·코드 추적으로
+  진행하세요. 공개 모델을 쓰더라도 추론에는 메모리와 시간이 필요합니다.
 - 5장의 PPO는 손끝 도달 과제입니다. 3·6~9장의 상자 넣기 성공률과 직접 비교하지 않습니다.
   장별 실행 시간과 과거 성공률은 참고치이며 현재 환경에서의 보장값이 아닙니다.
 
@@ -85,7 +83,7 @@ Python 함수·클래스와 NumPy 배열을 아는 입문자를 대상으로 합
 - 잠금 파일 기준 LeRobot 0.7, MuJoCo 4.0을 씁니다(원본 책은 LeRobot 0.6, MuJoCo 3.x). LeRobot 0.7의 `lerobot-train`은
   `--wandb.enable` 대신 `--trackio.enable=false`를 받습니다. 공개 체크포인트의 성공률은 책의 수치와 다를 수 있습니다.
 - 5장 PPO는 프로세스 8개(`SubprocVecEnv`) 대신 한 프로세스의 `DummyVecEnv`로 학습합니다(노트북 셀에 정의한 환경을 그대로 쓰기 위해).
-- 4장 YOLO 절은 COCO 사전학습 검출기만 다룹니다. 원본의 YOLOE visual prompt Pick and Place(`ch04/yolo_pick_and_place.py`)는 포함하지 않았습니다.
+- 원본 4장의 YOLO 검출기 실습(`ch04/yolo_*.py`)은 포함하지 않았습니다.
 - 9장은 API 키 없이도 루프를 돌려 볼 수 있도록 규칙 기반 Planner(`scripted`)와 trace 재생(`replay`) 두뇌를 추가했습니다.
 - 8장 환경 변화 실험에 블록 색 변화(`cube_blue`)와 4장 색 검출의 비교를 추가했습니다.
 

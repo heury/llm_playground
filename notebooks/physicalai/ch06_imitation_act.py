@@ -59,7 +59,7 @@ def _(device, mo):
     except ImportError:
         _lerobot = None
     mo.stop(_lerobot is None, mo.callout(mo.md(
-        "`lerobot`가 설치되어 있지 않습니다. `notebooks/physicalai/`에서 `uv sync --locked --extra lerobot` 후 "
+        "`lerobot`가 설치되어 있지 않습니다. `notebooks/physicalai/`에서 `uv sync --locked` 후 "
         "marimo를 다시 시작하세요."), kind="danger"))
     mo.md(rf"""
     # 6장. 시연을 따라 하는 정책: LeRobot ACT
@@ -70,14 +70,13 @@ def _(device, mo):
 
     | 절 | 내용 | 필요 자원 |
     | --- | --- | --- |
-    | 6-1 | LeRobot 데이터셋 형식 (Hub 공개 데이터셋 메타데이터) | 인터넷 |
-    | 6-2 | 시뮬레이터에서 시연 데이터셋 기록 | CPU, 50 Episode 약 2분 |
-    | 6-3 | 기록한 데이터셋 뜯어보기 | CPU |
-    | 6-4 | `lerobot-train`으로 ACT 학습 | NVIDIA GPU, 20,000 step 약 15~30분 |
-    | 6-5 | 학습한 ACT 평가 (또는 공개 체크포인트) | GPU 권장, 10 Episode 약 30초 |
-    | 6-6 | Action chunk 실행 길이와 Temporal Ensembling 비교 | GPU 권장 |
+    | 6-1 | 시뮬레이터에서 시연 데이터셋 기록 | CPU, 50 Episode 약 2분 |
+    | 6-2 | 기록한 데이터셋 뜯어보기 | CPU |
+    | 6-3 | `lerobot-train`으로 ACT 학습 | NVIDIA GPU, 20,000 step 약 15~30분 |
+    | 6-4 | 학습한 ACT 평가 (또는 공개 체크포인트) | GPU 권장, 10 Episode 약 30초 |
+    | 6-5 | Action chunk 실행 길이와 Temporal Ensembling 비교 | GPU 권장 |
 
-    현재 장치 **`{device}`**, {_lerobot}. GPU가 없으면 6-4를 건너뛰고 6-5에서 공개 체크포인트(약 190 MB)를 내려받아 평가하세요.
+    현재 장치 **`{device}`**, {_lerobot}. GPU가 없으면 6-3을 건너뛰고 6-4에서 공개 체크포인트(약 190 MB)를 내려받아 평가하세요.
 
     데이터셋은 `outputs/physicalai/datasets/`, 학습 결과와 공개 체크포인트는 `outputs/physicalai/checkpoints/`에 두어
     7·8장에서 다시 씁니다.
@@ -85,28 +84,10 @@ def _(device, mo):
     return
 
 
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ### 이 장의 학습 경로
-
-    셀 재실행·환경별 대안은 [README의 학습 경로와 재실행](README.md#학습-경로와-재실행)을 참고하세요.
-
-    **목표**: 시연의 관측·정답 행동·청크가 어떻게 연결되는지, 청크 실행 길이가 피드백에 주는 영향을 설명합니다.
-    **선수 지식**: 3장 집기 단계, 4장 이미지 배열, 5장 학습과 평가 구분. Transformer 내부 증명은 요구하지 않습니다.
-    **필수**: 6-0 → 6-3 데이터 확인 → 6-4 목적함수 읽기 → 6-5 평가 원리.
-    데이터 기록·학습·다운로드·반복 평가는 선택 실행이며, 로컬 데이터가 없으면 설명과 코드 추적으로 진행합니다.
-
-    **읽을 코드**: `physicalai_common.RecordingRobot`이 시연을 만들고 `load_act`가
-    LeRobot 0.7의 `ACTPolicy`와 정규화 전·후처리기를 불러옵니다. `run_policy_episode`가 공통 평가 루프입니다.
-    """)
-    return
-
-
 @app.cell
 def _():
-    from lerobot.datasets import LeRobotDataset, LeRobotDatasetMetadata
-    return LeRobotDataset, LeRobotDatasetMetadata
+    from lerobot.datasets import LeRobotDataset
+    return (LeRobotDataset,)
 
 
 @app.cell(hide_code=True)
@@ -166,7 +147,7 @@ def _(mo):
     작은 예로 유효 행동 오차가 1과 3이고 padding 오차가 100이면 L1 평균은 $(1+3)/2=2$입니다.
     padding 100을 포함해 평균내면 Episode 길이에 따라 정답과 무관한 손실이 생깁니다.
     `lerobot-train`은 ACT 이미지 백본·Transformer·CVAE의 학습 가능 매개변수를 갱신합니다.
-    원하는 동결 범위는 설정과 `requires_grad`로 확인해야 합니다. 손실 감소는 집기 성공을 보장하지 않으므로 6-5에서 별도로 평가합니다.
+    원하는 동결 범위는 설정과 `requires_grad`로 확인해야 합니다. 손실 감소는 집기 성공을 보장하지 않으므로 6-4에서 별도로 평가합니다.
 
     청크 길이 50은 20 Hz에서 2.5초입니다. `n_action_steps`를 줄이면 관측에 더 자주 반응하는 대신 추론 횟수가 늘어납니다.
     Temporal Ensembling은 매 스텝 재추론하여 같은 시각의 겹친 예측을 평균냅니다.
@@ -181,43 +162,7 @@ def _(mo):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## 6-1. LeRobot 데이터셋 형식
-
-    LeRobot 데이터셋은 `meta/info.json`(특징·fps·개수), Parquet 표(관절각·행동·시간), MP4 영상(카메라)으로 이루어집니다.
-    Hugging Face Hub의 공개 SO-101 데이터셋 메타데이터만 읽어 봅니다(영상은 내려받지 않습니다).
-    """)
-    return
-
-
-@app.cell
-def _(mo):
-    hub_btn = mo.ui.run_button(label="Hub 공개 데이터셋 메타데이터 읽기")
-    hub_repo = mo.ui.text(value="lerobot/svla_so101_pickplace", label="repo_id", full_width=False)
-    mo.hstack([hub_repo, hub_btn], justify="start")
-    return hub_btn, hub_repo
-
-
-@app.cell
-def _(LeRobotDatasetMetadata, hub_btn, hub_repo, mo):
-    mo.stop(not hub_btn.value, mo.md("버튼을 누르면 Hub에서 메타데이터(수 MB)를 `~/.cache/huggingface/lerobot/`에 받습니다."))
-    _meta = LeRobotDatasetMetadata(hub_repo.value)
-    _rows = ["| feature | dtype | shape |", "| --- | --- | --- |"] + [
-        f"| `{k}` | {v['dtype']} | {tuple(v['shape'])} |" for k, v in _meta.features.items()]
-    mo.md(f"""
-    - robot_type `{_meta.robot_type}`, fps {_meta.fps}, Episode {_meta.total_episodes}개, 프레임 {_meta.total_frames}개
-      (Episode당 평균 {_meta.total_frames / _meta.total_episodes:.0f})
-    - 카메라 `{_meta.camera_keys}`
-    - task 예: {list(_meta.tasks.index)[:3]}
-
-    {chr(10).join(_rows)}
-    """)
-    return
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ## 6-2. 시뮬레이터에서 시연 데이터셋 만들기
+    ## 6-1. 시뮬레이터에서 시연 데이터셋 만들기
 
     사람이 조종 장치(teleoperation)로 시연하는 대신 3장의 Rule 기반 Pick and Place가 시연합니다.
     `RecordingRobot`은 `SO101Sim`과 같지만 시뮬레이션이 1/20초 흐를 때마다 관측과 행동을 `dataset.add_frame()`으로 기록합니다.
@@ -270,7 +215,7 @@ def _(
     shutil,
     time,
 ):
-    mo.stop(not rec_btn.value, mo.md("버튼을 누르면 기록합니다. 이미 기록한 데이터셋이 있으면 6-3부터 진행해도 됩니다."))
+    mo.stop(not rec_btn.value, mo.md("버튼을 누르면 기록합니다. 이미 기록한 데이터셋이 있으면 6-2부터 진행해도 됩니다."))
     _root = pc.DATASET_DIR / rec_name.value
     if _root.exists():
         mo.stop(not rec_overwrite.value, mo.callout(mo.md(
@@ -305,8 +250,9 @@ def _(
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## 6-3. 기록한 데이터셋 뜯어보기
+    ## 6-2. 기록한 데이터셋 뜯어보기
 
+    LeRobot 데이터셋은 `meta/info.json`(특징·fps·개수), Parquet 표(관절각·행동·시간), MP4 영상(카메라)으로 이루어집니다.
     `LeRobotDataset[i]`는 프레임 하나를 dict로 돌려줍니다. 이미지는 영상에서 디코딩해 `(C, H, W)` float 0~1로 줍니다.
     아래 그림에서 `action`(점선)이 `state`(실선)보다 **앞서 움직이는** 것을 확인하세요. 행동은 "지금 향하는 목표 각도"라서
     관절이 실제로 따라가기 전에 먼저 바뀝니다. 그리퍼(joint 5)는 블록에 막혀 명령만큼 닫히지 않습니다.
@@ -329,14 +275,20 @@ def _(get_ds_version, mo, pc):
 def _(LeRobotDataset, RUN_DIR, insp_btn, insp_episode, insp_name, mo, np, pc, plt):
     mo.stop(not insp_btn.value, mo.md("기록한 데이터셋을 고르고 버튼을 누르세요."))
     _root = pc.DATASET_DIR / insp_name.value
-    mo.stop(not (_root / "meta" / "info.json").is_file(), mo.md(f"`{_root}`에 데이터셋이 없습니다. 6-2에서 먼저 기록하세요."))
+    mo.stop(not (_root / "meta" / "info.json").is_file(), mo.md(f"`{_root}`에 데이터셋이 없습니다. 6-1에서 먼저 기록하세요."))
     _ds = LeRobotDataset(f"physicalai/{insp_name.value}", root=_root, episodes=[int(insp_episode.value)])
     _sample = _ds[0]
     _rows = ["| key | shape | dtype |", "| --- | --- | --- |"]
     for _k, _v in _sample.items():
         _rows.append(f"| `{_k}` | {tuple(_v.shape) if hasattr(_v, 'shape') else repr(_v)} | {getattr(_v, 'dtype', type(_v).__name__)} |")
-    _states = np.stack([_ds[i]["observation.state"].numpy() for i in range(_ds.num_frames)])
-    _actions = np.stack([_ds[i]["action"].numpy() for i in range(_ds.num_frames)])
+    _states, _actions, _frames = [], [], []
+    for _i in range(_ds.num_frames):   # 프레임마다 영상을 디코딩하므로 한 번만 돈다
+        _f = _ds[_i]
+        _states.append(_f["observation.state"].numpy())
+        _actions.append(_f["action"].numpy())
+        _frames.append(np.hstack([(_f[k].permute(1, 2, 0).numpy() * 255).astype(np.uint8) for k in _ds.meta.camera_keys]))
+    _states, _actions = np.stack(_states), np.stack(_actions)
+    _video = pc.save_video(_frames, RUN_DIR / f"{insp_name.value}_episode{int(insp_episode.value)}.mp4", fps=_ds.meta.fps)
     _t = np.arange(_ds.num_frames) / _ds.meta.fps
     _fig, _axes = plt.subplots(6, 1, figsize=(7, 7), sharex=True)
     for _j in range(6):
@@ -348,17 +300,18 @@ def _(LeRobotDataset, RUN_DIR, insp_btn, insp_episode, insp_name, mo, np, pc, pl
     _axes[-1].set_xlabel("time (s)")
     _fig.tight_layout()
     _fig.savefig(RUN_DIR / f"episode{int(insp_episode.value)}_state_action.png", dpi=120)
-    _imgs = [mo.image((_ds[i][k].permute(1, 2, 0).numpy() * 255).astype(np.uint8), caption=f"{k.split('.')[-1]} t={i / _ds.meta.fps:.1f}s")
-             for i in (0, _ds.num_frames // 2) for k in _ds.meta.camera_keys]
+    _cams = " | ".join(k.split(".")[-1] for k in _ds.meta.camera_keys)
     mo.vstack([mo.md(f"전체 Episode {_ds.meta.total_episodes}개, 프레임 {_ds.meta.total_frames}개 / 이 Episode {_ds.num_frames}프레임"),
-               mo.hstack([mo.md("\n".join(_rows)), _fig], align="start"), mo.hstack(_imgs, wrap=True)])
+               mo.vstack([mo.video(src=_video, controls=True, loop=True, width=640),
+                          mo.md(f"Episode {int(insp_episode.value)} 영상 ({_cams}, {_ds.meta.fps} fps, {_ds.num_frames / _ds.meta.fps:.1f}초)")]),
+               mo.hstack([mo.md("\n".join(_rows)), _fig], align="start")])
     return
 
 
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## 6-4. ACT 학습: `lerobot-train`
+    ## 6-3. ACT 학습: `lerobot-train`
 
     LeRobot의 학습 명령을 그대로 실행합니다. 원본 책의 설정은 20,000 step, batch 16, `chunk_size = n_action_steps = 50`입니다.
     RTX 3080 Ti에서 step당 약 0.05초(20,000 step 약 15~20분)이며 GPU 메모리는 2 GB 미만입니다. 처음에는 ResNet18 가중치(45 MB)를 내려받습니다.
@@ -404,11 +357,11 @@ def _(
     train_job,
     train_steps,
 ):
-    mo.stop(not train_btn.value, mo.md("버튼을 누르면 학습을 시작합니다. GPU가 없다면 건너뛰고 6-5로 가세요."))
+    mo.stop(not train_btn.value, mo.md("버튼을 누르면 학습을 시작합니다. GPU가 없다면 건너뛰고 6-4로 가세요."))
     mo.stop(device.type != "cuda", mo.callout(mo.md("CUDA GPU가 없어 학습을 실행하지 않습니다."), kind="warn"))
     _root = pc.DATASET_DIR / train_dataset.value
     _out = pc.CHECKPOINT_DIR / "train" / train_job.value
-    mo.stop(not (_root / "meta" / "info.json").is_file(), mo.md("학습할 데이터셋이 없습니다. 6-2에서 먼저 기록하세요."))
+    mo.stop(not (_root / "meta" / "info.json").is_file(), mo.md("학습할 데이터셋이 없습니다. 6-1에서 먼저 기록하세요."))
     mo.stop(_out.exists(), mo.callout(mo.md(f"`{_out}`가 이미 있습니다. 작업 이름을 바꾸세요."), kind="warn"))
     _steps = train_steps.value
     _cmd = [pc.lerobot_cli("lerobot-train"),
@@ -446,10 +399,10 @@ def _(
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## 6-5. 학습한 ACT로 Pick and Place
+    ## 6-4. 학습한 ACT로 Pick and Place
 
     평가 루프는 1장의 세 줄과 같습니다. 1/20초마다 관측(관절각 + 카메라 2장)을 찍어 정책에 넣고, 나온 목표 각도 6개를
-    `data.ctrl`에 씁니다. 관측은 매번 만들지만 기본 `n_action_steps=50`에서는 `select_action`이 청크를 처음 만들 때만 새 관측을 사용하고 이후에는 큐에서 행동을 꺼냅니다. 따라서 **청크 경계에서 피드백하는 루프**이며, 6-6의 Temporal Ensembling은 매 스텝 재추론합니다.
+    `data.ctrl`에 씁니다. 관측은 매번 만들지만 기본 `n_action_steps=50`에서는 `select_action`이 청크를 처음 만들 때만 새 관측을 사용하고 이후에는 큐에서 행동을 꺼냅니다. 따라서 **청크 경계에서 피드백하는 루프**이며, 6-5의 Temporal Ensembling은 매 스텝 재추론합니다.
     12초 안에 블록이 상자 안(`is_in_box`)에 처음 들어오면 성공입니다.
 
     ```python
@@ -522,7 +475,7 @@ def _(
     mo.stop(not act_eval_btn.value, mo.md("체크포인트를 고르고 평가 버튼을 누르세요."))
     act_ckpt_path = act_custom.value.strip() or act_ckpt.value
     mo.stop(not act_ckpt_path or not (Path(act_ckpt_path) / "model.safetensors").is_file(),
-            mo.md("체크포인트가 없습니다. 위에서 내려받거나 6-4에서 학습하세요."))
+            mo.md("체크포인트가 없습니다. 위에서 내려받거나 6-3에서 학습하세요."))
     _policy, _pre, _post = pc.load_act(act_ckpt_path, device)
     torch.manual_seed(int(act_seed.value))
     _rng = np.random.default_rng(int(act_seed.value))
@@ -570,7 +523,7 @@ def _(mo):
     mo.md(r"""
     10회 평가의 신뢰구간은 매우 넓습니다. 두 설정을 비교할 때는 같은 블록 위치(같은 seed)에서 충분히 많이 평가해야 합니다.
 
-    ## 6-6. Action chunk를 얼마나 실행할까
+    ## 6-5. Action chunk를 얼마나 실행할까
 
     ACT는 50스텝 묶음을 예측하지만 그중 몇 스텝을 실행하고 다시 추론할지는 실행 시점에 고를 수 있습니다.
 
@@ -611,7 +564,7 @@ def _(
     pc,
     torch,
 ):
-    mo.stop(not chunk_btn.value, mo.md("6-5에서 고른 체크포인트로 비교합니다."))
+    mo.stop(not chunk_btn.value, mo.md("6-4에서 고른 체크포인트로 비교합니다."))
     _ckpt = act_custom.value.strip() or act_ckpt.value
     mo.stop(not _ckpt or not (Path(_ckpt) / "model.safetensors").is_file(), mo.md("체크포인트가 없습니다."))
     _rows = ["| 설정 | 성공 | 95% 신뢰구간 | 성공까지 평균 시간 |", "| --- | ---: | --- | ---: |"]
@@ -636,30 +589,6 @@ def _(
             _all[_mode] = _res
     (RUN_DIR / "act_chunk_comparison.json").write_text(json.dumps({"checkpoint": _ckpt, "results": _all}, indent=2))
     mo.md("\n".join(_rows))
-    return
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ## 정리와 다음 장
-
-    - 모방학습은 **좋은 시연 데이터**가 성능을 좌우합니다. 시연 수, 블록 위치의 다양성, 실패 시연 제거가 모두 중요합니다.
-    - ACT는 행동 묶음을 예측해 오차 누적을 줄입니다. 실행 길이는 반응성과 매끄러움 사이의 선택입니다.
-    - 학습한 정책의 신뢰도를 시연에서 본 범위(블록 위치·조명·카메라) 밖으로 확대하려면 별도 평가가 필요합니다. 8장에서 그 경계를 시험합니다.
-
-    **확인 문제**
-
-    1. 시연을 10개만 기록해 학습하면 성공률이 어떻게 될까요? 6-2와 6-4를 작은 설정으로 돌려 확인해 보세요.
-    2. 행동으로 "목표 각도" 대신 "다음 프레임의 관절각"을 기록하면 무엇이 달라질까요?
-
-    ### 확인 문제 판정 기준
-
-    1. 시연 10개는 관측 분포를 덜 덮어 일반화가 나빠질 가능성이 있지만 수치나 하락을 보장하지 않습니다. 평가 위치·학습량·seed를 맞추고 성공 횟수와 과적합 여부를 봅니다.
-    2. 현재의 `action`은 시연 컨트롤러의 목표각입니다. 다음 프레임 `qpos`는 관성·중력·지연이 반영된 결과라 서로 다른 정답 신호입니다. 바꾼다면 학습과 제어 인터페이스를 함께 점검해야 합니다.
-
-    다음 [7장](ch07_smolvla.py)에서는 이미지와 함께 **자연어 명령**을 입력으로 받는 VLA 모델 SmolVLA를 다룹니다.
-    """)
     return
 
 

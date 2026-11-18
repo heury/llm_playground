@@ -20,13 +20,12 @@ def _():
         sys.path.insert(0, _here)
 
     import marimo as mo
-    import matplotlib.pyplot as plt
     import numpy as np
 
     import physicalai_common as common_runtime
 
     RUN_DIR = common_runtime.make_run_dir("ch09-llm")
-    return Path, RUN_DIR, base64, io, json, mo, np, os, common_runtime, plt, re, time
+    return Path, RUN_DIR, base64, io, json, mo, np, os, common_runtime, re, time
 
 
 @app.cell
@@ -88,26 +87,6 @@ def _(mo):
     GPU, LeRobot, PyTorch는 쓰지 않습니다.
     """),
     ])
-    return
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ### 이 장의 학습 경로
-
-    셀 재실행·환경별 대안은 [README의 학습 경로와 재실행](README.md#학습-경로와-재실행)을 참고하세요.
-
-    **목표**: Planner의 도구 선택과 IK 제어를 분리하고, 주장한 성공과 실제 성공을 대조합니다.
-    **선수 지식**: 3장의 IK·집기, 4장의 위치 추정, Python 딕셔너리와 JSON.
-    **필수**: 9-1 schema·목표점 제한 → 9-2 `run_agent` → 9-3 `scripted` 흐름.
-    trace 다운로드·재생, 반복 평가, 실제 API 호출은 선택입니다. API 키 없이 코드를 추적할 수 있습니다.
-
-    **읽을 코드**: 이 파일의 `RobotTools`, `ScriptedPlanner`, `ReplayClient`, `run_agent`가
-    `physicalai_common.SO101Sim`의 IK·관절 보간을 호출합니다. `scripted`는 LLM 성능의 측정값이 아니며
-    `replay`는 새 관측에 반응하지 않는 열린 고리 재생입니다.
-    작업 영역 제한은 시뮬레이터의 목표점 검사이며 충돌 회피나 실물 로봇 안전 보장은 아닙니다.
-    """)
     return
 
 
@@ -794,35 +773,6 @@ def _(json, mo, trace_dir, trace_files, view_ep, view_file):
             _lines.append(f"**assistant**: {' '.join(c.get('text', '') for c in _it.get('content', []))}")
     _meta = {k: v for k, v in _ep.items() if k != "transcript"}
     mo.vstack([mo.md(f"`{json.dumps(_meta, ensure_ascii=False)}`"), mo.md("\n\n".join(_lines))])
-    return
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ## 정리
-
-    | | Rule 기반 (3·4장) | 강화학습 (5장) | 모방학습 ACT (6장) | VLA SmolVLA (7·8장) | LLM Planner (9장) |
-    | --- | --- | --- | --- | --- | --- |
-    | 사람이 주는 것 | 단계와 좌표 계산 | 보상 함수 | 시연 데이터 | 시연 + 문장 | 도구와 설명 |
-    | 언어 이해 | 없음 | 없음 | 없음 | 학습 데이터 범위 | 넓음 |
-    | 제어 주기 | 500 Hz | 50 Hz | 20 Hz | 20 Hz (묶음) | 0.2~2 Hz (도구 단위) |
-    | 약점 | 인식 오차, 예외 상황 | 보상 설계, 긴 과제 | 데이터 분포 밖 | 데이터·연산량 | 지연, 요금, 정밀 제어 불가 |
-
-    표의 주기는 같은 종류의 속도가 아닙니다. 500 Hz는 물리 적분, 50/20 Hz는 행동 적용, LLM의 0.2~2 Hz는 응답 속도의 예시입니다.
-    청크 적용 중에는 새 정책 추론 없이 다음 행동을 꺼낼 수 있으며, 실제 API 지연은 모델·네트워크·도구 수에 따라 다릅니다.
-
-    실제 시스템은 이 층을 섞어 씁니다. LLM이 무엇을 할지 정하고, 학습된 정책이나 IK가 어떻게 움직일지를 맡습니다.
-
-    **확인 문제**
-
-    1. `MOVE_MIN`을 0.3초로 줄이면 LLM Planner의 성공률은 어떻게 될까요? 왜 이동 시간을 LLM이 정하게 하지 않았을까요?
-    2. `ScriptedPlanner`가 "Put the yellow one into the box"라는 문장을 받으면 어떻게 되나요? LLM은 어떨까요?
-    ### 확인 문제 판정 기준
-
-    1. 짧은 이동은 추종 오차와 관성에 의한 놓침을 늘릴 수 있습니다. 도구가 거리에 따라 시간을 정하면 정책이 무리한 시간을 지시하는 경우를 제한합니다. 실제 효과는 같은 배치로 비교합니다.
-    2. `ScriptedPlanner`는 `the (색) cube` 형식의 정규식만 찾습니다. `Put the yellow one into the box`는 이 형식과 맞지 않아 기본값인 빨강(`red`)으로 처리합니다. 규칙의 문장 형식 의존성을 보여 주는 예입니다. LLM의 결과는 실제 실행으로 확인해야 합니다.
-    """)
     return
 
 

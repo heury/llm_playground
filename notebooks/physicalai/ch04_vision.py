@@ -7,7 +7,6 @@ app = marimo.App(width="medium")
 @app.cell
 def _():
     import json
-    import os
     import sys
     from pathlib import Path
 
@@ -25,7 +24,7 @@ def _():
 
     np.set_printoptions(precision=3, suppress=True)
     RUN_DIR = common_runtime.make_run_dir("ch04-vision")
-    return RUN_DIR, cv2, json, mo, mujoco, np, os, common_runtime, plt
+    return RUN_DIR, cv2, json, mo, mujoco, np, common_runtime, plt
 
 
 @app.cell
@@ -70,12 +69,10 @@ def _(mo):
 
     | 절 | 내용 |
     | --- | --- |
-    | 4-1 | OpenCV 이미지 기초: 배열, BGR/RGB/HSV |
-    | 4-2 | HSV 색 검출과 영상 속 추적 |
-    | 4-3 | MuJoCo 가상 카메라: RGB·Depth, 핀홀 모델, 픽셀 ↔ 월드 |
-    | 4-4 | 카메라로 블록 위치 추정과 오차 |
-    | 4-5 | (선택) YOLO 사전학습 검출기 |
-    | 4-6 | Vision Pick and Place와 인식 오차 실험 |
+    | 4-1 | HSV 색 검출과 영상 속 추적 |
+    | 4-2 | MuJoCo 가상 카메라: RGB·Depth, 핀홀 모델, 픽셀 ↔ 월드 |
+    | 4-3 | 카메라로 블록 위치 추정과 오차 |
+    | 4-4 | Vision Pick and Place와 인식 오차 실험 |
     """),
     ])
     return
@@ -84,62 +81,7 @@ def _(mo):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ### 이 장의 학습 경로
-
-    셀 재실행·환경별 대안은 [README의 학습 경로와 재실행](README.md#학습-경로와-재실행)을 참고하세요.
-
-    **목표**: RGB 픽셀의 검출 중심을 depth와 카메라 보정으로 월드 좌표로 바꿉니다.
-    **선수 지식**: 2장의 장면·카메라, 3장의 월드 좌표와 집기 단계. 이미지는 배열 $H\times W\times3$입니다.
-    **필수**: 4-1 채널 순서 → 4-2 마스크 → 4-3 역투영 → 4-4 위치 오차. YOLO·반복 집기는 선택입니다.
-
-    **읽을 코드**: 이 파일의 `detect_hsv`는 과정을 펼친 예제이고, 후속 장은 공통 모듈의
-    `color_mask → find_color_center → locate_object`를 씁니다. 카메라 변환은 `SimCamera.pixel_to_world`와 대응합니다.
-    실습의 depth는 시뮬레이터가 주는 이상적 값입니다. 실물 RGB-D에는 깊이 누락·보정 오차·가림이 추가됩니다.
-    """)
-    return
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ## 4-1. OpenCV로 이미지 다루기
-
-    실물 카메라 대신 시뮬레이터의 `fixed` 카메라로 찍은 장면을 씁니다. 이미지는 `(높이, 너비, 채널)` 모양의 `uint8` 배열입니다.
-    **주의**: MuJoCo·matplotlib·imageio는 RGB 순서, OpenCV의 `imread`/`imwrite`/`VideoCapture`는 **BGR** 순서입니다.
-    """)
-    return
-
-
-@app.cell
-def _(cv2, mo, np, pc):
-    _robot = pc.SO101Sim(cube_pos=(0.24, 0.0), box_pos=pc.BOX_XY, render=False)
-    scene_rgb = _robot.snapshot(camera="fixed")
-    _robot.close()
-    _bgr = cv2.cvtColor(scene_rgb, cv2.COLOR_RGB2BGR)
-    _gray = cv2.cvtColor(scene_rgb, cv2.COLOR_RGB2GRAY)
-    _hsv = cv2.cvtColor(scene_rgb, cv2.COLOR_RGB2HSV)
-    _small = cv2.resize(scene_rgb, (scene_rgb.shape[1] // 4, scene_rgb.shape[0] // 4))
-    _v, _u = 240, 320
-    mo.vstack([
-        mo.md(f"""
-    - shape `{scene_rgb.shape}`, dtype `{scene_rgb.dtype}`, 값 범위 {scene_rgb.min()}~{scene_rgb.max()}
-    - 픽셀 (v={_v}, u={_u}): RGB `{scene_rgb[_v, _u]}`, BGR `{_bgr[_v, _u]}`, GRAY `{_gray[_v, _u]}`, HSV `{_hsv[_v, _u]}`
-    - `cv2.resize`로 1/4 축소: `{_small.shape}`. 인덱스는 `[세로 v, 가로 u]` 순서입니다.
-    """),
-        mo.hstack([mo.image(scene_rgb, width=300, caption="RGB"),
-                   mo.image(_bgr, width=300, caption="BGR를 RGB로 착각하고 표시"),
-                   mo.image(_gray, width=300, caption="GRAY"),
-                   mo.image(_hsv[:, :, 0], width=300, caption="HSV의 H(색상) 채널")], wrap=True),
-    ])
-    return (scene_rgb,)
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    두 번째 그림은 빨간 블록이 파랗게 보입니다. 채널 순서를 바꾸지 않고 표시하면 생기는 흔한 실수입니다.
-
-    ## 4-2. HSV 색 공간에서 빨간색 찾기
+    ## 4-1. HSV 색 공간에서 빨간색 찾기
 
     RGB는 조명에 따라 세 값이 함께 변해 "빨강"의 범위를 정하기 어렵습니다. **HSV**는 색상(H)·채도(S)·밝기(V)로 나눠
     H만 보면 색을 고를 수 있습니다. OpenCV의 H는 0~179이고 **빨강은 0 근처와 179 근처 두 구간**에 걸쳐 있습니다.
@@ -151,13 +93,16 @@ def _(mo):
 
 
 @app.cell
-def _(mo):
+def _(mo, pc):
+    _robot = pc.SO101Sim(cube_pos=(0.24, 0.0), box_pos=pc.BOX_XY, render=False)
+    scene_rgb = _robot.snapshot(camera="fixed")   # RGB 순서 (H, W, 3) uint8
+    _robot.close()
     hsv_h1 = mo.ui.range_slider(0, 179, value=[0, 10], label="H 구간 1")
     hsv_h2 = mo.ui.range_slider(0, 179, value=[170, 179], label="H 구간 2")
     hsv_s = mo.ui.slider(0, 255, value=120, label="S 최솟값")
     hsv_v = mo.ui.slider(0, 255, value=70, label="V 최솟값")
     mo.vstack([mo.hstack([hsv_h1, hsv_h2], justify="start"), mo.hstack([hsv_s, hsv_v], justify="start")])
-    return hsv_h1, hsv_h2, hsv_s, hsv_v
+    return hsv_h1, hsv_h2, hsv_s, hsv_v, scene_rgb
 
 
 @app.cell
@@ -244,7 +189,7 @@ def _(RUN_DIR, cv2, detect_hsv, hsv_ranges, mo, np, pc, plt):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## 4-3. 가상 카메라: RGB와 Depth
+    ## 4-2. 가상 카메라: RGB와 Depth
 
     시뮬레이터는 카메라마다 RGB와 **Depth**(카메라 축 방향 거리, m)를 함께 줍니다. 실제로는 RealSense 같은 RGB-D 카메라가
     같은 역할을 합니다. 장면에는 카메라 6대가 있습니다. `wrist_cam`은 SO-101 모델에 달린 손목 카메라라서 팔과 함께 움직입니다.
@@ -334,7 +279,7 @@ def _(cv2, mo, np, pc):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## 4-4. 카메라로 블록 위치 추정하기
+    ## 4-3. 카메라로 블록 위치 추정하기
 
     색 검출(중심 픽셀) + depth(중심 주변 3×3의 중앙값) + 역투영을 합친 것이 `physicalai_common.locate_object`입니다.
     블록을 무작위 위치에 놓고 추정값과 정답을 비교합니다. 추정한 z는 블록 **윗면**(0.03 m) 근처가 나옵니다.
@@ -383,63 +328,7 @@ def _(loc_camera, loc_res, mo, np, pc):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## 4-5. (선택) YOLO 사전학습 검출기
-
-    색 검출은 "빨간 것"만 찾을 수 있습니다. **YOLO**는 학습된 신경망으로 여러 종류의 물체를 한 번에 찾습니다.
-    이 절은 `ultralytics`가 필요합니다: `uv sync --locked --extra vision`.
-    처음 실행하면 `yolo11n.pt`(약 5 MB)를 `outputs/physicalai/cache/yolo/`에 내려받습니다.
-
-    COCO 80개 클래스로 학습된 모델이라 사람·버스는 잘 찾지만, 시뮬레이터의 "빨간 정육면체"는 클래스에 없어 대부분 놓치거나
-    엉뚱한 이름을 붙입니다. 학습 데이터에 없는 물체는 찾지 못한다는 것이 이 실험의 요점입니다.
-    원본 저장소의 `ch04/yolo_pick_and_place.py`는 참조 이미지에 박스를 한 번 그려 주는 YOLOE visual prompt로 이 문제를 풉니다.
-    """)
-    return
-
-
-@app.cell
-def _(mo):
-    yolo_btn = mo.ui.run_button(label="YOLO 실행 (yolo11n.pt 다운로드)")
-    yolo_btn
-    return (yolo_btn,)
-
-
-@app.cell
-def _(RUN_DIR, cv2, mo, os, pc, yolo_btn):
-    mo.stop(not yolo_btn.value, mo.md("버튼을 누르면 실행합니다."))
-    _cache = pc.OUTPUT_ROOT / "cache" / "yolo"
-    _cache.mkdir(parents=True, exist_ok=True)
-    os.environ.setdefault("YOLO_CONFIG_DIR", str(_cache))
-    try:
-        from ultralytics import YOLO, settings
-    except ImportError:
-        mo.stop(True, mo.md("`ultralytics`가 없습니다. `uv sync --locked --extra vision` 후 커널을 다시 시작하세요."))
-    settings.update({"weights_dir": str(_cache), "sync": False})
-    _model = YOLO(str(_cache / "yolo11n.pt"))
-    _outs = []
-    _robot = pc.SO101Sim(cube_pos=(0.24, 0.0), box_pos=pc.BOX_XY, render=False)
-    _bus = _cache / "bus.jpg"
-    if not _bus.is_file():
-        import urllib.request
-
-        urllib.request.urlretrieve("https://ultralytics.com/images/bus.jpg", _bus)
-    _sources = [("bus", "실제 사진", str(_bus)),
-                ("sim_fixed", "시뮬레이터 fixed 카메라", cv2.cvtColor(_robot.snapshot(camera="fixed"), cv2.COLOR_RGB2BGR)),
-                ("sim_top", "시뮬레이터 top 카메라", cv2.cvtColor(_robot.snapshot(camera="top"), cv2.COLOR_RGB2BGR))]
-    _robot.close()
-    for _tag, _title, _src in _sources:
-        _r = _model.predict(_src, conf=0.25, verbose=False)[0]   # ndarray 입력은 BGR 순서
-        _names = [f"{_model.names[int(b.cls)]} {float(b.conf):.2f}" for b in _r.boxes]
-        cv2.imwrite(str(RUN_DIR / f"yolo_{_tag}.png"), _r.plot())
-        _outs.append(mo.vstack([mo.image(cv2.cvtColor(_r.plot(), cv2.COLOR_BGR2RGB), width=320),
-                                mo.md(f"**{_title}**: {', '.join(_names) or '검출 없음'}")]))
-    mo.hstack(_outs, wrap=True)
-    return
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ## 4-6. Vision Pick and Place
+    ## 4-4. Vision Pick and Place
 
     3장 `pick_and_place`에서 바뀌는 것은 **블록·상자 위치를 어디서 얻는가** 한 곳뿐입니다.
 
@@ -529,30 +418,6 @@ def _(
     mo.md(f"### 잡음 {vpp_noise.value} mm: 성공률 {_ok}/{len(_records)} = {100 * _ok / len(_records):.0f}%\n\n"
           f"실제 위치 오차 평균 {np.mean(_errs):.1f} mm, 최대 {np.max(_errs):.1f} mm. "
           "잡음을 5, 10, 15 mm로 올려 가며 성공률이 떨어지는 지점을 찾아보세요. 그리퍼 손가락 사이 여유가 한계입니다.")
-    return
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ## 정리와 다음 장
-
-    - Vision 파이프라인: 이미지 → 색 마스크 → 중심 픽셀 → depth → 핀홀 역투영 → 월드 좌표.
-    - 색 검출은 빠르고 정확하지만 조명·바닥 색·비슷한 색 물체에 약합니다(8장에서 다시 확인합니다).
-    - 인식 오차는 곧바로 집기 실패로 이어집니다. 인식과 제어를 따로 설계한 파이프라인은 각 단계의 오차가 쌓입니다.
-
-    **확인 문제**
-
-    1. `COLOR_RANGES["red"]`에서 두 번째 구간(170~179)을 빼면 검출 결과가 어떻게 바뀌나요?
-    2. depth 대신 "블록 윗면은 항상 z = 0.03"이라는 가정으로 월드 좌표를 구하려면 어떻게 계산해야 할까요?
-
-    ### 확인 문제 판정 기준
-
-    1. OpenCV H의 빨강은 경계 양쪽에 걸칩니다. 두 번째 구간을 빼면 H가 170~179인 빨강을 놓칩니다. 현재 영상에 그 색조가 없다면 당장 차이가 작을 수도 있습니다.
-    2. 픽셀에서 월드 방향 광선을 만든 뒤 평면과 교차시킵니다. 카메라 위치를 $t$, 월드 광선 방향을 $r=R[(u-c_x)/f,-(v-c_y)/f,-1]^\top$라 두면 $s=(0.03-t_z)/r_z$, $p=t+sr$입니다. $r_z=0$이면 교차가 없고 $s>0$인 앞쪽 점만 유효합니다. 블록 높이가 바뀌면 이 가정도 깨집니다.
-
-    다음 [5장](ch05_reinforcement_learning.py)에서는 사람이 규칙을 쓰는 대신 보상만 주고 행동을 학습시킵니다.
-    """)
     return
 
 
