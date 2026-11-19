@@ -41,32 +41,6 @@ caspar/ACT-so101-pickplace-sim-150-10K-v1.0 이 모델을 다양한 블럭이 �
 
 ## 사용자
 
-/home/mind4u/dev/llm_playground/senarios/minimind
-에서 grpo와 dpo는 디렉토리를 만들어서 이동해
-
-## 어시스턴트
-
-`senarios/minimind/` 안에 `grpo/`와 `dpo/` 폴더를 만들고 파일을 옮겼습니다. Git이 이동 기록을 추적하도록 `git mv`를 썼고, 커밋은 하지 않았습니다.
-
-- `grpo/`: `grpo-cispo-loss`, `grpo-data`, `grpo-rollout`, `grpo-training` 대화 4개
-- `dpo/`: `dpo-concise`, `dpo-loss` 대화 2개
-
-폴더가 한 단계 깊어지면서 옮긴 파일 안의 상대 링크가 깨져서 함께 고쳤습니다.
-- 서로를 가리키는 링크: GRPO 파일에서 DPO 대화와 Full SFT 대화로 가는 링크 3개를 새 위치에 맞췄습니다.
-- 저장소 루트로 가는 링크: `projects/`, `reports/`, `outputs/`, `test_scenarios/`를 가리키는 링크는 `../../`를 `../../../`로 바꿨습니다.
-
-옮긴 6개 파일의 상대 링크 17개가 모두 실제 파일을 가리키는 것을 확인했습니다. 다른 문서에서 이 파일들을 가리키는 링크는 없었습니다.
-
-## 사용자
-
-이 대화 저장해
-
-## 어시스턴트
-
-이 파일에 저장했습니다.
-
-## 사용자
-
 붉은색 블럭만 있는 상태에서 테스트해봐
 
 ## 어시스턴트
@@ -99,10 +73,3 @@ caspar/ACT-so101-pickplace-sim-150-10K-v1.0 이 모델을 다양한 블럭이 �
 - 보고서: [reports/physicalai/20261119-020448-act-hub-red-only-eval.md](../../reports/physicalai/20261119-020448-act-hub-red-only-eval.md)
 - 산출물: [outputs/physicalai/20261119-020448-act-hub-red-only-eval/](../../outputs/physicalai/20261119-020448-act-hub-red-only-eval/) (평가 스크립트, `results.json`, 로그, seed마다 영상 4개)
 
-## 사용자
-
-이 대화를 기존 대화에 추가해
-
-## 어시스턴트
-
-기존 대화 파일 끝에 추가했습니다.

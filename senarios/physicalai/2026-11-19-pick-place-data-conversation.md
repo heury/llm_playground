@@ -9,58 +9,6 @@
 
 ## 사용자
 
-projects/physicalai 아래 소스를 이용하여 robot 데이터를 생성할려고 해. 불필요한 부분은 제거해서 간단하고 이해하기 쉬운 코드로 수정해
-
-## 어시스턴트
-
-데이터 생성 코드를 파일 2개로 줄였습니다. 같은 seed로 실행했을 때 원래 코드와 똑같은 데이터가 나오는 것을 확인했습니다.
-
-**새 구조** ([projects/physicalai/](../../projects/physicalai/))
-- [so101_sim.py](../../projects/physicalai/so101_sim.py) (약 160줄): 장면 XML, Menagerie 모델 내려받기, IK, 로봇 제어를 담았습니다. 원래 `common/` 아래 파일 4개에 나뉘어 있던 내용입니다.
-- [record_demos.py](../../projects/physicalai/record_demos.py) (약 130줄): Pick and Place 동작 순서와 LeRobotDataset 기록을 담당합니다.
-- [README.md](../../projects/physicalai/README.md): 실행 방법과 기록되는 데이터 항목을 정리했습니다.
-
-**삭제한 것**
-- `ch03/`, `ch06/`, `common/` 폴더 전체. 아직 git에 커밋되지 않은 파일이라 git으로는 되돌릴 수 없습니다.
-- `vision.py` 전체: 색 검출, depth, 픽셀→월드 좌표 변환은 데이터 생성에 쓰이지 않습니다. 이미지는 `mujoco.Renderer` 하나로 두 카메라를 번갈아 찍습니다.
-- 다른 장에서만 쓰던 기능: 추가 블록, 조명·바닥 색 변경, 영상 저장, 시나리오 데모와 반복 실험 출력 등입니다.
-- `--cube`, `--top-camera` 옵션과, 카메라 4대(`fixed`, `side`, `front`, `top_zoom`)
-
-**바뀐 동작**
-- 모델과 렌더러를 한 번만 만들고, episode마다 `reset(cube_xy)`로 블록 위치만 바꿉니다. 원래는 episode마다 장면 파일과 모델을 새로 만들었습니다.
-- 기록은 `robot.on_step = record` 콜백으로 합니다. 원래는 로봇 클래스를 상속해서 기록했습니다.
-- 기본 저장 경로가 AGENTS.md 규칙에 맞게 저장소 루트의 `outputs/physicalai/datasets/so101_pickplace_sim`으로 바뀌었습니다.
-
-**확인 결과**
-seed 0으로 3 episode를 돌렸을 때 원래 코드와 새 코드 모두 2개 성공, 1개 실패였습니다. 저장된 프레임 수는 각 172개, 합계 344개로 같았고, `observation.state` 합계도 154.4845로 같았습니다. 이미지 픽셀까지 비교하지는 않았습니다. 기존 파일을 지운 뒤 1 episode를 다시 돌려 정상 동작도 확인했습니다.
-
-실행 방법:
-```bash
-cd projects/physicalai
-MUJOCO_GL=egl ../../notebooks/physicalai/.venv/bin/python record_demos.py --episodes 50
-```
-
-## 사용자
-
-projects/physicalai도 agents.md에 추가해
-
-## 어시스턴트
-
-[AGENTS.md](../../AGENTS.md)에 `projects/physicalai`를 두 군데 추가했습니다.
-
-- **전체 구조 트리**: `projects/` 아래에 `physicalai/`를 넣고 한 줄 설명을 붙였습니다.
-- **새 섹션 "physicalai — SO-101 시연 데이터 생성"**: 「수정 후 확인할 항목」 바로 앞에 넣었습니다. 담은 내용은 다음과 같습니다.
-  - 파일 구조와 읽는 순서
-  - 실행 환경과 명령: 이 디렉토리에는 환경 파일이 없어 `notebooks/physicalai/.venv`를 씁니다.
-  - 장면 XML이 `third_party/` 아래에 파일로 써지는 이유
-  - 손목 카메라 `wrist_cam`은 장면 XML이 아니라 `so101.xml`에 정의되어 있다는 점
-  - 기록 형식을 바꿀 때 `features`, `record()`, 학습 노트북을 함께 확인하라는 주의
-  - 기본 저장 경로, `--overwrite` 동작, 문서만 보고 대량 기록을 실행하지 말라는 주의
-
-`projects/physicalai/third_party/`(SO-101 모델 파일)는 지금 Git이 무시하지 않습니다. 그래서 문서에 "Git 제외"라고 적지 않았습니다. 커밋하지 않으려면 `.gitignore`에 추가해야 하는데, 원하시면 추가하겠습니다.
-
-## 사용자
-
 mujoco에서 로봇팔이 블럭을 집어서 접시에 옮기는 걸 테스트하고 결과를 영상으로 남겨
 
 ## 어시스턴트
